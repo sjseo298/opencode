@@ -59,6 +59,20 @@ sync_repo() {
   cd "$REPO_ROOT"
   git fetch upstream
   git merge upstream/dev --no-edit
+
+  # Push local commits to origin/dev if any
+  echo ""
+  echo "📤  Checking for local commits to push..."
+  LOCAL_COMMITS=$(git log origin/dev..HEAD --oneline 2>/dev/null || true)
+  if [ -n "$LOCAL_COMMITS" ]; then
+    echo "  Found local commits:"
+    echo "$LOCAL_COMMITS" | sed 's/^/    /'
+    echo "  Pushing to origin/dev..."
+    git push origin dev || echo "  ⚠️  Push failed, check your connection or permissions."
+  else
+    echo "  No local commits to push."
+  fi
+  echo ""
   echo "✅ Synced."
 }
 
@@ -66,29 +80,8 @@ sync_repo() {
 install_deps() {
   echo "📦  Installing dependencies (this may take a few minutes)..."
   cd "$REPO_ROOT"
-
-  # Run bun install in the background while showing a spinner
-  timeout 600 bun install > /tmp/bun-install.out 2>&1 &
-  bun_pid=$!
-
-  # Spinner loop
-  chars=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-  i=0
-  while kill -0 "$bun_pid" 2>/dev/null; do
-    printf "\r  ${chars[$i]} Installing dependencies..." >&2
-    i=$(( (i + 1) % ${#chars[@]} ))
-    sleep 0.1
-  done
-  wait "$bun_pid"
-  exit_code=$?
-  echo "" >&2
-
-  # Show bun output (progress + final result)
-  cat /tmp/bun-install.out >&2
-  rm -f /tmp/bun-install.out
-
-  if [[ $exit_code -ne 0 ]]; then
-    echo "⚠️  bun install failed with exit code $exit_code" >&2
+  if ! bun install; then
+    echo "⚠️  bun install failed with exit code $?" >&2
     exit 1
   fi
   echo "✅ Dependencies installed."
@@ -128,4 +121,13 @@ else
   # Show the models config path
   echo ""
   echo "📝 Models config: ~/.config/opencode/opencode.jsonc"
+
+  # Verify build output
+  echo ""
+  echo "📦 Build output:"
+  if [[ -d "$OPENCODE_DIR/dist" ]]; then
+    ls -lh "$OPENCODE_DIR/dist/" | grep -v "^total" | sed 's/^/   /' || echo "   (no binaries found)"
+  else
+    echo "   ⚠️  dist/ directory not found — build may have failed."
+  fi
 fi
