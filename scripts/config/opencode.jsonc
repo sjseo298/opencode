@@ -701,5 +701,6 @@
         }
       }
     }
-  }
+  },
+  "model": "llamacpp/Qwen3-6-35B-A3B-UD-Q4_K_S"
 }
