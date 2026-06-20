@@ -475,6 +475,16 @@ def extract_models_from_servers(server: str) -> dict:
     return {"llamacpp": llamacpp, "lmstudio": lmstudio}
 
 
+def action_launch_opencode() -> None:
+    """Launch the opencode binary."""
+    binary = SCRIPT_DIR.parent / "packages" / "opencode" / "dist" / "opencode-darwin-arm64" / "bin" / "opencode"
+    if not binary.exists():
+        console.print(f"[red]✗ Binary not found: {binary}[/]")
+        return
+    console.print("[bold]Launching opencode...[/]")
+    subprocess.run([str(binary)], cwd=str(SCRIPT_DIR.parent))
+
+
 def action_sync_models() -> None:
     """Sync models from selected server(s)."""
     show_models_menu()
@@ -556,6 +566,96 @@ def action_sync_models() -> None:
             console.print("[green]✓ La config ya está actualizada[/]")
     else:
         action_sync_model(server, url, extractor)
+
+
+def action_select_model() -> None:
+    """Select the default model from the user config."""
+    config = load_user_config()
+    providers = config.get("provider", {})
+
+    if not providers:
+        console.print("[yellow]⚠ No hay proveedores configurados.[/]")
+        return
+
+    all_models: list[dict] = []
+    for provider_name, provider_data in providers.items():
+        for model_id, model_data in provider_data.get("models", {}).items():
+            inner = model_data if isinstance(model_data, dict) else {}
+            all_models.append({
+                "provider": provider_name,
+                "id": model_id,
+                "name": inner.get("name", model_id),
+                "ctx": inner.get("limit", {}).get("context", 0),
+                "output": inner.get("limit", {}).get("output", 0),
+                "tool_call": inner.get("tool_call", False),
+                "attachment": inner.get("attachment", False),
+            })
+
+    if not all_models:
+        console.print("[yellow]⚠ No hay modelos disponibles.[/]")
+        return
+
+    current = config.get("model", "(ninguno)")
+    console.print(f"\n[bold]Modelo actual:[/bold] {current}")
+    console.print()
+
+    table = Table(title="Modelos Disponibles", show_header=True, header_style="bold cyan")
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Proveedor", style="cyan")
+    table.add_column("Modelo", style="white")
+    table.add_column("Contexto", justify="right")
+    table.add_column("Output", justify="right")
+    table.add_column("Herramientas")
+    table.add_column("Adjuntos")
+
+    for idx, m in enumerate(all_models, 1):
+        table.add_row(
+            str(idx),
+            m["provider"],
+            m["id"],
+            fmt_number(m["ctx"]) if m["ctx"] else "—",
+            fmt_number(m["output"]) if m["output"] else "—",
+            "✓" if m["tool_call"] else "",
+            "✓" if m["attachment"] else "",
+        )
+
+    console.print(table)
+
+    choice = Prompt.ask(
+        f"  ¿Cuál deseas usar como modelo por defecto? ({len(all_models)} modelos)",
+        choices=[str(i) for i in range(1, len(all_models) + 1)] + ["0"],
+        default="1",
+    )
+
+    if choice == "0":
+        console.print("[yellow]⚠ Cancelado.[/]")
+        return
+
+    selected = all_models[int(choice) - 1]
+    config["model"] = f"{selected['provider']}/{selected['id']}"
+
+    # Update project config first
+    write_config_to_file(config, GENERATED_CONFIG)
+    console.print(f"[green]✓ Project config updated[/]")
+
+    # Then update user config
+    write_config_to_file(config, USER_CONFIG)
+    console.print(f"[green]✓ User config updated[/]")
+
+    # Commit changes
+    repo_dir = SCRIPT_DIR.parent
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "add", str(GENERATED_CONFIG)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "commit", "-m", f"chore: update default model to {selected['id']}"],
+        check=True,
+        capture_output=True,
+    )
+    console.print("[green]✓ Commit hecho[/]")
+    console.print(f"\n[green]✓ Modelo por defecto: {selected['provider']}/{selected['id']}[/]")
 
 
 def action_view_config() -> None:
@@ -648,9 +748,11 @@ def main() -> None:
     show_welcome()
 
     menu_items = {
-        "1": ("Sync de Modelos", action_sync_models),
-        "2": ("Sync de PATH", action_sync_path),
-        "3": ("Ver Config", lambda: (show_config_menu(),)),
+        "1": ("Ejecutar opencode", action_launch_opencode),
+        "2": ("Sync de Modelos", action_sync_models),
+        "3": ("Sync de PATH", action_sync_path),
+        "4": ("Ver Config", lambda: (show_config_menu(),)),
+        "5": ("Seleccionar Modelo", action_select_model),
         "0": ("Salir", lambda: None),
     }
 
@@ -662,22 +764,28 @@ def main() -> None:
                 border_style="cyan",
             )
         )
-        console.print("  [1] Sync de Modelos — Sincroniza modelos de LlamaCPP y LM Studio")
-        console.print("  [2] Sync de PATH    — Gestiona la entrada de PATH en el shell")
-        console.print("  [3] Ver Config      — Visualiza y compara configs de modelos")
+        console.print("  [1] Ejecutar opencode  — Lanza el TUI interactivo")
+        console.print("  [2] Sync de Modelos    — Sincroniza modelos de LlamaCPP y LM Studio")
+        console.print("  [3] Sync de PATH       — Gestiona la entrada de PATH en el shell")
+        console.print("  [4] Ver Config         — Visualiza y compara configs de modelos")
+        console.print("  [5] Modelo por defecto — Selecciona el modelo por defecto")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5"], default="0")
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
             break
         elif choice == "1":
-            action_sync_models()
+            action_launch_opencode()
         elif choice == "2":
-            action_sync_path()
+            action_sync_models()
         elif choice == "3":
+            action_sync_path()
+        elif choice == "4":
             action_view_config()
+        elif choice == "5":
+            action_select_model()
 
 
 if __name__ == "__main__":
