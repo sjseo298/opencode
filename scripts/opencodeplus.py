@@ -477,6 +477,7 @@ def extract_models_from_servers(server: str) -> dict:
 
 def action_sync_models() -> None:
     """Sync models from selected server(s)."""
+    show_models_menu()
     choice = Prompt.ask(
         "  ¿Desde qué servidor?",
         choices=["1", "2", "3"],
