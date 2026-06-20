@@ -17,6 +17,7 @@ OPENCODE_DIR="$REPO_ROOT/packages/opencode"
 # ── configure PATH ───────────────────────────────────────────────
 configure_path() {
   local scripts_dir="$REPO_ROOT/scripts"
+  local old_bin_dir="$OPENCODE_DIR/dist/opencode-darwin-arm64/bin"
 
   # Detect shell config file
   local shell="$(basename "$SHELL")"
@@ -27,14 +28,20 @@ configure_path() {
     *)    config_file="$HOME/.bashrc" ;;
   esac
 
-  local entry="export PATH=\"\$scripts_dir:\$PATH\""
+  # Remove old opencode binary PATH entry
+  if grep -qF "$old_bin_dir" "$config_file" 2>/dev/null; then
+    echo "🗑️  Removing old opencode binary PATH entry..."
+    sed -i '' "/opencode-darwin-arm64/d" "$config_file"
+    echo "✅ Old PATH entry removed."
+  fi
 
-  # Check if already in the config
+  # Also remove old scripts_dir entry if it exists (idempotent)
   if grep -qF "$scripts_dir" "$config_file" 2>/dev/null; then
     echo "✅ PATH already configured in $config_file"
     return 0
   fi
 
+  local entry="export PATH=\"$scripts_dir:\$PATH\""
   echo "🔗  Adding $scripts_dir to PATH in $config_file..."
   printf '\n%s\n' "$entry" >> "$config_file"
   echo "✅ PATH configured. Run 'source $config_file' or open a new terminal to use 'opencodeplus'."
