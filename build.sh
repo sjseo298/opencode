@@ -14,20 +14,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_DIR="$REPO_ROOT/packages/opencode"
 
-# ── configure PATH on Linux ──────────────────────────────────────
+# ── configure PATH ───────────────────────────────────────────────
 configure_path() {
-  local bin_dir="$OPENCODE_DIR/dist/opencode-linux-x64/bin"
-
-  # Only run on Linux
-  if [[ "$(uname -s)" != "Linux" ]]; then
-    return 0
-  fi
-
-  # Skip if building a different target
-  if [[ ! -d "$bin_dir" ]]; then
-    echo "⚠️  Linux binary not found (this build may be for another platform)."
-    return 0
-  fi
+  local scripts_dir="$REPO_ROOT/scripts"
 
   # Detect shell config file
   local shell="$(basename "$SHELL")"
@@ -38,17 +27,17 @@ configure_path() {
     *)    config_file="$HOME/.bashrc" ;;
   esac
 
-  local entry="export PATH=\"$bin_dir:\$PATH\""
+  local entry="export PATH=\"\$scripts_dir:\$PATH\""
 
   # Check if already in the config
-  if grep -qF "$bin_dir" "$config_file" 2>/dev/null; then
+  if grep -qF "$scripts_dir" "$config_file" 2>/dev/null; then
     echo "✅ PATH already configured in $config_file"
     return 0
   fi
 
-  echo "🔗  Adding $bin_dir to PATH in $config_file..."
+  echo "🔗  Adding $scripts_dir to PATH in $config_file..."
   printf '\n%s\n' "$entry" >> "$config_file"
-  echo "✅ PATH configured. Run 'source $config_file' or open a new terminal to use 'opencode'."
+  echo "✅ PATH configured. Run 'source $config_file' or open a new terminal to use 'opencodeplus'."
 }
 
 # ── sync ──────────────────────────────────────────────────────────
