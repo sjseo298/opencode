@@ -392,10 +392,11 @@ def display_model_table(models: dict, server: str) -> None:
     table.add_column("Adjuntos")
 
     for model_id, model_data in models.items():
-        ctx = model_data.get("limit", {}).get("context", 0)
-        output = model_data.get("limit", {}).get("output", 0)
-        tool = "✓" if model_data.get("tool_call") else ""
-        attach = "✓" if model_data.get("attachment") else ""
+        inner = model_data.get("models", {}).get(model_id, {})
+        ctx = inner.get("limit", {}).get("context", 0)
+        output = inner.get("limit", {}).get("output", 0)
+        tool = "✓" if inner.get("tool_call") else ""
+        attach = "✓" if inner.get("attachment") else ""
 
         table.add_row(
             model_id,
@@ -508,27 +509,29 @@ def action_sync_models() -> None:
         table.add_column("Adjuntos")
 
         for model_id, model_data in llamacpp.items():
-            ctx = model_data.get("limit", {}).get("context", 0)
-            output = model_data.get("limit", {}).get("output", 0)
+            inner = model_data.get("models", {}).get(model_id, {})
+            ctx = inner.get("limit", {}).get("context", 0)
+            output = inner.get("limit", {}).get("output", 0)
             table.add_row(
                 "LlamaCPP",
                 model_id,
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
-                "✓" if model_data.get("tool_call") else "",
-                "✓" if model_data.get("attachment") else "",
+                "✓" if inner.get("tool_call") else "",
+                "✓" if inner.get("attachment") else "",
             )
 
         for model_id, model_data in lmstudio.items():
-            ctx = model_data.get("limit", {}).get("context", 0)
-            output = model_data.get("limit", {}).get("output", 0)
+            inner = model_data.get("models", {}).get(model_id, {})
+            ctx = inner.get("limit", {}).get("context", 0)
+            output = inner.get("limit", {}).get("output", 0)
             table.add_row(
                 "LM Studio",
                 model_id,
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
-                "✓" if model_data.get("tool_call") else "",
-                "✓" if model_data.get("attachment") else "",
+                "✓" if inner.get("tool_call") else "",
+                "✓" if inner.get("attachment") else "",
             )
 
         console.print(table)
