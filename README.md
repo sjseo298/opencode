@@ -1,129 +1,147 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+# Opencode — Fork Personalizado
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
+Este fork de [opencode](https://github.com/anomalyco/opencode) contiene modificaciones propias para facilitar la instalación, construcción y configuración del proyecto.
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+## Scripts personalizados
 
----
+### `build.sh`
 
-### Installation
+Script principal para sincronizar el fork con el repositorio upstream y construir opencode para la plataforma actual.
+
+#### Uso
 
 ```bash
-# YOLO
-curl -fsSL https://opencode.ai/install | bash
-
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+./build.sh                    # Sincroniza con upstream + instala dependencias + construye
+./build.sh --skip-sync        # Solo instala dependencias y construye
+./build.sh --skip-install     # Solo construye
 ```
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+#### Qué hace cada paso
 
-### Desktop App (BETA)
+**1. Sincronización con upstream**
 
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
+Cuando se ejecuta sin `--skip-sync`, el script:
 
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
+- Ejecuta `git fetch upstream` para obtener los últimos cambios del repositorio original.
+- Fusiona automáticamente los cambios con `git merge upstream/dev --no-edit`.
+- Verifica si existen commits locales propios y los empuja a `origin/dev` automáticamente. Esto permite que el fork público se mantenga actualizado con tus modificaciones sin necesidad de acciones manuales.
+
+**2. Instalación de dependencias**
+
+Ejecuta `bun install` para instalar todas las dependencias del proyecto. Si la instalación falla, el script muestra un mensaje de error y se detiene.
+
+**3. Construcción**
+
+Ejecuta el script de construcción de opencode (`bun run script/build.ts --single`) para generar el binario para la plataforma actual.
+
+**4. Configuración de PATH (solo Linux)**
+
+En sistemas Linux, el script detecta automáticamente si el shell es `zsh` o `bash` y agrega el directorio del binario construido al PATH del usuario. Por ejemplo, en un sistema con zsh agregaría:
+
+```
+export PATH="/home/usuario/.../packages/opencode/dist/opencode-linux-x64/bin:$PATH"
+```
+
+Esta línea se añade al archivo de configuración del shell (`.zshrc` o `.bashrc`). Solo se agrega si no existe ya, evitando duplicados.
+
+**5. Verificación de salida**
+
+Al finalizar, el script muestra el contenido del directorio `dist/` para verificar que la construcción fue exitosa.
+
+## Agregar modelos de LlamaServer
+
+Opencode soporta modelos de LlamaServer a través de un archivo de configuración.
+
+### Ubicación del archivo de configuración
+
+```
+~/.config/opencode/opencode.jsonc
+```
+
+### Formato del archivo
+
+El archivo `.jsonc` permite comentarios (líneas que comienzan con `//`).
+
+### Configuración básica de LlamaServer
+
+Para agregar un modelo de LlamaServer, añade una entrada en la sección `models` del archivo de configuración:
+
+```jsonc
+{
+  "models": {
+    "llama-cpp": {
+      "provider": "llama-cpp",
+      "endpoint": "http://localhost:8080",
+      "models": ["llama-model"]
+    }
+  }
+}
+```
+
+### Configuración con API key
+
+Si tu servidor requiere autenticación:
+
+```jsonc
+{
+  "models": {
+    "llama-cpp": {
+      "provider": "llama-cpp",
+      "endpoint": "http://localhost:8080",
+      "models": ["llama-model"],
+      "apiKey": "tu-api-key"
+    }
+  }
+}
+```
+
+### Configuración de LlamaServer con OpenAI-compatible endpoint
+
+Si tu LlamaServer expone un endpoint compatible con OpenAI (como LM Studio o Ollama):
+
+```jsonc
+{
+  "models": {
+    "custom-llm": {
+      "provider": "openai",
+      "endpoint": "http://localhost:1234/v1",
+      "models": ["llama-model"]
+    }
+  }
+}
+```
+
+### Configuración completa con opciones avanzadas
+
+```jsonc
+{
+  "models": {
+    "llama-cpp": {
+      "provider": "llama-cpp",
+      "endpoint": "http://localhost:8080",
+      "models": ["llama-model"],
+      "apiKey": "tu-api-key",
+      "options": {
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "topP": 0.95
+      }
+    }
+  }
+}
+```
+
+### Verificar la configuración
+
+Después de agregar la configuración de modelos, puedes verificar que opencode la reconoce ejecutando el comando de configuración o inspeccionando el archivo de configuración directamente:
 
 ```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
+cat ~/.config/opencode/opencode.jsonc
 ```
 
-#### Installation Directory
+### Flujo recomendado
 
-The install script respects the following priority order for the installation path:
-
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
-
-```bash
-# Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
-```
-
-### Agents
-
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
-
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
-
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
-
-Learn more about [agents](https://opencode.ai/docs/agents).
-
-### Documentation
-
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
-
-### Contributing
-
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-### Building on OpenCode
-
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
-
----
-
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+1. Inicia tu servidor de LlamaServer (por ejemplo, con `llama-server -m modelo.gguf --port 8080`).
+2. Agrega la configuración de modelos en `~/.config/opencode/opencode.jsonc`.
+3. Reinicia opencode para que cargue la nueva configuración.
+4. Verifica que el modelo aparece disponible en la interfaz de opencode.
