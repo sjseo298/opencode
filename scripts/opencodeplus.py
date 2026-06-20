@@ -482,7 +482,7 @@ def action_launch_opencode() -> None:
         console.print(f"[red]✗ Binary not found: {binary}[/]")
         return
     console.print("[bold]Launching opencode...[/]")
-    subprocess.run([str(binary)], cwd=str(SCRIPT_DIR.parent))
+    subprocess.run([str(binary)])
 
 
 def action_sync_models() -> None:
