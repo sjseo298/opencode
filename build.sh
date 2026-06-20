@@ -47,6 +47,15 @@ configure_path() {
   echo "✅ PATH configured. Run 'source $config_file' or open a new terminal to use 'opencodeplus'."
 }
 
+# ── ensure scripts are executable ───────────────────────────────────
+ensure_scripts_executable() {
+  local script="$REPO_ROOT/scripts/opencodeplus"
+  if [[ -f "$script" ]]; then
+    chmod +x "$script"
+    echo "✅ opencodeplus executable."
+  fi
+}
+
 # ── sync ──────────────────────────────────────────────────────────
 # Pulls latest changes from the upstream repo (the original
 # repository the fork is based on).
@@ -113,6 +122,8 @@ else
   install_deps
   build
   configure_path
+  ensure_scripts_executable
+  ensure_scripts_executable
 
   # Show the models config path
   echo ""
