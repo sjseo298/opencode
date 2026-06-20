@@ -477,9 +477,29 @@ def extract_models_from_servers(server: str) -> dict:
 
 def action_launch_opencode() -> None:
     """Launch the opencode binary."""
-    binary = SCRIPT_DIR.parent / "packages" / "opencode" / "dist" / "opencode-darwin-arm64" / "bin" / "opencode"
+    import platform as _platform
+
+    dist_dir = SCRIPT_DIR.parent / "packages" / "opencode" / "dist"
+
+    machine = _platform.machine().lower()
+    if sys.platform == "linux":
+        arch_map = {"x86_64": "x64", "aarch64": "arm64", "armv7l": "arm"}
+        arch = arch_map.get(machine, machine)
+        target_dir = f"opencode-linux-{arch}"
+    elif sys.platform == "darwin":
+        arch_map = {"arm64": "arm64", "x86_64": "x64"}
+        arch = arch_map.get(machine, machine)
+        target_dir = f"opencode-darwin-{arch}"
+    else:
+        console.print(f"[yellow]⚠ Unsupported platform: {sys.platform}[/]")
+        return
+
+    binary = dist_dir / target_dir / "bin" / "opencode"
     if not binary.exists():
+        available = [d.name for d in dist_dir.iterdir() if d.is_dir()] if dist_dir.exists() else []
         console.print(f"[red]✗ Binary not found: {binary}[/]")
+        if available:
+            console.print(f"  Available binaries: {', '.join(available)}")
         return
     console.print("[bold]Launching opencode...[/]")
     subprocess.run([str(binary)])
