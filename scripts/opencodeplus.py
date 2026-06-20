@@ -359,26 +359,26 @@ def show_welcome() -> None:
 def show_models_menu() -> None:
     """Show the sync models submenu."""
     console.print(Panel("Sync de Modelos", border_style="green"))
-    console.print("  [1] Sync desde LlamaCPP")
-    console.print("  [2] Sync desde LM Studio")
-    console.print("  [3] Sync desde ambos servidores")
+    console.print("  [1] Sync desde LlamaCPP    — Consulta LlamaCPP y actualiza la config")
+    console.print("  [2] Sync desde LM Studio   — Consulta LM Studio y actualiza la config")
+    console.print("  [3] Sync desde ambos       — Consulta ambos servidores a la vez")
     console.print("  [0] Volver al menú principal")
 
 
 def show_path_menu() -> None:
     """Show the sync path submenu."""
     console.print(Panel("Sync de PATH", border_style="blue"))
-    console.print("  [1] Agregar opencodeplus al PATH")
-    console.print("  [2] Remover opencodeplus del PATH")
+    console.print("  [1] Agregar opencodeplus al PATH — Agrega scripts/ al PATH del shell")
+    console.print("  [2] Remover opencodeplus del PATH — Remueve la entrada del PATH")
     console.print("  [0] Volver al menú principal")
 
 
 def show_config_menu() -> None:
     """Show the view config submenu."""
     console.print(Panel("Configuración", border_style="yellow"))
-    console.print("  [1] Ver config generada")
-    console.print("  [2] Ver config actual del usuario")
-    console.print("  [3] Comparar configs")
+    console.print("  [1] Ver config generada    — Muestra la config de scripts/config/")
+    console.print("  [2] Ver config actual      — Muestra la config de ~/.config/opencode/")
+    console.print("  [3] Comparar configs       — Compara ambas configs lado a lado")
     console.print("  [0] Volver al menú principal")
 
 
@@ -661,9 +661,9 @@ def main() -> None:
                 border_style="cyan",
             )
         )
-        console.print("  [1] Sync de Modelos")
-        console.print("  [2] Sync de PATH")
-        console.print("  [3] Ver Config")
+        console.print("  [1] Sync de Modelos — Sincroniza modelos de LlamaCPP y LM Studio")
+        console.print("  [2] Sync de PATH    — Gestiona la entrada de PATH en el shell")
+        console.print("  [3] Ver Config      — Visualiza y compara configs de modelos")
         console.print("  [0] Salir")
 
         choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3"], default="0")
