@@ -62,8 +62,35 @@ ensure_scripts_executable() {
 sync_repo() {
   echo "⬇️  Syncing fork with upstream..."
   cd "$REPO_ROOT"
+
+  # Fetch both remotes
+  git fetch origin
   git fetch upstream
-  git merge upstream/dev --no-edit
+
+  # Stash local changes so merges can proceed
+  if ! git stash push -m "build-sync: temporary stash" --include-untracked 2>/dev/null; then
+    echo "⚠️  No local changes to stash."
+  fi
+
+  # Merge origin/dev first so local commits are integrated
+  if ! git merge origin/dev --no-edit; then
+    echo "⚠️  Merge conflict with origin/dev — cannot auto-resolve."
+    echo "  Please resolve conflicts manually and run: git push origin dev"
+    exit 1
+  fi
+
+  # Then merge upstream/dev
+  if ! git merge upstream/dev --no-edit; then
+    echo "⚠️  Merge conflict with upstream/dev — cannot auto-resolve."
+    echo "  Please resolve conflicts manually and run: git push origin dev"
+    exit 1
+  fi
+
+  # Restore stashed changes (fail if conflicts)
+  if ! git stash pop 2>/dev/null; then
+    echo "⚠️  Stash conflict — please resolve manually."
+    exit 1
+  fi
 
   # Push local commits to origin/dev if any
   echo ""
@@ -73,7 +100,11 @@ sync_repo() {
     echo "  Found local commits:"
     echo "$LOCAL_COMMITS" | sed 's/^/    /'
     echo "  Pushing to origin/dev..."
-    git push origin dev || echo "  ⚠️  Push failed, check your connection or permissions."
+    if git push origin dev; then
+      echo "  ✅ Pushed."
+    else
+      echo "  ⚠️  Push failed, check your connection or permissions."
+    fi
   else
     echo "  No local commits to push."
   fi
