@@ -502,7 +502,11 @@ def action_launch_opencode() -> None:
             console.print(f"  Available binaries: {', '.join(available)}")
         return
     console.print("[bold]Launching opencode...[/]")
-    subprocess.run([str(binary)])
+    result = subprocess.run([str(binary)])
+    if result.returncode != 0:
+        console.print()
+        subprocess.run(["stty", "sane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["reset"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def action_sync_models() -> None:
