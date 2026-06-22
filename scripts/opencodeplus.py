@@ -522,8 +522,6 @@ def action_sync_model(server: str, url: str, extractor) -> None:
             if update_user_config(new_config):
                 console.print("[green]✓ Config actualizada[/]")
                 write_config_to_file(new_config, GENERATED_CONFIG)
-                if git_commit(f"chore: sync {server} models ({len(models)} models)"):
-                    console.print("[green]✓ Commit hecho[/]")
             else:
                 console.print("[yellow]⚠ No hubo cambios[/]")
         else:
@@ -667,8 +665,6 @@ def action_sync_models() -> None:
                     console.print("[green]✓ Config actualizada[/]")
                     write_config_to_file(new_config, GENERATED_CONFIG)
                     total = len(llamacpp) + len(lmstudio)
-                    if git_commit(f"chore: sync both servers ({total} models)"):
-                        console.print("[green]✓ Commit hecho[/]")
                 else:
                     console.print("[yellow]⚠ No hubo cambios[/]")
             else:
