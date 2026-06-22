@@ -95,21 +95,26 @@ sync_repo() {
     exit 1
   fi
 
-  # Push local commits to origin/dev if any
-  echo ""
-  echo "📤  Checking for local commits to push..."
-  LOCAL_COMMITS=$(git log origin/dev..HEAD --oneline 2>/dev/null || true)
-  if [ -n "$LOCAL_COMMITS" ]; then
-    echo "  Found local commits:"
-    echo "$LOCAL_COMMITS" | sed 's/^/    /'
-    echo "  Pushing to origin/dev..."
-    if git push origin dev; then
-      echo "  ✅ Pushed."
+  # Only push if syncing with upstream (full mode)
+  if [ "$sync_mode" = "full" ]; then
+    echo ""
+    echo "📤  Checking for local commits to push..."
+    LOCAL_COMMITS=$(git log origin/dev..HEAD --oneline 2>/dev/null || true)
+    if [ -n "$LOCAL_COMMITS" ]; then
+      echo "  Found local commits:"
+      echo "$LOCAL_COMMITS" | sed 's/^/    /'
+      echo "  Pushing to origin/dev..."
+      if git push origin dev; then
+        echo "  ✅ Pushed."
+      else
+        echo "  ⚠️  Push failed, check your connection or permissions."
+      fi
     else
-      echo "  ⚠️  Push failed, check your connection or permissions."
+      echo "  No local commits to push."
     fi
   else
-    echo "  No local commits to push."
+    echo ""
+    echo "  Skipping push (fork-only sync)."
   fi
   echo ""
   echo "✅ Synced."
