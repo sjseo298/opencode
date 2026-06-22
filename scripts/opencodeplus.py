@@ -109,26 +109,65 @@ def extract_llamacpp_models(data: dict) -> dict:
         has_flash_attn = preset.get("flash-attn") == "true"
         has_kv_unified = preset.get("kv-unified") == "1"
 
-        # Build name from preset alias or model id
-        name = preset.get("alias", model_id)
+        # Detect input modalities from preset fields
+        has_vision = has_flash_attn or "clip-model" in preset or "mmproj" in preset or "mmvqa" in preset or "vlm" in preset
+        has_audio_input = "audio-model" in preset or "audio-encoder" in preset or "whisper-model" in preset or "speech-to-text" in preset
+        has_video_input = "video-model" in preset or "video-size" in preset
+        has_pdf_input = True  # LlamaCPP supports PDF attachments by default
+
+        # Detect output modalities from preset fields
+        has_audio_output = "audio-model" in preset or "audio-encoder" in preset or "whisper-model" in preset
+        has_image_output = "image-gen-model" in preset
+        has_video_output = "video-gen-model" in preset
+
+        # Build modality arrays
+        input_modalities = ["text"]
+        if has_vision:
+            input_modalities.append("image")
+        if has_audio_input:
+            input_modalities.append("audio")
+        if has_video_input:
+            input_modalities.append("video")
+        if has_pdf_input:
+            input_modalities.append("pdf")
+
+        output_modalities = ["text"]
+        if has_audio_output:
+            output_modalities.append("audio")
+        if has_image_output:
+            output_modalities.append("image")
+        if has_video_output:
+            output_modalities.append("video")
+
+        # Build model config dict
+        model_config = {
+            "id": model_id,
+            "name": f"LlamaCPP - {model_id}",
+            "tool_call": True,
+            "reasoning": has_reasoning,
+            "temperature": True,
+            "attachment": has_vision,
+            "modalities": {
+                "input": input_modalities,
+                "output": output_modalities,
+            },
+            "limit": {
+                "context": ctx_size if ctx_size > 0 else DEFAULT_OUTPUT_LIMIT,
+                "output": DEFAULT_OUTPUT_LIMIT,
+            },
+        }
+        # Only include interleaved if the model has reasoning capability
+        if has_reasoning:
+            model_config["interleaved"] = True
 
         models[model_id] = {
             "api": "openai",
-            "name": f"LlamaCPP - {name}",
+            "name": f"LlamaCPP - {model_id}",
             "options": {
                 "baseURL": "http://192.168.8.151:9999/v1",
             },
             "models": {
-                model_id: {
-                    "id": model_id,
-                    "name": f"LlamaCPP - {name}",
-                    "tool_call": True,
-                    "attachment": has_flash_attn,
-                    "limit": {
-                        "context": ctx_size if ctx_size > 0 else DEFAULT_OUTPUT_LIMIT,
-                        "output": DEFAULT_OUTPUT_LIMIT,
-                    },
-                }
+                model_id: model_config
             },
         }
     return models
@@ -147,13 +186,53 @@ def extract_lmstudio_models(data: dict) -> dict:
         capabilities = item.get("capabilities", {})
         has_vision = capabilities.get("vision", False)
         has_tool_use = capabilities.get("trained_for_tool_use", False)
+        has_reasoning = capabilities.get("reasoning", False)
+        has_audio_input = capabilities.get("audio", False)
+        has_video_input = capabilities.get("video", False)
         quantization = item.get("quantization", {})
         quant_name = quantization.get("name", "")
+
+        # Build modality arrays
+        input_modalities = ["text"]
+        if has_vision:
+            input_modalities.append("image")
+        if has_audio_input:
+            input_modalities.append("audio")
+        if has_video_input:
+            input_modalities.append("video")
+        input_modalities.append("pdf")
+
+        output_modalities = ["text"]
+        # LM Studio capabilities may include output modalities in the future
+        # For now, only text output is known
+        if capabilities.get("audio-output", False):
+            output_modalities.append("audio")
 
         # Build name with quantization info
         name = f"LM Studio - {display_name}"
         if quant_name:
             name += f"@{quant_name}"
+
+        # Build model config dict
+        model_config = {
+            "id": model_key,
+            "name": name,
+            "tool_call": has_tool_use,
+            "reasoning": has_reasoning,
+            "temperature": True,
+            "attachment": has_vision,
+            "modalities": {
+                "input": input_modalities,
+                "output": output_modalities,
+            },
+            "limit": {
+                "context": ctx_length if ctx_length > 0 else DEFAULT_OUTPUT_LIMIT,
+                "output": DEFAULT_OUTPUT_LIMIT,
+            },
+        }
+        # Only include interleaved if the model has reasoning capability
+        if has_reasoning:
+            model_config["interleaved"] = True
 
         models[model_key] = {
             "api": "openai",
@@ -162,16 +241,7 @@ def extract_lmstudio_models(data: dict) -> dict:
                 "baseURL": "http://192.168.8.151:1234/v1",
             },
             "models": {
-                model_key: {
-                    "id": model_key,
-                    "name": name,
-                    "tool_call": has_tool_use,
-                    "attachment": has_vision,
-                    "limit": {
-                        "context": ctx_length if ctx_length > 0 else DEFAULT_OUTPUT_LIMIT,
-                        "output": DEFAULT_OUTPUT_LIMIT,
-                    },
-                }
+                model_key: model_config
             },
         }
     return models
@@ -390,6 +460,8 @@ def display_model_table(models: dict, server: str) -> None:
     table.add_column("Output", justify="right")
     table.add_column("Herramientas")
     table.add_column("Adjuntos")
+    table.add_column("Razonamiento")
+    table.add_column("Modalidades")
 
     for model_id, model_data in models.items():
         inner = model_data.get("models", {}).get(model_id, {})
@@ -397,6 +469,9 @@ def display_model_table(models: dict, server: str) -> None:
         output = inner.get("limit", {}).get("output", 0)
         tool = "✓" if inner.get("tool_call") else ""
         attach = "✓" if inner.get("attachment") else ""
+        reasoning = "✓" if inner.get("reasoning") else ""
+        modalities = inner.get("modalities", {})
+        modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
 
         table.add_row(
             model_id,
@@ -404,6 +479,8 @@ def display_model_table(models: dict, server: str) -> None:
             fmt_number(output) if output else "—",
             tool,
             attach,
+            reasoning,
+            modality_str,
         )
 
     console.print(table)
@@ -542,11 +619,15 @@ def action_sync_models() -> None:
         table.add_column("Output", justify="right")
         table.add_column("Herramientas")
         table.add_column("Adjuntos")
+        table.add_column("Razonamiento")
+        table.add_column("Modalidades")
 
         for model_id, model_data in llamacpp.items():
             inner = model_data.get("models", {}).get(model_id, {})
             ctx = inner.get("limit", {}).get("context", 0)
             output = inner.get("limit", {}).get("output", 0)
+            modalities = inner.get("modalities", {})
+            modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
             table.add_row(
                 "LlamaCPP",
                 model_id,
@@ -554,12 +635,16 @@ def action_sync_models() -> None:
                 fmt_number(output) if output else "—",
                 "✓" if inner.get("tool_call") else "",
                 "✓" if inner.get("attachment") else "",
+                "✓" if inner.get("reasoning") else "",
+                modality_str,
             )
 
         for model_id, model_data in lmstudio.items():
             inner = model_data.get("models", {}).get(model_id, {})
             ctx = inner.get("limit", {}).get("context", 0)
             output = inner.get("limit", {}).get("output", 0)
+            modalities = inner.get("modalities", {})
+            modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
             table.add_row(
                 "LM Studio",
                 model_id,
@@ -567,6 +652,8 @@ def action_sync_models() -> None:
                 fmt_number(output) if output else "—",
                 "✓" if inner.get("tool_call") else "",
                 "✓" if inner.get("attachment") else "",
+                "✓" if inner.get("reasoning") else "",
+                modality_str,
             )
 
         console.print(table)
@@ -605,6 +692,7 @@ def action_select_model() -> None:
     for provider_name, provider_data in providers.items():
         for model_id, model_data in provider_data.get("models", {}).items():
             inner = model_data if isinstance(model_data, dict) else {}
+            modalities = inner.get("modalities", {})
             all_models.append({
                 "provider": provider_name,
                 "id": model_id,
@@ -613,6 +701,8 @@ def action_select_model() -> None:
                 "output": inner.get("limit", {}).get("output", 0),
                 "tool_call": inner.get("tool_call", False),
                 "attachment": inner.get("attachment", False),
+                "reasoning": inner.get("reasoning", False),
+                "modalities": "/".join(modalities.get("input", [])) if modalities else "—",
             })
 
     if not all_models:
@@ -637,6 +727,8 @@ def action_select_model() -> None:
     table.add_column("Output", justify="right")
     table.add_column("Herramientas")
     table.add_column("Adjuntos")
+    table.add_column("Razonamiento")
+    table.add_column("Modalidades")
 
     def render_page(page: int) -> None:
         start = page * page_size
@@ -658,6 +750,8 @@ def action_select_model() -> None:
                 fmt_number(m["output"]) if m["output"] else "—",
                 "✓" if m["tool_call"] else "",
                 "✓" if m["attachment"] else "",
+                "✓" if m["reasoning"] else "",
+                m["modalities"],
             )
         console.print(table)
 

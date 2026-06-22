@@ -825,5 +825,6 @@
         }
       }
     }
-  }
+  },
+  "model": "llamacpp/Qwopus3-6-35B-A3B-v1-Q5_K_M"
 }
