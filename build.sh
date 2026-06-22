@@ -60,6 +60,7 @@ ensure_scripts_executable() {
 # Pulls latest changes from the upstream repo (the original
 # repository the fork is based on).
 sync_repo() {
+  local sync_mode="$1"
   echo "⬇️  Syncing fork with upstream..."
   cd "$REPO_ROOT"
 
@@ -79,11 +80,13 @@ sync_repo() {
     exit 1
   fi
 
-  # Then merge upstream/dev
-  if ! git merge upstream/dev --no-edit; then
-    echo "⚠️  Merge conflict with upstream/dev — cannot auto-resolve."
-    echo "  Please resolve conflicts manually and run: git push origin dev"
-    exit 1
+  # Merge upstream/dev only if sync_mode is "full"
+  if [ "$sync_mode" = "full" ]; then
+    if ! git merge upstream/dev --no-edit; then
+      echo "⚠️  Merge conflict with upstream/dev — cannot auto-resolve."
+      echo "  Please resolve conflicts manually and run: git push origin dev"
+      exit 1
+    fi
   fi
 
   # Restore stashed changes (fail if conflicts)
@@ -134,11 +137,13 @@ build() {
 # ── main ──────────────────────────────────────────────────────────
 skip_sync=false
 skip_install=false
+skip_sync_mode=false
 
 for arg in "$@"; do
   case "$arg" in
     --skip-sync) skip_sync=true ;;
     --skip-install) skip_install=true ;;
+    --skip-sync-mode) skip_sync_mode=true ;;
   esac
 done
 
@@ -149,7 +154,26 @@ if [[ "$skip_sync" == true ]]; then
   build
   configure_path
 else
-  sync_repo
+  if [[ "$skip_sync_mode" == false ]]; then
+    echo ""
+    echo "  [1] Solo fork (origin/dev) — sincroniza solo con el fork"
+    echo "  [2] Fork + repositorio raíz (upstream/dev) — sincroniza con ambos"
+    echo ""
+    SYNC_MODE=$(
+      while true; do
+        read -p "  ¿Qué sincronización deseas? [1-2]: " choice
+        case "$choice" in
+          1) echo "fork"; break ;;
+          2) echo "full"; break ;;
+          *) echo "  Opción inválida. Ingresa 1 o 2." >&2 ;;
+        esac
+      done
+    )
+  else
+    SYNC_MODE="fork"
+  fi
+
+  sync_repo "$SYNC_MODE"
   install_deps
   build
   configure_path
