@@ -13,7 +13,20 @@
           "id": "GLM-4-7-Flash-Q6_K",
           "name": "LlamaCPP - GLM-4-7-Flash-Q6_K",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 131072,
             "output": 32768
@@ -23,7 +36,20 @@
           "id": "NVIDIA-Nemotron-3-Nano-4B-Q8_0",
           "name": "LlamaCPP - NVIDIA-Nemotron-3-Nano-4B-Q8_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 2048,
             "output": 32768
@@ -33,7 +59,20 @@
           "id": "Nemotron-3-Nano-Omni-30B-A3B-Reasoning-Q4_K_M",
           "name": "LlamaCPP - Nemotron-3-Nano-Omni-30B-A3B-Reasoning-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -43,7 +82,20 @@
           "id": "Qwable-27b_Q4_K_M",
           "name": "LlamaCPP - Qwable-27b_Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -53,7 +105,20 @@
           "id": "Qwable-3-6-35b_q5_k_m",
           "name": "LlamaCPP - Qwable-3-6-35b_q5_k_m",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 131072,
             "output": 32768
@@ -63,7 +128,20 @@
           "id": "Qwen3-5-35B-A3B-Q4_K_M",
           "name": "LlamaCPP - Qwen3-5-35B-A3B-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -73,7 +151,20 @@
           "id": "Qwen3-5-9B-Q8_0",
           "name": "LlamaCPP - Qwen3-5-9B-Q8_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -83,7 +174,20 @@
           "id": "Qwen3-6-27B-Q4_K_M",
           "name": "LlamaCPP - Qwen3-6-27B-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -93,7 +197,20 @@
           "id": "Qwen3-6-27B-Q6_K",
           "name": "LlamaCPP - Qwen3-6-27B-Q6_K",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -103,7 +220,20 @@
           "id": "Qwen3-6-35B-A3B-Claude-4-7-Opus-Reasoning-Distilled-IQ4_XS",
           "name": "LlamaCPP - Qwen3-6-35B-A3B-Claude-4-7-Opus-Reasoning-Distilled-IQ4_XS",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 131072,
             "output": 32768
@@ -113,7 +243,20 @@
           "id": "Qwen3-6-35B-A3B-Claude-4-7-Opus-Reasoning-Distilled-Q5_K_M",
           "name": "LlamaCPP - Qwen3-6-35B-A3B-Claude-4-7-Opus-Reasoning-Distilled-Q5_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -123,7 +266,20 @@
           "id": "Qwen3-6-35B-A3B-Q4_K_M",
           "name": "LlamaCPP - Qwen3-6-35B-A3B-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -133,7 +289,20 @@
           "id": "Qwen3-6-35B-A3B-UD-Q4_K_S",
           "name": "LlamaCPP - Qwen3-6-35B-A3B-UD-Q4_K_S",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -143,7 +312,20 @@
           "id": "Qwen3-6-35B-A3B-UD-Q4_K_XL",
           "name": "LlamaCPP - Qwen3-6-35B-A3B-UD-Q4_K_XL",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -153,7 +335,20 @@
           "id": "Qwen3-6-35B-A3B-UD-Q5_K_S",
           "name": "LlamaCPP - Qwen3-6-35B-A3B-UD-Q5_K_S",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -163,7 +358,20 @@
           "id": "Qwen3-8B-Q6_K",
           "name": "LlamaCPP - Qwen3-8B-Q6_K",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -173,7 +381,20 @@
           "id": "Qwen3-Coder-Next-UD-IQ2_M",
           "name": "LlamaCPP - Qwen3-Coder-Next-UD-IQ2_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -183,7 +404,20 @@
           "id": "Qwen3-Embedding-0-6B-Q8_0",
           "name": "LlamaCPP - Qwen3-Embedding-0-6B-Q8_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -193,7 +427,20 @@
           "id": "Qwen3-Embedding-4B-Q4_K_M",
           "name": "LlamaCPP - Qwen3-Embedding-4B-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -203,7 +450,20 @@
           "id": "Qwen3-Embedding-8B-Q4_K_M",
           "name": "LlamaCPP - Qwen3-Embedding-8B-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -213,7 +473,20 @@
           "id": "Qwopus3-6-27B-Coder-MTP-Q4_K_M",
           "name": "LlamaCPP - Qwopus3-6-27B-Coder-MTP-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -223,7 +496,20 @@
           "id": "Qwopus3-6-27B-Coder-MTP-Q5_K_M",
           "name": "LlamaCPP - Qwopus3-6-27B-Coder-MTP-Q5_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -233,7 +519,20 @@
           "id": "Qwopus3-6-27B-Coder-MTP-Q6_K",
           "name": "LlamaCPP - Qwopus3-6-27B-Coder-MTP-Q6_K",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 131072,
             "output": 32768
@@ -243,7 +542,20 @@
           "id": "Qwopus3-6-27B-v2-MTP-Q4_K_M",
           "name": "LlamaCPP - Qwopus3-6-27B-v2-MTP-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 32768,
             "output": 32768
@@ -253,7 +565,20 @@
           "id": "Qwopus3-6-27B-v2-MTP-Q5_K_M",
           "name": "LlamaCPP - Qwopus3-6-27B-v2-MTP-Q5_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -263,7 +588,20 @@
           "id": "Qwopus3-6-27B-v2-MTP-Q6_K",
           "name": "LlamaCPP - Qwopus3-6-27B-v2-MTP-Q6_K",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 131072,
             "output": 32768
@@ -273,7 +611,20 @@
           "id": "Qwopus3-6-35B-A3B-v1-Q5_K_M",
           "name": "LlamaCPP - Qwopus3-6-35B-A3B-v1-Q5_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -283,7 +634,20 @@
           "id": "gemma-4-12B-it-Q8_0",
           "name": "LlamaCPP - gemma-4-12B-it-Q8_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -293,7 +657,20 @@
           "id": "gemma-4-12B-it-QAT-Q4_0",
           "name": "LlamaCPP - gemma-4-12B-it-QAT-Q4_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -303,7 +680,20 @@
           "id": "gemma-4-26B-A4B-it-Claude-Opus-Distill-q4_k_m",
           "name": "LlamaCPP - gemma-4-26B-A4B-it-Claude-Opus-Distill-q4_k_m",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -313,7 +703,20 @@
           "id": "gemma-4-26B-A4B-it-Q4_K_M",
           "name": "LlamaCPP - gemma-4-26B-A4B-it-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -323,7 +726,20 @@
           "id": "gemma-4-26B-A4B-it-Q6_K",
           "name": "LlamaCPP - gemma-4-26B-A4B-it-Q6_K",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 262144,
             "output": 32768
@@ -333,7 +749,20 @@
           "id": "gemma-4-26B-A4B-it-QAT-Q4_0",
           "name": "LlamaCPP - gemma-4-26B-A4B-it-QAT-Q4_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 40000,
             "output": 32768
@@ -343,7 +772,20 @@
           "id": "gemma-4-31B-it-Claude-Opus-Distill-q4_k_m",
           "name": "LlamaCPP - gemma-4-31B-it-Claude-Opus-Distill-q4_k_m",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 8192,
             "output": 32768
@@ -353,7 +795,20 @@
           "id": "gemma-4-31B-it-Q4_K_M",
           "name": "LlamaCPP - gemma-4-31B-it-Q4_K_M",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 128000,
             "output": 32768
@@ -363,7 +818,20 @@
           "id": "gemma-4-31B-it-QAT-Q4_0",
           "name": "LlamaCPP - gemma-4-31B-it-QAT-Q4_0",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 128000,
             "output": 32768
@@ -373,7 +841,20 @@
           "id": "gpt-oss-20b-MXFP4",
           "name": "LlamaCPP - gpt-oss-20b-MXFP4",
           "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
           "attachment": true,
+          "interleaved": false,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
           "limit": {
             "context": 131072,
             "output": 32768
