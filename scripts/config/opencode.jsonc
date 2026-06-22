@@ -105,7 +105,7 @@
           "tool_call": true,
           "attachment": true,
           "limit": {
-            "context": 262144,
+            "context": 131072,
             "output": 32768
           }
         },
@@ -216,6 +216,16 @@
           "attachment": true,
           "limit": {
             "context": 131072,
+            "output": 32768
+          }
+        },
+        "Qwopus3-6-27B-v2-MTP-Q5_K_M": {
+          "id": "Qwopus3-6-27B-v2-MTP-Q5_K_M",
+          "name": "LlamaCPP - Qwopus3-6-27B-v2-MTP-Q5_K_M",
+          "tool_call": true,
+          "attachment": true,
+          "limit": {
+            "context": 262144,
             "output": 32768
           }
         },
