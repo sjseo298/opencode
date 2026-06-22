@@ -415,44 +415,44 @@ def action_sync_model(server: str, url: str, extractor) -> None:
     """Sync models from a single server."""
     console.print(f"\n[bold]Consultando {server}...[/]")
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Consultando {server}...[/]")) as progress:
+    data: Optional[dict] = None
+    with Progress(SpinnerColumn(), TextColumn("[bold]{task.description}[/]")) as progress:
         task = progress.add_task(f"Consultando {server}...", total=None)
-
         data = fetch_json(url)
         progress.update(task, completed=100)
 
-        if not data:
-            console.print(f"[red]✗ No se pudo conectar a {server}[/]")
-            return
+    if not data:
+        console.print(f"[red]✗ No se pudo conectar a {server}[/]")
+        return
 
-        models = extractor(data)
-        if not models:
-            console.print("[yellow]⚠ No se encontraron modelos[/]")
-            return
+    models = extractor(data)
+    if not models:
+        console.print("[yellow]⚠ No se encontraron modelos[/]")
+        return
 
-        console.print(f"[green]✓ {len(models)} modelos encontrados[/]")
-        display_model_table(models, server)
+    console.print(f"[green]✓ {len(models)} modelos encontrados[/]")
+    display_model_table(models, server)
 
-        # Generate and compare config
-        all_models = extract_models_from_servers(server)
-        new_config = generate_config(
-            all_models.get("llamacpp", {}),
-            all_models.get("lmstudio", {}),
-        )
+    # Generate and compare config
+    all_models = extract_models_from_servers(server)
+    new_config = generate_config(
+        all_models.get("llamacpp", {}),
+        all_models.get("lmstudio", {}),
+    )
 
-        if config_has_changes(new_config, load_user_config()):
-            if Confirm.ask("¿Actualizar config del usuario?"):
-                if update_user_config(new_config):
-                    console.print("[green]✓ Config actualizada[/]")
-                    write_config_to_file(new_config, GENERATED_CONFIG)
-                    if git_commit(f"chore: sync {server} models ({len(models)} models)"):
-                        console.print("[green]✓ Commit hecho[/]")
-                else:
-                    console.print("[yellow]⚠ No hubo cambios[/]")
+    if config_has_changes(new_config, load_user_config()):
+        if Confirm.ask("¿Actualizar config del usuario?"):
+            if update_user_config(new_config):
+                console.print("[green]✓ Config actualizada[/]")
+                write_config_to_file(new_config, GENERATED_CONFIG)
+                if git_commit(f"chore: sync {server} models ({len(models)} models)"):
+                    console.print("[green]✓ Commit hecho[/]")
             else:
-                console.print("[yellow]⚠ Cancelado[/]")
+                console.print("[yellow]⚠ No hubo cambios[/]")
         else:
-            console.print("[green]✓ La config ya está actualizada[/]")
+            console.print("[yellow]⚠ Cancelado[/]")
+    else:
+        console.print("[green]✓ La config ya está actualizada[/]")
 
 
 def extract_models_from_servers(server: str) -> dict:
@@ -619,7 +619,13 @@ def action_select_model() -> None:
     console.print(f"\n[bold]Modelo actual:[/bold] {current}")
     console.print()
 
-    table = Table(title="Modelos Disponibles", show_header=True, header_style="bold cyan")
+    page_size = console.height - 10
+    if page_size < 3:
+        page_size = 15
+
+    num_pages = (len(all_models) + page_size - 1) // page_size
+
+    table = Table(show_header=True, header_style="bold cyan", expand=True)
     table.add_column("#", style="bold cyan", justify="right")
     table.add_column("Proveedor", style="cyan")
     table.add_column("Modelo", style="white")
@@ -628,41 +634,85 @@ def action_select_model() -> None:
     table.add_column("Herramientas")
     table.add_column("Adjuntos")
 
-    for idx, m in enumerate(all_models, 1):
-        table.add_row(
-            str(idx),
-            m["provider"],
-            m["id"],
-            fmt_number(m["ctx"]) if m["ctx"] else "—",
-            fmt_number(m["output"]) if m["output"] else "—",
-            "✓" if m["tool_call"] else "",
-            "✓" if m["attachment"] else "",
-        )
+    def render_page(page: int) -> None:
+        start = page * page_size
+        end = min(start + page_size, len(all_models))
+        page_num = page + 1
 
-    console.print(table)
+        console.print(f"[bold]Modelos Disponibles (página {page_num} / {num_pages})[/]")
+        console.print(f"  [dim]── {end - start} de {len(all_models)} modelos mostrados ──[/dim]")
+        console.print()
 
-    choice = Prompt.ask(
-        f"  ¿Cuál deseas usar como modelo por defecto? ({len(all_models)} modelos)",
-        choices=[str(i) for i in range(1, len(all_models) + 1)] + ["0"],
-        default="1",
-    )
+        table.title = f"Modelos Disponibles (página {page_num} / {num_pages})"
+        table.rows.clear()
+        for idx, m in enumerate(all_models, start + 1):
+            table.add_row(
+                str(idx),
+                m["provider"],
+                m["id"],
+                fmt_number(m["ctx"]) if m["ctx"] else "—",
+                fmt_number(m["output"]) if m["output"] else "—",
+                "✓" if m["tool_call"] else "",
+                "✓" if m["attachment"] else "",
+            )
+        console.print(table)
 
-    if choice == "0":
-        console.print("[yellow]⚠ Cancelado.[/]")
-        return
+        nav_parts: list[str] = []
+        if page_num > 1:
+            nav_parts.append("p")
+        if page_num < num_pages:
+            nav_parts.append("n")
+        if num_pages > 1:
+            nav_parts.append("j")
+        nav_parts.append("q")
+        nav = " | ".join(f"[bold]{k}[/]" for k in nav_parts)
+        console.print(f"\n  [dim]Navegación: {nav} | Ingresar número para seleccionar[/dim]\n")
 
-    selected = all_models[int(choice) - 1]
-    config["model"] = f"{selected['provider']}/{selected['id']}"
+    page = 0
+    render_page(page)
 
-    # Update project config first
-    write_config_to_file(config, GENERATED_CONFIG)
-    console.print(f"[green]✓ Project config updated[/]")
+    while True:
+        raw = Prompt.ask("  ¿Número de modelo?")
+        cmd = (raw or "").strip().lower()
 
-    # Then update user config
-    write_config_to_file(config, USER_CONFIG)
-    console.print(f"[green]✓ User config updated[/]")
+        if cmd in ("q", "quit"):
+            console.print("[yellow]⚠ Cancelado.[/]")
+            return
+        elif cmd in ("n", "next"):
+            page = min(page + 1, num_pages - 1)
+            render_page(page)
+            continue
+        elif cmd in ("p", "prev"):
+            page = max(page - 1, 0)
+            render_page(page)
+            continue
+        elif cmd in ("j", "jump"):
+            page_input = Prompt.ask("  ¿Número de página?", default="1", choices=[str(i) for i in range(1, num_pages + 1)])
+            page = max(0, min(int(page_input) - 1, num_pages - 1))
+            render_page(page)
+            continue
+        elif cmd == "":
+            # empty = next page
+            if page < num_pages - 1:
+                page += 1
+                render_page(page)
+            continue
 
-    console.print(f"\n[green]✓ Modelo por defecto: {selected['provider']}/{selected['id']}[/]")
+        try:
+            num = int(cmd)
+            if 1 <= num <= len(all_models):
+                selected = all_models[num - 1]
+                config["model"] = f"{selected['provider']}/{selected['id']}"
+                write_config_to_file(config, GENERATED_CONFIG)
+                console.print(f"[green]✓ Project config updated[/]")
+                write_config_to_file(config, USER_CONFIG)
+                console.print(f"[green]✓ User config updated[/]")
+                console.print(f"\n[green]✓ Modelo por defecto: {selected['provider']}/{selected['id']}[/]")
+                return
+            else:
+                console.print(f"[yellow]⚠ Número fuera de rango. Elige entre 1 y {len(all_models)}.[/]")
+        except ValueError:
+            console.print(f"[yellow]⚠ No se reconoce '{raw}'.[/]")
 
 
 def action_run_build() -> None:
