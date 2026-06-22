@@ -662,20 +662,17 @@ def action_select_model() -> None:
     write_config_to_file(config, USER_CONFIG)
     console.print(f"[green]✓ User config updated[/]")
 
-    # Commit changes
-    repo_dir = SCRIPT_DIR.parent
-    subprocess.run(
-        ["git", "-C", str(repo_dir), "add", str(GENERATED_CONFIG)],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(repo_dir), "commit", "-m", f"chore: update default model to {selected['id']}"],
-        check=True,
-        capture_output=True,
-    )
-    console.print("[green]✓ Commit hecho[/]")
     console.print(f"\n[green]✓ Modelo por defecto: {selected['provider']}/{selected['id']}[/]")
+
+
+def action_run_build() -> None:
+    """Run the full build.sh script (sync + install + build)."""
+    console.print("\n[bold]Ejecutando build.sh (sync + install + build)...[/]")
+    result = subprocess.run(["bash", str(SCRIPT_DIR.parent / "build.sh")])
+    if result.returncode != 0:
+        console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
+    else:
+        console.print("[green]✓ Build completado[/]")
 
 
 def action_view_config() -> None:
@@ -773,6 +770,7 @@ def main() -> None:
         "3": ("Sync de PATH", action_sync_path),
         "4": ("Ver Config", lambda: (show_config_menu(),)),
         "5": ("Seleccionar Modelo", action_select_model),
+        "6": ("Build Completo", action_run_build),
         "0": ("Salir", lambda: None),
     }
 
@@ -789,9 +787,10 @@ def main() -> None:
         console.print("  [3] Sync de PATH       — Gestiona la entrada de PATH en el shell")
         console.print("  [4] Ver Config         — Visualiza y compara configs de modelos")
         console.print("  [5] Modelo por defecto — Selecciona el modelo por defecto")
+        console.print("  [6] Build Completo     — Sync fork + instalar deps + compilar")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
@@ -806,6 +805,8 @@ def main() -> None:
             action_view_config()
         elif choice == "5":
             action_select_model()
+        elif choice == "6":
+            action_run_build()
 
 
 if __name__ == "__main__":
