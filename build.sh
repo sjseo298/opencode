@@ -57,52 +57,76 @@ ensure_scripts_executable() {
 }
 
 # ── sync ──────────────────────────────────────────────────────────
-# Pulls latest changes from the upstream repo (the original
-# repository the fork is based on).
+# Syncs the fork with upstream and/or origin depending on the sync mode.
+# - "fork": only sync with origin (the fork)
+# - "full": sync with both origin and upstream (the original repo)
 sync_repo() {
   local sync_mode="$1"
-  echo "⬇️  Syncing fork with upstream..."
   cd "$REPO_ROOT"
 
-  # Fetch both remotes
-  git fetch origin
-  git fetch upstream
+  if [ "$sync_mode" = "fork" ]; then
+    echo "⬇️  Syncing fork (origin) only..."
+    git fetch origin
 
-  # Stash local changes so merges can proceed
-  if ! git stash push -m "build-sync: temporary stash" --include-untracked 2>/dev/null; then
-    echo "⚠️  No local changes to stash."
-  fi
+    # Stash local changes so merges can proceed
+    if ! git stash push -m "build-sync: temporary stash" --include-untracked 2>/dev/null; then
+      echo "⚠️  No local changes to stash."
+    fi
 
-  # Merge origin/dev first so local commits are integrated
-  if ! git merge origin/dev --no-edit; then
-    echo "⚠️  Merge conflict with origin/dev — cannot auto-resolve."
-    echo "  Please resolve conflicts manually and run: git push origin dev"
-    exit 1
-  fi
+    # Merge origin/dev so local commits are integrated
+    if ! git merge origin/dev --no-edit; then
+      echo "⚠️  Merge conflict with origin/dev — cannot auto-resolve."
+      echo "  Please resolve conflicts manually and run: git push origin dev"
+      exit 1
+    fi
 
-  # Merge upstream/dev only if sync_mode is "full"
-  if [ "$sync_mode" = "full" ]; then
+    # Restore stashed changes (fail if conflicts)
+    if ! git stash pop 2>/dev/null; then
+      echo "⚠️  Stash conflict — please resolve manually."
+      exit 1
+    fi
+
+    echo ""
+    echo "  Skipping push (fork-only sync)."
+  else
+    echo "⬇️  Syncing fork with upstream..."
+    # Fetch both remotes
+    git fetch origin
+    git fetch upstream
+
+    # Stash local changes so merges can proceed
+    if ! git stash push -m "build-sync: temporary stash" --include-untracked 2>/dev/null; then
+      echo "⚠️  No local changes to stash."
+    fi
+
+    # Merge origin/dev first so local commits are integrated
+    if ! git merge origin/dev --no-edit; then
+      echo "⚠️  Merge conflict with origin/dev — cannot auto-resolve."
+      echo "  Please resolve conflicts manually and run: git push origin dev"
+      exit 1
+    fi
+
+    # Merge upstream/dev
     if ! git merge upstream/dev --no-edit; then
       echo "⚠️  Merge conflict with upstream/dev — cannot auto-resolve."
       echo "  Please resolve conflicts manually and run: git push origin dev"
       exit 1
     fi
-  fi
 
-  # Restore stashed changes (fail if conflicts)
-  if ! git stash pop 2>/dev/null; then
-    echo "⚠️  Stash conflict — please resolve manually."
-    exit 1
-  fi
+    # Restore stashed changes (fail if conflicts)
+    if ! git stash pop 2>/dev/null; then
+      echo "⚠️  Stash conflict — please resolve manually."
+      exit 1
+    fi
 
-  # Only push if syncing with upstream (full mode)
-  if [ "$sync_mode" = "full" ]; then
+    # Check for local commits to push
     echo ""
     echo "📤  Checking for local commits to push..."
-    LOCAL_COMMITS=$(git log origin/dev..HEAD --oneline 2>/dev/null || true)
-    if [ -n "$LOCAL_COMMITS" ]; then
+    local local_commits
+    local_commits=$(git log origin/dev..HEAD --oneline 2>/dev/null || true)
+    if [ -n "$local_commits" ]; then
       echo "  Found local commits:"
-      echo "$LOCAL_COMMITS" | sed 's/^/    /'
+      echo "$local_commits" | sed 's/^/    /'
       echo "  Pushing to origin/dev..."
       if git push origin dev; then
         echo "  ✅ Pushed."
@@ -112,10 +136,8 @@ sync_repo() {
     else
       echo "  No local commits to push."
     fi
-  else
-    echo ""
-    echo "  Skipping push (fork-only sync)."
   fi
+
   echo ""
   echo "✅ Synced."
 }
@@ -180,7 +202,6 @@ else
   install_deps
   build
   configure_path
-  ensure_scripts_executable
   ensure_scripts_executable
 
   # Show the models config path
