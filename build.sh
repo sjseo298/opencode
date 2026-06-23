@@ -164,16 +164,14 @@ else
     echo "  [1] Solo fork (origin/dev) — sincroniza solo con el fork"
     echo "  [2] Fork + repositorio raíz (upstream/dev) — sincroniza con ambos"
     echo ""
-    SYNC_MODE=$(
-      while true; do
-        read -p "  ¿Qué sincronización deseas? [1-2]: " choice
-        case "$choice" in
-          1) echo "fork"; break ;;
-          2) echo "full"; break ;;
-          *) echo "  Opción inválida. Ingresa 1 o 2." >&2 ;;
-        esac
-      done
-    )
+    while true; do
+      read -p "  ¿Qué sincronización deseas? [1-2]: " choice
+      case "$choice" in
+        1) SYNC_MODE="fork"; break ;;
+        2) SYNC_MODE="full"; break ;;
+        *) echo "  Opción inválida. Ingresa 1 o 2." >&2 ;;
+      esac
+    done
   else
     SYNC_MODE="fork"
   fi

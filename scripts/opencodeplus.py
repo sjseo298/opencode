@@ -812,6 +812,26 @@ def action_select_model() -> None:
 def action_run_build() -> None:
     """Run the full build.sh script (sync + install + build)."""
     console.print("\n[bold]Ejecutando build.sh (sync + install + build)...[/]")
+
+    # Fetch upstream and check for new commits before build.sh runs
+    upstream_commits = fetch_upstream_commits()
+    if upstream_commits:
+        commit_count = len(upstream_commits.strip().splitlines())
+        console.print(f"\n[green]✓ {commit_count} nuevo(s) commit(s) de upstream[/]")
+
+        model_info = get_default_model_from_config()
+        if not model_info:
+            console.print("[yellow]⚠ No se encontró modelo por defecto en la config.[/]")
+        else:
+            console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
+            console.print("[dim]Generando resumen con LLM...[/]")
+            summary = summarize_with_llm(upstream_commits, model_info)
+            if summary:
+                console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
+                console.print(Panel(Markdown(summary), border_style="green"))
+            else:
+                console.print("[yellow]⚠ No se pudo obtener resumen del LLM.[/]")
+
     result = subprocess.run(["bash", str(SCRIPT_DIR.parent / "build.sh")])
     if result.returncode != 0:
         console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
@@ -901,6 +921,96 @@ def action_sync_path() -> None:
             console.print("[green]✓ opencodeplus removido del PATH[/]")
         else:
             console.print("[yellow]⚠ No estaba en el PATH.[/]")
+
+
+# ── upstream commit detection and LLM summarization ──────────────────────
+
+def fetch_upstream_commits() -> Optional[str]:
+    """Fetch upstream and return commits in upstream/dev not in HEAD."""
+    try:
+        repo_dir = SCRIPT_DIR.parent
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "fetch", "upstream"],
+            capture_output=True,
+        )
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "log", "HEAD..upstream/dev", "--oneline", "--no-merges"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        return None
+    except Exception as e:
+        console.print(f"[yellow]⚠ Git fetch error: {e}[/]")
+        return None
+
+
+def get_default_model_from_config() -> Optional[dict]:
+    """Read the default model from the user config. Returns dict with provider, model_id, baseURL or None."""
+    config = load_user_config()
+    model_field = config.get("model")
+    if not model_field:
+        return None
+
+    parts = model_field.split("/", 1)
+    if len(parts) != 2:
+        return None
+
+    provider_name, model_id = parts
+
+    providers = config.get("provider", {})
+    provider_data = providers.get(provider_name)
+    if not provider_data:
+        return None
+
+    base_url = provider_data.get("options", {}).get("baseURL", "")
+    if not base_url:
+        return None
+
+    return {
+        "provider": provider_name,
+        "model_id": model_id,
+        "base_url": base_url,
+    }
+
+
+def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
+    """Send commit log to LLM API and return summarized text. Returns None on failure."""
+    import urllib.request
+
+    url = f"{model_info['base_url']}/chat/completions"
+    messages = [
+        {
+            "role": "system",
+            "content": "Eres un asistente experto en análisis de código. Resume los cambios del repositorio de forma concisa y organizada por categorías (features, fixes, refactor, docs, etc.). Usa un formato markdown con títulos, listas y emojis para hacer la lectura más clara. Responde en español.",
+        },
+        {
+            "role": "user",
+            "content": f"Analiza estos commits del repositorio y proporciona un resumen organizado por categorías:\n\n{commit_log}",
+        },
+    ]
+
+    payload = json.dumps({
+        "model": model_info["model_id"],
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": 4096,
+    }).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+            choices = data.get("choices", [])
+            if choices:
+                return choices[0].get("message", {}).get("content", "")
+            return None
+    except Exception as e:
+        console.print(f"[yellow]⚠ LLM API error: {e}[/]")
+        return None
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
