@@ -1002,7 +1002,7 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
         req = urllib.request.Request(url, data=payload, headers={
             "Content-Type": "application/json",
         })
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=600) as resp:
             data = json.loads(resp.read().decode())
             choices = data.get("choices", [])
             if choices:

@@ -56,6 +56,19 @@ ensure_scripts_executable() {
   fi
 }
 
+# ── resolve conflicts ─────────────────────────────────────────────
+# Attempts to resolve merge/stash conflicts using LLM.
+# Returns 0 if resolved, 1 if manual resolution needed.
+resolve_conflicts_with_llm() {
+  local script="$REPO_ROOT/scripts/resolve-conflicts.py"
+  if [[ -f "$script" ]]; then
+    python3 "$script" --auto
+  else
+    echo "⚠️  resolve-conflicts.py not found — manual resolution needed."
+    return 1
+  fi
+}
+
 # ── sync ──────────────────────────────────────────────────────────
 # Syncs the fork with upstream and/or origin depending on the sync mode.
 # - "fork": only sync with origin (the fork)
@@ -75,15 +88,31 @@ sync_repo() {
 
     # Merge origin/dev so local commits are integrated
     if ! git merge origin/dev --no-edit; then
-      echo "⚠️  Merge conflict with origin/dev — cannot auto-resolve."
-      echo "  Please resolve conflicts manually and run: git push origin dev"
-      exit 1
+      echo "⚠️  Merge conflict with origin/dev — attempting LLM auto-resolution..."
+      if resolve_conflicts_with_llm; then
+        git add -A
+        git commit --no-edit
+        echo "✅ Merge conflict resolved."
+      else
+        echo "  Please resolve conflicts manually and run: git push origin dev"
+        exit 1
+      fi
     fi
 
-    # Restore stashed changes (fail if conflicts)
+    # Restore stashed changes (attempt LLM auto-resolution if conflicts)
     if ! git stash pop 2>/dev/null; then
-      echo "⚠️  Stash conflict — please resolve manually."
-      exit 1
+      echo "⚠️  Stash conflict — attempting LLM auto-resolution..."
+      if resolve_conflicts_with_llm; then
+        git add -A
+        # Retry stash pop after resolution
+        if git stash pop 2>/dev/null; then
+          echo "✅ Stash conflict resolved."
+        else
+          echo "⚠️  Stash conflict persists — please resolve manually after the build."
+        fi
+      else
+        echo "  Please resolve conflicts manually after the build."
+      fi
     fi
 
     echo ""
@@ -101,22 +130,39 @@ sync_repo() {
 
     # Merge origin/dev first so local commits are integrated
     if ! git merge origin/dev --no-edit; then
-      echo "⚠️  Merge conflict with origin/dev — cannot auto-resolve."
-      echo "  Please resolve conflicts manually and run: git push origin dev"
-      exit 1
+      echo "⚠️  Merge conflict with origin/dev — attempting LLM auto-resolution..."
+      if resolve_conflicts_with_llm; then
+        git add -A
+        git commit --no-edit
+        echo "✅ Merge conflict resolved."
+      else
+        echo "  Please resolve conflicts manually and run: git push origin dev"
+        exit 1
+      fi
     fi
 
     # Merge upstream/dev
     if ! git merge upstream/dev --no-edit; then
-      echo "⚠️  Merge conflict with upstream/dev — cannot auto-resolve."
-      echo "  Please resolve conflicts manually and run: git push origin dev"
-      exit 1
+      echo "⚠️  Merge conflict with upstream/dev — attempting LLM auto-resolution..."
+      if resolve_conflicts_with_llm; then
+        git add -A
+        git commit --no-edit
+        echo "✅ Merge conflict resolved."
+      else
+        echo "  Please resolve conflicts manually and run: git push origin dev"
+        exit 1
+      fi
     fi
 
-    # Restore stashed changes (fail if conflicts)
+    # Restore stashed changes (attempt LLM auto-resolution if conflicts)
     if ! git stash pop 2>/dev/null; then
-      echo "⚠️  Stash conflict — please resolve manually."
-      exit 1
+      echo "⚠️  Stash conflict — attempting LLM auto-resolution..."
+      if resolve_conflicts_with_llm; then
+        git add -A
+        echo "✅ Stash conflict resolved."
+      else
+        echo "  Please resolve conflicts manually after the build."
+      fi
     fi
 
     # Check for local commits to push
