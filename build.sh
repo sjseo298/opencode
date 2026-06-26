@@ -203,7 +203,7 @@ install_deps() {
 clean_turbo() {
   echo "🧹  Cleaning turbo cache..."
   cd "$REPO_ROOT"
-  bunx turbo clean
+  rm -rf .turbo
   echo "✅ Turbo cache cleaned."
 }
 
