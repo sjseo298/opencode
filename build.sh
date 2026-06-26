@@ -199,6 +199,14 @@ install_deps() {
   echo "✅ Dependencies installed."
 }
 
+# ── clean turbo cache ──────────────────────────────────────────────
+clean_turbo() {
+  echo "🧹  Cleaning turbo cache..."
+  cd "$REPO_ROOT"
+  bunx turbo clean
+  echo "✅ Turbo cache cleaned."
+}
+
 # ── build ─────────────────────────────────────────────────────────
 build() {
   echo "🔨  Building opencode (single target)..."
@@ -224,6 +232,7 @@ if [[ "$skip_sync" == true ]]; then
   if [[ "$skip_install" != true ]]; then
     install_deps
   fi
+  clean_turbo
   build
   configure_path
 else
@@ -246,6 +255,7 @@ else
 
   sync_repo "$SYNC_MODE"
   install_deps
+  clean_turbo
   build
   configure_path
   ensure_scripts_executable
