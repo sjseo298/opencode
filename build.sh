@@ -218,13 +218,13 @@ build() {
 # ── main ──────────────────────────────────────────────────────────
 skip_sync=false
 skip_install=false
-skip_sync_mode=false
+SYNC_MODE=""
 
 for arg in "$@"; do
   case "$arg" in
     --skip-sync) skip_sync=true ;;
     --skip-install) skip_install=true ;;
-    --skip-sync-mode) skip_sync_mode=true ;;
+    --sync-mode=*) SYNC_MODE="${arg#*=}" ;;
   esac
 done
 
@@ -236,7 +236,7 @@ if [[ "$skip_sync" == true ]]; then
   build
   configure_path
 else
-  if [[ "$skip_sync_mode" == false ]]; then
+  if [[ -z "$SYNC_MODE" ]]; then
     echo ""
     echo "  [1] Solo fork (origin/dev) — sincroniza solo con el fork"
     echo "  [2] Fork + repositorio raíz (upstream/dev) — sincroniza con ambos"
@@ -249,8 +249,6 @@ else
         *) echo "  Opción inválida. Ingresa 1 o 2." >&2 ;;
       esac
     done
-  else
-    SYNC_MODE="fork"
   fi
 
   sync_repo "$SYNC_MODE"

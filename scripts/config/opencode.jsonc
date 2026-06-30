@@ -361,6 +361,72 @@
             "output": 32768
           }
         },
+        "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M": {
+          "id": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M",
+          "name": "LlamaCPP - Qwen3-Coder-30B-A3B-Instruct-Q4_K_M",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 186368,
+            "output": 32768
+          }
+        },
+        "Qwen3-Coder-30B-A3B-Instruct-Q6_K": {
+          "id": "Qwen3-Coder-30B-A3B-Instruct-Q6_K",
+          "name": "LlamaCPP - Qwen3-Coder-30B-A3B-Instruct-Q6_K",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        },
+        "Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL": {
+          "id": "Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL",
+          "name": "LlamaCPP - Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        },
         "Qwen3-Coder-Next-UD-IQ2_M": {
           "id": "Qwen3-Coder-Next-UD-IQ2_M",
           "name": "LlamaCPP - Qwen3-Coder-Next-UD-IQ2_M",
@@ -467,7 +533,7 @@
             ]
           },
           "limit": {
-            "context": 32768,
+            "context": 131072,
             "output": 32768
           }
         },
@@ -489,7 +555,7 @@
             ]
           },
           "limit": {
-            "context": 32768,
+            "context": 131072,
             "output": 32768
           }
         },
@@ -533,7 +599,7 @@
             ]
           },
           "limit": {
-            "context": 32768,
+            "context": 262144,
             "output": 32768
           }
         },
@@ -577,7 +643,7 @@
             ]
           },
           "limit": {
-            "context": 131072,
+            "context": 262144,
             "output": 32768
           }
         },
@@ -822,9 +888,31 @@
             "context": 131072,
             "output": 32768
           }
+        },
+        "ornith-1-0-35b-Q5_K_M": {
+          "id": "ornith-1-0-35b-Q5_K_M",
+          "name": "LlamaCPP - ornith-1-0-35b-Q5_K_M",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 196608,
+            "output": 32768
+          }
         }
       }
     }
   },
-  "model": "llamacpp/Qwopus3-6-35B-A3B-v1-Q5_K_M"
+  "model": "llamacpp/ornith-1-0-35b-Q5_K_M"
 }

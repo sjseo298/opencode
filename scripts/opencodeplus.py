@@ -832,7 +832,8 @@ def action_run_build() -> None:
             else:
                 console.print("[yellow]⚠ No se pudo obtener resumen del LLM.[/]")
 
-    result = subprocess.run(["bash", str(SCRIPT_DIR.parent / "build.sh")])
+    build_script = str(SCRIPT_DIR.parent / "build.sh")
+    result = subprocess.run(["bash", build_script, "--sync-mode=full"])
     if result.returncode != 0:
         console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
     else:
