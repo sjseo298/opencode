@@ -85,6 +85,18 @@ def parse_llamacpp_preset(preset: str) -> dict:
     return result
 
 
+def extract_author_from_path(preset: str) -> str:
+    """Extract author from the model path in the preset."""
+    for line in preset.splitlines():
+        line = line.strip()
+        if line.startswith("model = "):
+            model_path = line.split("model = ")[1].strip()
+            parts = model_path.split("/")
+            if len(parts) > 5:
+                return parts[4]
+    return ""
+
+
 def fmt_number(n: int) -> str:
     """Format number with thousands separators."""
     return f"{n:,}"
@@ -102,6 +114,7 @@ def extract_llamacpp_models(data: dict) -> dict:
 
         preset_text = item.get("status", {}).get("preset", "")
         preset = parse_llamacpp_preset(preset_text)
+        author = extract_author_from_path(preset_text)
 
         ctx_size = int(preset.get("ctx-size", 0))
         has_reasoning = "reasoning-budget" in preset
@@ -139,10 +152,16 @@ def extract_llamacpp_models(data: dict) -> dict:
         if has_video_output:
             output_modalities.append("video")
 
+        # Build name with author
+        name = f"LlamaCPP - {model_id}"
+        if author:
+            name = f"LlamaCPP - {author}/{model_id.split('/')[-1]}"
+
         # Build model config dict
         model_config = {
             "id": model_id,
-            "name": f"LlamaCPP - {model_id}",
+            "name": name,
+            "author": author,
             "tool_call": True,
             "reasoning": has_reasoning,
             "temperature": True,
@@ -162,7 +181,7 @@ def extract_llamacpp_models(data: dict) -> dict:
 
         models[model_id] = {
             "api": "openai",
-            "name": f"LlamaCPP - {model_id}",
+            "name": name,
             "options": {
                 "baseURL": "http://192.168.8.151:9999/v1",
             },
@@ -182,6 +201,7 @@ def extract_lmstudio_models(data: dict) -> dict:
             continue
 
         display_name = item.get("display_name", model_key)
+        author = item.get("author", "")
         ctx_length = item.get("max_context_length", 0)
         capabilities = item.get("capabilities", {})
         has_vision = capabilities.get("vision", False)
@@ -208,8 +228,10 @@ def extract_lmstudio_models(data: dict) -> dict:
         if capabilities.get("audio-output", False):
             output_modalities.append("audio")
 
-        # Build name with quantization info
+        # Build name with author and quantization info
         name = f"LM Studio - {display_name}"
+        if author:
+            name = f"LM Studio - {author}/{display_name}"
         if quant_name:
             name += f"@{quant_name}"
 
@@ -217,6 +239,7 @@ def extract_lmstudio_models(data: dict) -> dict:
         model_config = {
             "id": model_key,
             "name": name,
+            "author": author,
             "tool_call": has_tool_use,
             "reasoning": has_reasoning,
             "temperature": True,
@@ -456,6 +479,7 @@ def display_model_table(models: dict, server: str) -> None:
     """Display a table of models from a server."""
     table = Table(title=f"Modelos ({server})", show_header=True, header_style="bold cyan")
     table.add_column("Modelo", style="white")
+    table.add_column("Autor", style="dim")
     table.add_column("Contexto", justify="right")
     table.add_column("Output", justify="right")
     table.add_column("Herramientas")
@@ -467,6 +491,7 @@ def display_model_table(models: dict, server: str) -> None:
         inner = model_data.get("models", {}).get(model_id, {})
         ctx = inner.get("limit", {}).get("context", 0)
         output = inner.get("limit", {}).get("output", 0)
+        author = inner.get("author", "")
         tool = "✓" if inner.get("tool_call") else ""
         attach = "✓" if inner.get("attachment") else ""
         reasoning = "✓" if inner.get("reasoning") else ""
@@ -475,6 +500,7 @@ def display_model_table(models: dict, server: str) -> None:
 
         table.add_row(
             model_id,
+            author,
             fmt_number(ctx) if ctx else "—",
             fmt_number(output) if output else "—",
             tool,
@@ -613,6 +639,7 @@ def action_sync_models() -> None:
         table = Table(title="Modelos Sincronizados", show_header=True, header_style="bold cyan")
         table.add_column("Servidor", style="cyan")
         table.add_column("Modelo", style="white")
+        table.add_column("Autor", style="dim")
         table.add_column("Contexto", justify="right")
         table.add_column("Output", justify="right")
         table.add_column("Herramientas")
@@ -624,11 +651,13 @@ def action_sync_models() -> None:
             inner = model_data.get("models", {}).get(model_id, {})
             ctx = inner.get("limit", {}).get("context", 0)
             output = inner.get("limit", {}).get("output", 0)
+            author = inner.get("author", "")
             modalities = inner.get("modalities", {})
             modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
             table.add_row(
                 "LlamaCPP",
                 model_id,
+                author,
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
                 "✓" if inner.get("tool_call") else "",
@@ -641,11 +670,13 @@ def action_sync_models() -> None:
             inner = model_data.get("models", {}).get(model_id, {})
             ctx = inner.get("limit", {}).get("context", 0)
             output = inner.get("limit", {}).get("output", 0)
+            author = inner.get("author", "")
             modalities = inner.get("modalities", {})
             modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
             table.add_row(
                 "LM Studio",
                 model_id,
+                author,
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
                 "✓" if inner.get("tool_call") else "",
@@ -689,10 +720,12 @@ def action_select_model() -> None:
         for model_id, model_data in provider_data.get("models", {}).items():
             inner = model_data if isinstance(model_data, dict) else {}
             modalities = inner.get("modalities", {})
+            author = inner.get("author", "")
             all_models.append({
                 "provider": provider_name,
                 "id": model_id,
                 "name": inner.get("name", model_id),
+                "author": author,
                 "ctx": inner.get("limit", {}).get("context", 0),
                 "output": inner.get("limit", {}).get("output", 0),
                 "tool_call": inner.get("tool_call", False),
@@ -719,6 +752,7 @@ def action_select_model() -> None:
     table.add_column("#", style="bold cyan", justify="right")
     table.add_column("Proveedor", style="cyan")
     table.add_column("Modelo", style="white")
+    table.add_column("Autor", style="dim")
     table.add_column("Contexto", justify="right")
     table.add_column("Output", justify="right")
     table.add_column("Herramientas")
@@ -742,6 +776,7 @@ def action_select_model() -> None:
                 str(idx),
                 m["provider"],
                 m["id"],
+                m["author"],
                 fmt_number(m["ctx"]) if m["ctx"] else "—",
                 fmt_number(m["output"]) if m["output"] else "—",
                 "✓" if m["tool_call"] else "",
