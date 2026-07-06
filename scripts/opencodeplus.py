@@ -887,6 +887,18 @@ def action_run_build() -> None:
         console.print("[green]✓ Build completado[/]")
 
 
+def action_sync_fork() -> None:
+    """Sync fork (origin) only + install deps + build."""
+    console.print("\n[bold]Sync de fork (origin) — sync + install + build...[/]")
+
+    build_script = str(SCRIPT_DIR.parent / "build.sh")
+    result = subprocess.run(["bash", build_script, "--sync-mode=fork"])
+    if result.returncode != 0:
+        console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
+    else:
+        console.print("[green]✓ Sync + build completado[/]")
+
+
 def action_view_config() -> None:
     """View the generated config."""
     if GENERATED_CONFIG.exists():
@@ -1073,6 +1085,7 @@ def main() -> None:
         "4": ("Ver Config", lambda: (show_config_menu(),)),
         "5": ("Seleccionar Modelo", action_select_model),
         "6": ("Build Completo", action_run_build),
+        "7": ("Sync de Fork", action_sync_fork),
         "0": ("Salir", lambda: None),
     }
 
@@ -1089,10 +1102,11 @@ def main() -> None:
         console.print("  [3] Sync de PATH       — Gestiona la entrada de PATH en el shell")
         console.print("  [4] Ver Config         — Visualiza y compara configs de modelos")
         console.print("  [5] Modelo por defecto — Selecciona el modelo por defecto")
-        console.print("  [6] Build Completo     — Sync fork + instalar deps + compilar")
+        console.print("  [6] Build Completo     — Sync fork + upstream + instalar deps + compilar")
+        console.print("  [7] Sync de Fork       — Sync fork (origin) + instalar deps + compilar")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7"], default="0")
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
@@ -1109,6 +1123,8 @@ def main() -> None:
             action_select_model()
         elif choice == "6":
             action_run_build()
+        elif choice == "7":
+            action_sync_fork()
 
 
 if __name__ == "__main__":
