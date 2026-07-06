@@ -848,25 +848,37 @@ def action_run_build() -> None:
     """Run the full build.sh script (sync + install + build)."""
     console.print("\n[bold]Ejecutando build.sh (sync + install + build)...[/]")
 
-    # Fetch upstream and check for new commits before build.sh runs
+    # Fetch upstream and check for new commits
     upstream_commits = fetch_upstream_commits()
-    if upstream_commits:
-        commit_count = len(upstream_commits.strip().splitlines())
-        console.print(f"\n[green]✓ {commit_count} nuevo(s) commit(s) de upstream[/]")
+    if not upstream_commits:
+        console.print("[yellow]⚠ No hay commits nuevos de upstream. No hay nada que hacer.[/]")
+        return
 
-        model_info = get_default_model_from_config()
-        if not model_info:
-            console.print("[yellow]⚠ No se encontró modelo por defecto en la config.[/]")
-        else:
-            console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
-            console.print("[dim]Generando resumen con LLM...[/]")
-            summary = summarize_with_llm(upstream_commits, model_info)
-            if summary:
-                console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
-                console.print(Panel(Markdown(summary), border_style="green"))
-            else:
-                console.print("[yellow]⚠ No se pudo obtener resumen del LLM.[/]")
+    commit_count = len(upstream_commits.strip().splitlines())
+    console.print(f"\n[green]✓ {commit_count} nuevo(s) commit(s) de upstream[/]")
 
+    # Generate LLM summary (mandatory for upstream updates)
+    model_info = get_default_model_from_config()
+    if not model_info:
+        console.print("[red]✗ Cancelando build: no se encontró modelo por defecto en la config.[/]")
+        return
+
+    console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
+    console.print("[dim]Generando resumen con LLM...[/]")
+    summary = summarize_with_llm(upstream_commits, model_info)
+    if not summary:
+        console.print("[red]✗ Cancelando build: no se pudo obtener resumen del LLM (obligatorio para actualizaciones de upstream).[/]")
+        return
+
+    # Display summary and ask for confirmation
+    console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
+    console.print(Panel(Markdown(summary), border_style="green"))
+
+    if not Confirm.ask("\n  ¿Confirmas que has leído los cambios y deseas continuar con el build?"):
+        console.print("[yellow]⚠ Build cancelado por el usuario.[/]")
+        return
+
+    # Proceed with full sync + build
     build_script = str(SCRIPT_DIR.parent / "build.sh")
     result = subprocess.run(["bash", build_script, "--sync-mode=full"])
     if result.returncode != 0:
