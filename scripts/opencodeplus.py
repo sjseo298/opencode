@@ -848,31 +848,55 @@ def action_run_build() -> None:
     """Run the full build.sh script (sync + install + build)."""
     console.print("\n[bold]Ejecutando build.sh (sync + install + build)...[/]")
 
-    # Fetch upstream and check for new commits before build.sh runs
+    # Fetch upstream and check for new commits
     upstream_commits = fetch_upstream_commits()
-    if upstream_commits:
-        commit_count = len(upstream_commits.strip().splitlines())
-        console.print(f"\n[green]✓ {commit_count} nuevo(s) commit(s) de upstream[/]")
+    if not upstream_commits:
+        console.print("[yellow]⚠ No hay commits nuevos de upstream. No hay nada que hacer.[/]")
+        return
 
-        model_info = get_default_model_from_config()
-        if not model_info:
-            console.print("[yellow]⚠ No se encontró modelo por defecto en la config.[/]")
-        else:
-            console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
-            console.print("[dim]Generando resumen con LLM...[/]")
-            summary = summarize_with_llm(upstream_commits, model_info)
-            if summary:
-                console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
-                console.print(Panel(Markdown(summary), border_style="green"))
-            else:
-                console.print("[yellow]⚠ No se pudo obtener resumen del LLM.[/]")
+    commit_count = len(upstream_commits.strip().splitlines())
+    console.print(f"\n[green]✓ {commit_count} nuevo(s) commit(s) de upstream[/]")
 
+    # Generate LLM summary (mandatory for upstream updates)
+    model_info = get_default_model_from_config()
+    if not model_info:
+        console.print("[red]✗ Cancelando build: no se encontró modelo por defecto en la config.[/]")
+        return
+
+    console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
+    console.print("[dim]Generando resumen con LLM...[/]")
+    summary = summarize_with_llm(upstream_commits, model_info)
+    if not summary:
+        console.print("[red]✗ Cancelando build: no se pudo obtener resumen del LLM (obligatorio para actualizaciones de upstream).[/]")
+        return
+
+    # Display summary and ask for confirmation
+    console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
+    console.print(Panel(Markdown(summary), border_style="green"))
+
+    if not Confirm.ask("\n  ¿Confirmas que has leído los cambios y deseas continuar con el build?"):
+        console.print("[yellow]⚠ Build cancelado por el usuario.[/]")
+        return
+
+    # Proceed with full sync + build
     build_script = str(SCRIPT_DIR.parent / "build.sh")
     result = subprocess.run(["bash", build_script, "--sync-mode=full"])
     if result.returncode != 0:
         console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
     else:
         console.print("[green]✓ Build completado[/]")
+
+
+def action_sync_fork() -> None:
+    """Sync fork (origin) only + install deps + build."""
+    console.print("\n[bold]Sync de fork (origin) — sync + install + build...[/]")
+
+    build_script = str(SCRIPT_DIR.parent / "build.sh")
+    result = subprocess.run(["bash", build_script, "--sync-mode=fork"])
+    if result.returncode != 0:
+        console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
+    else:
+        console.print("[green]✓ Sync + build completado[/]")
 
 
 def action_view_config() -> None:
@@ -1061,6 +1085,7 @@ def main() -> None:
         "4": ("Ver Config", lambda: (show_config_menu(),)),
         "5": ("Seleccionar Modelo", action_select_model),
         "6": ("Build Completo", action_run_build),
+        "7": ("Sync de Fork", action_sync_fork),
         "0": ("Salir", lambda: None),
     }
 
@@ -1077,10 +1102,11 @@ def main() -> None:
         console.print("  [3] Sync de PATH       — Gestiona la entrada de PATH en el shell")
         console.print("  [4] Ver Config         — Visualiza y compara configs de modelos")
         console.print("  [5] Modelo por defecto — Selecciona el modelo por defecto")
-        console.print("  [6] Build Completo     — Sync fork + instalar deps + compilar")
+        console.print("  [6] Build Completo     — Sync fork + upstream + instalar deps + compilar")
+        console.print("  [7] Sync de Fork       — Sync fork (origin) + instalar deps + compilar")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7"], default="0")
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
@@ -1097,6 +1123,8 @@ def main() -> None:
             action_select_model()
         elif choice == "6":
             action_run_build()
+        elif choice == "7":
+            action_sync_fork()
 
 
 if __name__ == "__main__":
