@@ -12,6 +12,19 @@
     }
   },
   "mcp": {},
+  "agent": {
+    "explore": {
+      "permission": {
+        "azuredevops-mcp_*": "allow",
+        "list_mcp_resources": "allow",
+        "list_mcp_resource_templates": "allow",
+        "read_mcp_resource": "allow"
+      }
+    }
+  },
+  "plugin": [
+    ".opencode/plugins/compaction-todo.ts"
+  ],
   "tools": {
     "github-triage": false,
     "github-pr-search": false
