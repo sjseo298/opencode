@@ -1028,10 +1028,15 @@ def get_default_model_from_config() -> Optional[dict]:
     if not base_url:
         return None
 
+    model_data = provider_data.get("models", {}).get(model_id, {})
+    limits = model_data.get("limit", {})
+
     return {
         "provider": provider_name,
         "model_id": model_id,
         "base_url": base_url,
+        "context_limit": limits.get("context", 262144),
+        "output_limit": limits.get("output", 32768),
     }
 
 
@@ -1040,6 +1045,20 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
     import urllib.request
 
     url = f"{model_info['base_url']}/chat/completions"
+
+    # Estimate tokens: ~4 chars per token for mixed content
+    # Reserve tokens for system message + prompt overhead (~150 tokens)
+    context_limit = model_info.get("context_limit", 262144)
+    output_limit = model_info.get("output_limit", 32768)
+    reserved_tokens = 200
+    available_tokens = context_limit - reserved_tokens
+    max_log_chars = available_tokens * 4
+
+    truncated = False
+    if len(commit_log) > max_log_chars:
+        commit_log = commit_log[:max_log_chars]
+        truncated = True
+
     messages = [
         {
             "role": "system",
@@ -1047,7 +1066,7 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
         },
         {
             "role": "user",
-            "content": f"Analiza estos commits del repositorio y proporciona un resumen organizado por categorías:\n\n{commit_log}",
+            "content": f"Analiza estos commits del repositorio y proporciona un resumen organizado por categorías:\n\n{commit_log}" + ("\n\n[... commits truncados por límite de contexto ...]" if truncated else ""),
         },
     ]
 
@@ -1055,14 +1074,19 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
         "model": model_info["model_id"],
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": 4096,
+        "max_tokens": min(output_limit, 8192),
     }).encode("utf-8")
+
+    # Adaptive timeout: base 600s + 60s per 1000 chars of payload
+    payload_size = len(payload)
+    timeout = max(600, 600 + (payload_size // 1000) * 60)
 
     try:
         req = urllib.request.Request(url, data=payload, headers={
             "Content-Type": "application/json",
         })
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        console.print(f"[dim]Payload: {payload_size} bytes, Timeout: {timeout}s[/]")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode())
             choices = data.get("choices", [])
             if choices:
