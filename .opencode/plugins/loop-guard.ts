@@ -3,8 +3,9 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 type LoopGuardOptions = {
   mode?: "warn_only"
+  doom_loop_threshold?: number
+  warning_before_doom_loop?: number
   windowMs?: number
-  minRepeats?: number
   requireNoProgress?: boolean
   cooldownMs?: number
   maxSessionStates?: number
@@ -38,8 +39,9 @@ type SessionState = {
 
 const defaultOptions: Required<LoopGuardOptions> = {
   mode: "warn_only",
+  doom_loop_threshold: 3,
+  warning_before_doom_loop: 1,
   windowMs: 30_000,
-  minRepeats: 3,
   requireNoProgress: true,
   cooldownMs: 60_000,
   maxSessionStates: 200,
@@ -52,8 +54,12 @@ const guardText =
   "Loop guard detected: You are repeating the same tool call with equivalent arguments/results. Do not call that same tool with the same arguments again in this turn. Summarize what you learned, then choose a different action or ask for clarification."
 
 function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopGuardOptions> {
+  const doomLoopThreshold = readPositiveInt(options?.doom_loop_threshold, defaultOptions.doom_loop_threshold)
+  const warningBeforeDoomLoop = readNonNegativeInt(
+    options?.warning_before_doom_loop,
+    defaultOptions.warning_before_doom_loop,
+  )
   const windowMs = readPositiveInt(options?.windowMs, defaultOptions.windowMs)
-  const minRepeats = readPositiveInt(options?.minRepeats, defaultOptions.minRepeats)
   const cooldownMs = readNonNegativeInt(options?.cooldownMs, defaultOptions.cooldownMs)
   const maxSessionStates = readPositiveInt(options?.maxSessionStates, defaultOptions.maxSessionStates)
   const maxAttemptsPerSession = readPositiveInt(options?.maxAttemptsPerSession, defaultOptions.maxAttemptsPerSession)
@@ -69,8 +75,9 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
     : defaultOptions.volatileKeys
   return {
     mode,
+    doom_loop_threshold: doomLoopThreshold,
+    warning_before_doom_loop: warningBeforeDoomLoop,
     windowMs,
-    minRepeats,
     requireNoProgress,
     cooldownMs,
     maxSessionStates,
@@ -78,6 +85,11 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
     ignoreTools,
     volatileKeys,
   }
+}
+
+function warningThreshold(settings: Required<LoopGuardOptions>) {
+  if (settings.warning_before_doom_loop === 0) return undefined
+  return Math.max(1, settings.doom_loop_threshold - settings.warning_before_doom_loop)
 }
 
 function readPositiveInt(value: unknown, fallback: number) {
@@ -225,7 +237,9 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
       if (now < state.cooldownUntil) return
 
       const tail = repeatedTail(state.attempts, signature)
-      if (tail.length < settings.minRepeats) return
+      const threshold = warningThreshold(settings)
+      if (threshold === undefined) return
+      if (tail.length < threshold) return
       if (settings.requireNoProgress && !hasNoProgress(tail)) return
       if (settings.mode !== "warn_only") return
 

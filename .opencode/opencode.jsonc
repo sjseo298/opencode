@@ -12,6 +12,9 @@
     }
   },
   "mcp": {},
+  "experimental": {
+    "doom_loop_threshold": 4
+  },
   "agent": {
     "explore": {
       "permission": {
@@ -28,8 +31,9 @@
       ".opencode/plugins/loop-guard.ts",
       {
         "mode": "warn_only",
+        "doom_loop_threshold": 4,
+        "warning_before_doom_loop": 1,
         "windowMs": 30000,
-        "minRepeats": 3,
         "requireNoProgress": true,
         "cooldownMs": 60000,
         "maxSessionStates": 200,
@@ -47,7 +51,8 @@
           "updatedAt"
         ]
       }
-    ]
+    ],
+    ".opencode/plugins/subagent-mandatory-instruction.ts"
   ],
   "tools": {
     "github-triage": false,

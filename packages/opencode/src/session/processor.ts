@@ -26,7 +26,6 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
 
-const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
 
 export interface Handle {
@@ -100,6 +99,7 @@ const layer = Layer.effect(
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
       const initialSnapshot = yield* snapshot.track()
+      const doomLoopThreshold = (yield* config.get()).experimental?.doom_loop_threshold ?? 3
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -353,10 +353,10 @@ const layer = Layer.effect(
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),
             )
-            const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
+            const recentParts = parts.slice(-doomLoopThreshold)
 
             if (
-              recentParts.length !== DOOM_LOOP_THRESHOLD ||
+              recentParts.length !== doomLoopThreshold ||
               !recentParts.every(
                 (part) =>
                   part.type === "tool" &&
