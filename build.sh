@@ -207,6 +207,65 @@ clean_turbo() {
   echo "✅ Turbo cache cleaned."
 }
 
+# ── typecheck report ──────────────────────────────────────────────
+typecheck_report() {
+  echo "🔍  Running typecheck..."
+  cd "$REPO_ROOT"
+  local TYPECHECK_OUTPUT
+  TYPECHECK_OUTPUT=$(bun typecheck 2>&1) || true
+  local TYPECHECK_EXIT=$?
+
+  if [ $TYPECHECK_EXIT -ne 0 ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  Typecheck errors found — review before pushing"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$TYPECHECK_OUTPUT"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  else
+    echo "✅ Typecheck passed."
+  fi
+}
+
+# ── test local plugins ────────────────────────────────────────────
+# Runs tests for custom plugins in .opencode/plugins/__tests__/
+# Does NOT block the build if tests fail — just reports status.
+test_plugins() {
+  local plugins_test_dir="$REPO_ROOT/.opencode/plugins/__tests__"
+  
+  if [[ ! -d "$plugins_test_dir" ]]; then
+    echo "⏭️  No plugin tests found (skipping)"
+    return 0
+  fi
+
+  echo "🧪  Running plugin tests..."
+  cd "$plugins_test_dir"
+  
+  local TEST_OUTPUT
+  local TEST_EXIT
+  TEST_OUTPUT=$(bun test --timeout 30000 2>&1) || true
+  TEST_EXIT=$?
+
+  echo ""
+  if [ $TEST_EXIT -eq 0 ]; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✅ Plugin tests passed"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$TEST_OUTPUT" | tail -5
+  else
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  Plugin tests FAILED — review before pushing"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$TEST_OUTPUT"
+  fi
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  
+  cd "$REPO_ROOT"
+  return 0  # Never fail the build
+}
+
 # ── build ─────────────────────────────────────────────────────────
 build() {
   echo "🔨  Building opencode (single target)..."
@@ -234,6 +293,8 @@ if [[ "$skip_sync" == true ]]; then
   fi
   clean_turbo
   build
+  test_plugins
+  typecheck_report
   configure_path
 else
   if [[ -z "$SYNC_MODE" ]]; then
@@ -255,6 +316,8 @@ else
   install_deps
   clean_turbo
   build
+  test_plugins
+  typecheck_report
   configure_path
   ensure_scripts_executable
 
