@@ -23,7 +23,31 @@
     }
   },
   "plugin": [
-    ".opencode/plugins/compaction-todo.ts"
+    ".opencode/plugins/compaction-todo.ts",
+    [
+      ".opencode/plugins/loop-guard.ts",
+      {
+        "mode": "warn_only",
+        "windowMs": 30000,
+        "minRepeats": 3,
+        "requireNoProgress": true,
+        "cooldownMs": 60000,
+        "maxSessionStates": 200,
+        "maxAttemptsPerSession": 60,
+        "ignoreTools": [
+          "todowrite"
+        ],
+        "volatileKeys": [
+          "timestamp",
+          "time",
+          "nonce",
+          "requestId",
+          "requestID",
+          "createdAt",
+          "updatedAt"
+        ]
+      }
+    ]
   ],
   "tools": {
     "github-triage": false,
