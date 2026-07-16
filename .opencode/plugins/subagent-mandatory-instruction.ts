@@ -228,7 +228,13 @@ const SubagentMandatoryInstructionPlugin: Plugin = async ({ client }, options?: 
       if (!(await isSubagentSession(input.sessionID))) return
       // Avoid duplicate injection
       if (output.system.some((item) => item.includes("SUBAGENT EXECUTION PROTOCOL"))) return
-      output.system.push(subagentProtocol)
+      // Prepend to first system message to maintain single system message
+      // (required for models with strict Jinja templates like LlamaCPP)
+      if (output.system.length > 0) {
+        output.system[0] = subagentProtocol + "\n\n" + output.system[0]
+      } else {
+        output.system.push(subagentProtocol)
+      }
     },
   }
 }

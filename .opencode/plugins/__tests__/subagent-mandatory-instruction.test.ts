@@ -74,7 +74,7 @@ describe("subagent-mandatory-instruction plugin", () => {
   })
 
   describe("experimental.chat.system.transform hook", () => {
-    test("injects protocol for subagent sessions", async () => {
+    test("injects protocol for subagent sessions (empty system)", async () => {
       const hooks = await createHooks({
         "child-session": { parentID: "parent-session" },
         "parent-session": {},
@@ -90,6 +90,23 @@ describe("subagent-mandatory-instruction plugin", () => {
       expect(output.system[0]).toContain("### OBJECTIVE")
       expect(output.system[0]).toContain("### OUTPUT")
       expect(output.system[0]).toContain("<execution_blocked>")
+    })
+
+    test("prepends protocol to existing system message", async () => {
+      const hooks = await createHooks({
+        "child-session": { parentID: "parent-session" },
+      })
+
+      const output = { system: ["You are a helpful assistant."] }
+
+      await hooks["experimental.chat.system.transform"]({ sessionID: "child-session" }, output)
+
+      // Should still be 1 message (prepended, not pushed)
+      expect(output.system.length).toBe(1)
+      // Protocol should be at the beginning
+      expect(output.system[0]).toMatch(/^# SUBAGENT EXECUTION PROTOCOL/)
+      // Original content should be at the end
+      expect(output.system[0]).toContain("You are a helpful assistant.")
     })
 
     test("does NOT inject for parent sessions (no parentID)", async () => {
@@ -183,6 +200,23 @@ describe("subagent-mandatory-instruction plugin", () => {
 
       expect(output.system[0]).toBe("CUSTOM PROTOCOL FOR SUBAGENT")
       expect(output.system[0]).not.toContain("SUBAGENT EXECUTION PROTOCOL")
+    })
+
+    test("allows custom subagentProtocol with existing system", async () => {
+      const hooks = await createHooks(
+        {
+          "child-session": { parentID: "parent" },
+        },
+        {
+          subagentProtocol: "CUSTOM PROTOCOL",
+        },
+      )
+
+      const output = { system: ["Original system prompt"] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "child-session" }, output)
+
+      expect(output.system.length).toBe(1)
+      expect(output.system[0]).toBe("CUSTOM PROTOCOL\n\nOriginal system prompt")
     })
 
     test("uses default when custom option is empty string", async () => {
