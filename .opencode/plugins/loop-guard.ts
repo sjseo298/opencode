@@ -6,7 +6,10 @@ type LoopGuardOptions = {
   doom_loop_threshold?: number
   warning_before_doom_loop?: number
   windowMs?: number
+  /** @deprecated Use ignoreResults: true instead. When true, requires identical results to detect loop. */
   requireNoProgress?: boolean
+  /** When true, detect loops based only on identical arguments, ignoring results. */
+  ignoreResults?: boolean
   cooldownMs?: number
   maxSessionStates?: number
   maxAttemptsPerSession?: number
@@ -42,7 +45,8 @@ const defaultOptions: Required<LoopGuardOptions> = {
   doom_loop_threshold: 3,
   warning_before_doom_loop: 1,
   windowMs: 30_000,
-  requireNoProgress: true,
+  requireNoProgress: false,
+  ignoreResults: true,
   cooldownMs: 60_000,
   maxSessionStates: 200,
   maxAttemptsPerSession: 60,
@@ -67,6 +71,9 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
   const requireNoProgress = typeof options?.requireNoProgress === "boolean"
     ? options.requireNoProgress
     : defaultOptions.requireNoProgress
+  const ignoreResults = typeof options?.ignoreResults === "boolean"
+    ? options.ignoreResults
+    : defaultOptions.ignoreResults
   const ignoreTools = Array.isArray(options?.ignoreTools)
     ? options.ignoreTools.filter((item): item is string => typeof item === "string")
     : defaultOptions.ignoreTools
@@ -79,6 +86,7 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
     warning_before_doom_loop: warningBeforeDoomLoop,
     windowMs,
     requireNoProgress,
+    ignoreResults,
     cooldownMs,
     maxSessionStates,
     maxAttemptsPerSession,
@@ -240,7 +248,9 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
       const threshold = warningThreshold(settings)
       if (threshold === undefined) return
       if (tail.length < threshold) return
-      if (settings.requireNoProgress && !hasNoProgress(tail)) return
+      // ignoreResults: true means we only check args match, ignore result differences
+      // requireNoProgress: true (legacy) means we require identical results to detect loop
+      if (!settings.ignoreResults && settings.requireNoProgress && !hasNoProgress(tail)) return
       if (settings.mode !== "warn_only") return
 
       state.pendingGuard = {

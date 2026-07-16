@@ -34,7 +34,7 @@
         "doom_loop_threshold": 4,
         "warning_before_doom_loop": 1,
         "windowMs": 30000,
-        "requireNoProgress": true,
+        "ignoreResults": true,
         "cooldownMs": 60000,
         "maxSessionStates": 200,
         "maxAttemptsPerSession": 60,
