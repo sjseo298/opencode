@@ -174,6 +174,30 @@ const layer = Layer.effect(
           if (init._tag === "Some") hooks.push(init.value)
         }
 
+        // ── FORK: Load embedded plugins ─────────────────────────────────────
+        // Custom plugins bundled into the binary at build time.
+        // Loaded after internal plugins, before external plugins.
+        // Configuration: use "embedded:plugin-name" in the plugin array.
+        //
+        // MERGE INSTRUCTIONS FOR LLM:
+        // - This block should remain between internal plugins (above) and
+        //   external plugins loading (PluginLoader.loadExternal below).
+        // - Keep the import path as "./fork-embedded".
+        // - Keep the loadEmbedded(cfg, input) call signature.
+        // - If upstream changes variable names (cfg, input, hooks),
+        //   update them in this block to match.
+        yield* Effect.tryPromise({
+          try: async () => {
+            const mod = await import("./fork-embedded").catch(() => null)
+            if (!mod?.loadEmbedded) return
+            for (const hook of await mod.loadEmbedded(cfg, input)) {
+              hooks.push(hook)
+            }
+          },
+          catch: () => "embedded plugins skipped",
+        }).pipe(Effect.ignore)
+        // ── END FORK ────────────────────────────────────────────────────────
+
         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
         if (flags.pure && cfg.plugin_origins?.length) {
         }

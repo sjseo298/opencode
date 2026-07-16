@@ -50,6 +50,17 @@ const createEmbeddedWebUIBundle = async () => {
 
 const embeddedFileMap = skipEmbedWebUi ? null : await createEmbeddedWebUIBundle()
 
+// ── FORK: Embed custom plugins ──────────────────────────────────────────────
+// Generates a virtual module containing plugins from .opencode/plugins/
+// If no plugins exist or generation fails, this is silently skipped.
+// MERGE INSTRUCTIONS FOR LLM:
+// - Keep this block after embeddedFileMap and before allTargets
+// - The import path should be "./embed-plugins.ts"
+const embeddedPluginsMap = await import("./embed-plugins.ts")
+  .then((m) => m.generate())
+  .catch(() => null)
+// ── END FORK ────────────────────────────────────────────────────────────────
+
 const allTargets: {
   os: string
   arch: "arm64" | "x64"
@@ -184,8 +195,19 @@ for (const item of targets) {
       execArgv: [`--user-agent=opencode/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
-    files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
-    entrypoints: ["./src/index.ts", parserWorker, workerPath, ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : [])],
+    files: {
+      ...(embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {}),
+      // FORK: Embedded plugins
+      ...(embeddedPluginsMap ? { "embedded-plugins.gen.ts": embeddedPluginsMap } : {}),
+    },
+    entrypoints: [
+      "./src/index.ts",
+      parserWorker,
+      workerPath,
+      ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : []),
+      // FORK: Embedded plugins
+      ...(embeddedPluginsMap ? ["embedded-plugins.gen.ts"] : []),
+    ],
     define: {
       FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
       OPENCODE_VERSION: `'${Script.version}'`,

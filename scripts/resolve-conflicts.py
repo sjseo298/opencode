@@ -141,7 +141,18 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
                 "4. Si el conflicto tiene dos opciones claras (ours y theirs), elige la mejor opción\n"
                 "   o combina ambas según el contexto.\n"
                 "5. Si no puedes resolver el conflicto, responde con: <UNRESOLVABLE>\n"
-                "6. Responde en español."
+                "6. Responde en español.\n\n"
+                "BLOQUES FORK:\n"
+                "Este repositorio tiene bloques de código específicos del fork marcados con:\n"
+                "  // ── FORK: [nombre] ──\n"
+                "  [código]\n"
+                "  // ── END FORK ──\n\n"
+                "Cuando resuelvas conflictos:\n"
+                "1. SIEMPRE preserva estos bloques FORK intactos.\n"
+                "2. Sigue las instrucciones MERGE INSTRUCTIONS en los comentarios del bloque.\n"
+                "3. Si upstream cambió nombres de variables (ej: cfg -> config), actualiza\n"
+                "   el bloque FORK para usar los nuevos nombres.\n"
+                "4. Mantén el bloque en la misma posición lógica relativa al código circundante."
             ),
         },
         {
