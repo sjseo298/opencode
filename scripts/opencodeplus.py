@@ -748,42 +748,55 @@ def action_select_model() -> None:
 
     num_pages = (len(all_models) + page_size - 1) // page_size
 
-    table = Table(show_header=True, header_style="bold cyan", expand=True)
-    table.add_column("#", style="bold cyan", justify="right")
-    table.add_column("Proveedor", style="cyan")
-    table.add_column("Modelo", style="white")
-    table.add_column("Autor", style="dim")
-    table.add_column("Contexto", justify="right")
-    table.add_column("Output", justify="right")
-    table.add_column("Herramientas")
-    table.add_column("Adjuntos")
-    table.add_column("Razonamiento")
-    table.add_column("Modalidades")
-
     def render_page(page: int) -> None:
         start = page * page_size
         end = min(start + page_size, len(all_models))
         page_num = page + 1
+        compact = console.width < 140
 
         console.print(f"[bold]Modelos Disponibles (página {page_num} / {num_pages})[/]")
         console.print(f"  [dim]── {end - start} de {len(all_models)} modelos mostrados ──[/dim]")
         console.print()
 
+        table = Table(show_header=True, header_style="bold cyan", expand=True)
+        table.add_column("#", style="bold cyan", justify="right", width=4)
+        table.add_column("Proveedor", style="cyan", max_width=18, overflow="ellipsis")
+        table.add_column("Modelo", style="white", min_width=30, overflow="fold")
+        if compact:
+            table.add_column("Ctx", justify="right", width=9)
+            table.add_column("Out", justify="right", width=9)
+        else:
+            table.add_column("Autor", style="dim", max_width=20, overflow="ellipsis")
+            table.add_column("Contexto", justify="right", width=10)
+            table.add_column("Output", justify="right", width=10)
+            table.add_column("Herramientas", width=12)
+            table.add_column("Adjuntos", width=9)
+            table.add_column("Razonamiento", width=12)
+            table.add_column("Modalidades", max_width=16, overflow="ellipsis")
+
         table.title = f"Modelos Disponibles (página {page_num} / {num_pages})"
-        table.rows.clear()
-        for idx, m in enumerate(all_models, start + 1):
-            table.add_row(
-                str(idx),
-                m["provider"],
-                m["id"],
-                m["author"],
-                fmt_number(m["ctx"]) if m["ctx"] else "—",
-                fmt_number(m["output"]) if m["output"] else "—",
-                "✓" if m["tool_call"] else "",
-                "✓" if m["attachment"] else "",
-                "✓" if m["reasoning"] else "",
-                m["modalities"],
-            )
+        for idx, m in enumerate(all_models[start:end], start + 1):
+            if compact:
+                table.add_row(
+                    str(idx),
+                    m["provider"],
+                    m["id"],
+                    fmt_number(m["ctx"]) if m["ctx"] else "—",
+                    fmt_number(m["output"]) if m["output"] else "—",
+                )
+            else:
+                table.add_row(
+                    str(idx),
+                    m["provider"],
+                    m["id"],
+                    m["author"],
+                    fmt_number(m["ctx"]) if m["ctx"] else "—",
+                    fmt_number(m["output"]) if m["output"] else "—",
+                    "✓" if m["tool_call"] else "",
+                    "✓" if m["attachment"] else "",
+                    "✓" if m["reasoning"] else "",
+                    m["modalities"],
+                )
         console.print(table)
 
         nav_parts: list[str] = []
