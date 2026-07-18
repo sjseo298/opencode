@@ -15,6 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 # ── rich import ──────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ GENERATED_CONFIG = CONFIG_DIR / "opencode.jsonc"
 USER_CONFIG = Path.home() / ".config" / "opencode" / "opencode.jsonc"
 
 DEFAULT_OUTPUT_LIMIT = 32768
+DEFAULT_MLX_SCAN_ROOTS = ["/Volumes/Samsung2T/lmstudio"]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -97,9 +99,184 @@ def extract_author_from_path(preset: str) -> str:
     return ""
 
 
+def infer_author_from_model_id(model_id: str) -> str:
+    """Infer author/org from model id or absolute model path."""
+    if not model_id:
+        return ""
+    if model_id.startswith("/"):
+        parts = [p for p in model_id.split("/") if p]
+        try:
+            idx = parts.index("lmstudio")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+        except ValueError:
+            return parts[-2] if len(parts) >= 2 else ""
+        return ""
+    if "/" in model_id:
+        return model_id.split("/", 1)[0]
+    return ""
+
+
 def fmt_number(n: int) -> str:
     """Format number with thousands separators."""
     return f"{n:,}"
+
+
+def derive_base_url(models_url: str) -> str:
+    """Return scheme://host[:port] from a models endpoint URL."""
+    p = urlsplit(models_url)
+    if not p.scheme or not p.netloc:
+        return ""
+    return f"{p.scheme}://{p.netloc}"
+
+
+def get_mlx_scan_roots() -> list[Path]:
+    """Return scan roots for MLX models (env overrides default)."""
+    raw = os.environ.get("OPENCODEPLUS_MLX_ROOTS", "")
+    roots: list[Path] = []
+    if raw.strip():
+        for part in raw.split(":"):
+            part = part.strip()
+            if not part:
+                continue
+            roots.append(Path(part).expanduser())
+    else:
+        roots = [Path(p) for p in DEFAULT_MLX_SCAN_ROOTS]
+    return roots
+
+
+def is_mlx_model_dir(model_dir: Path) -> bool:
+    """Heuristic for MLX model directories."""
+    if not model_dir.exists() or not model_dir.is_dir():
+        return False
+    cfg = model_dir / "config.json"
+    if not cfg.exists():
+        return False
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and ("model_type" in data or "text_config" in data)
+
+
+def is_probable_mlx_id(model_id: str) -> bool:
+    """Heuristic to keep only MLX model ids when merging local inventory."""
+    s = (model_id or "").lower()
+    if not s:
+        return False
+    if s.endswith(".gguf"):
+        return False
+    if "-mlx-" in s or s.endswith("-mlx"):
+        return True
+    if "/mlx-" in s or s.startswith("mlx-community/"):
+        return True
+    # Local absolute path to an MLX directory also counts
+    if model_id.startswith("/"):
+        p = Path(model_id)
+        return is_mlx_model_dir(p)
+    return False
+
+
+def resolve_mlx_model_dir_from_id(model_id: str) -> Optional[Path]:
+    """Resolve model id/path to a local MLX model directory when possible."""
+    if not model_id:
+        return None
+    p = Path(model_id)
+    if p.is_absolute() and is_mlx_model_dir(p):
+        return p
+    for root in get_mlx_scan_roots():
+        cand = (root / model_id).resolve()
+        if is_mlx_model_dir(cand):
+            return cand
+    return None
+
+
+def scan_local_mlx_model_ids() -> list[str]:
+    """Scan local roots and return MLX model ids relative to roots."""
+    ids: list[str] = []
+    for root in get_mlx_scan_roots():
+        if not root.exists() or not root.is_dir():
+            continue
+        for cfg in root.rglob("config.json"):
+            model_dir = cfg.parent
+            if not is_mlx_model_dir(model_dir):
+                continue
+            try:
+                rel = model_dir.relative_to(root)
+                model_id = rel.as_posix()
+            except ValueError:
+                model_id = str(model_dir)
+            if model_id not in ids:
+                ids.append(model_id)
+    return ids
+
+
+def get_llamacpp_runtime_defaults() -> dict:
+    """Best-effort runtime defaults from llama-compatible status endpoint."""
+    base = derive_base_url(LLAMACPP_URL)
+    if not base:
+        return {}
+    status = fetch_json(f"{base}/status")
+    if not status:
+        p = urlsplit(base)
+        if p.scheme and p.hostname:
+            alt = f"{p.scheme}://{p.hostname}:9988/status"
+            status = fetch_json(alt)
+    status = status or {}
+    out: dict = {}
+    try:
+        max_tokens = int((status.get("sampling") or {}).get("max_tokens") or 0)
+    except (TypeError, ValueError):
+        max_tokens = 0
+    if max_tokens > 0:
+        out["max_tokens"] = max_tokens
+    display_name = ((status.get("model") or {}).get("display_name") or "").strip()
+    if display_name:
+        out["active_model_display_name"] = display_name
+        out["runtime_mode"] = "mlx" if resolve_mlx_model_dir_from_id(display_name) else "gguf"
+    return out
+
+
+def infer_context_from_model_path(model_id: str) -> int:
+    """Read context length from local MLX model config if model_id is a local path."""
+    model_dir = resolve_mlx_model_dir_from_id(model_id)
+    if not model_dir:
+        return 0
+    for name in ("config.json", "params.json"):
+        cfg = model_dir / name
+        if not cfg.exists():
+            continue
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for key in (
+            "max_position_embeddings",
+            "n_ctx",
+            "max_sequence_length",
+            "context_length",
+            "model_max_length",
+        ):
+            raw = data.get(key)
+            if isinstance(raw, int) and raw > 0:
+                return raw
+            if isinstance(raw, str) and raw.isdigit():
+                return int(raw)
+        text_cfg = data.get("text_config")
+        if isinstance(text_cfg, dict):
+            for key in (
+                "max_position_embeddings",
+                "n_ctx",
+                "max_sequence_length",
+                "context_length",
+                "model_max_length",
+            ):
+                raw = text_cfg.get(key)
+                if isinstance(raw, int) and raw > 0:
+                    return raw
+                if isinstance(raw, str) and raw.isdigit():
+                    return int(raw)
+    return 0
 
 
 # ── model extraction ─────────────────────────────────────────────────────────
@@ -107,6 +284,8 @@ def fmt_number(n: int) -> str:
 def extract_llamacpp_models(data: dict) -> dict:
     """Extract models from LlamaCPP API response."""
     models: dict = {}
+    runtime = get_llamacpp_runtime_defaults()
+    runtime_ctx = int(runtime.get("max_tokens", 0) or 0)
     for item in data.get("data", []):
         model_id = item.get("id", "")
         if not model_id:
@@ -114,9 +293,13 @@ def extract_llamacpp_models(data: dict) -> dict:
 
         preset_text = item.get("status", {}).get("preset", "")
         preset = parse_llamacpp_preset(preset_text)
-        author = extract_author_from_path(preset_text)
+        author = extract_author_from_path(preset_text) or infer_author_from_model_id(model_id)
 
         ctx_size = int(preset.get("ctx-size", 0))
+        if ctx_size <= 0:
+            ctx_size = infer_context_from_model_path(model_id)
+        if ctx_size <= 0:
+            ctx_size = runtime_ctx
         has_reasoning = "reasoning-budget" in preset
         has_agent = preset.get("agent") == "1"
         has_flash_attn = preset.get("flash-attn") == "true"
@@ -126,7 +309,7 @@ def extract_llamacpp_models(data: dict) -> dict:
         has_vision = has_flash_attn or "clip-model" in preset or "mmproj" in preset or "mmvqa" in preset or "vlm" in preset
         has_audio_input = "audio-model" in preset or "audio-encoder" in preset or "whisper-model" in preset or "speech-to-text" in preset
         has_video_input = "video-model" in preset or "video-size" in preset
-        has_pdf_input = True  # LlamaCPP supports PDF attachments by default
+        has_pdf_input = True  # llama-compatible servers can accept PDFs in this project flow
 
         # Detect output modalities from preset fields
         has_audio_output = "audio-model" in preset or "audio-encoder" in preset or "whisper-model" in preset
@@ -165,7 +348,7 @@ def extract_llamacpp_models(data: dict) -> dict:
             "tool_call": True,
             "reasoning": has_reasoning,
             "temperature": True,
-            "attachment": has_vision,
+            "attachment": has_vision or has_pdf_input,
             "modalities": {
                 "input": input_modalities,
                 "output": output_modalities,
@@ -183,13 +366,80 @@ def extract_llamacpp_models(data: dict) -> dict:
             "api": "openai",
             "name": name,
             "options": {
-                "baseURL": "http://192.168.8.151:9999/v1",
+                "baseURL": f"{derive_base_url(LLAMACPP_URL)}/v1",
             },
             "models": {
                 model_id: model_config
             },
         }
     return models
+
+
+def add_local_mlx_models_if_needed(llamacpp_models: dict, runtime: dict) -> dict:
+    """In MLX runtime mode, merge local MLX inventory into model list."""
+    mode = (runtime.get("runtime_mode") or "").strip().lower()
+    if mode != "mlx":
+        # Fallback detection when /status is unavailable: if all API ids look MLX-ish,
+        # treat as MLX mode so local inventory can be merged.
+        ids = list(llamacpp_models.keys())
+        if not ids:
+            return llamacpp_models
+        if not all(not x.endswith(".gguf") for x in ids):
+            return llamacpp_models
+        if not any(is_probable_mlx_id(x) for x in ids):
+            return llamacpp_models
+
+    if mode != "mlx":
+        console.print("[dim]  LlamaCPP runtime detectado como MLX por heurística de ids[/]")
+
+    if mode == "gguf":
+        return llamacpp_models
+
+    runtime_ctx = int(runtime.get("max_tokens", 0) or 0)
+    base_url = f"{derive_base_url(LLAMACPP_URL)}/v1"
+    local_ids = scan_local_mlx_model_ids()
+    added = 0
+    for model_id in local_ids:
+        if not is_probable_mlx_id(model_id):
+            continue
+        if model_id in llamacpp_models:
+            continue
+        author = infer_author_from_model_id(model_id)
+        ctx_size = infer_context_from_model_path(model_id)
+        if ctx_size <= 0:
+            ctx_size = runtime_ctx if runtime_ctx > 0 else DEFAULT_OUTPUT_LIMIT
+        name = f"LlamaCPP - {model_id}"
+        if author:
+            name = f"LlamaCPP - {author}/{model_id.split('/')[-1]}"
+
+        model_config = {
+            "id": model_id,
+            "name": name,
+            "author": author,
+            "tool_call": True,
+            "reasoning": False,
+            "temperature": True,
+            "attachment": True,
+            "modalities": {
+                "input": ["text", "pdf"],
+                "output": ["text"],
+            },
+            "limit": {
+                "context": ctx_size,
+                "output": DEFAULT_OUTPUT_LIMIT,
+            },
+        }
+        llamacpp_models[model_id] = {
+            "api": "openai",
+            "name": name,
+            "options": {"baseURL": base_url},
+            "models": {model_id: model_config},
+        }
+        added += 1
+
+    if added > 0:
+        console.print(f"[green]  LlamaCPP+MLX local: +{added} modelos (scan local)[/]")
+    return llamacpp_models
 
 
 def extract_lmstudio_models(data: dict) -> dict:
@@ -529,6 +779,13 @@ def action_sync_model(server: str, url: str, extractor) -> None:
         return
 
     models = extractor(data)
+    # En modo MLX compat, la lista completa puede requerir merge con inventario local.
+    # Si mostramos la tabla antes del merge, el usuario ve solo los modelos reportados
+    # por /v1/models (incompleto para MLX). Reutilizamos el mismo pipeline de sync.
+    if server == "llamacpp":
+        merged = extract_models_from_servers("llamacpp").get("llamacpp", {})
+        if merged:
+            models = merged
     if not models:
         console.print("[yellow]⚠ No se encontraron modelos[/]")
         return
@@ -537,7 +794,11 @@ def action_sync_model(server: str, url: str, extractor) -> None:
     display_model_table(models, server)
 
     # Generate and compare config
-    all_models = extract_models_from_servers(server)
+    all_models = {server: models}
+    if server == "llamacpp":
+        all_models = {"llamacpp": models, "lmstudio": {}}
+    elif server == "lmstudio":
+        all_models = {"llamacpp": {}, "lmstudio": models}
     new_config = generate_config(
         all_models.get("llamacpp", {}),
         all_models.get("lmstudio", {}),
@@ -564,7 +825,9 @@ def extract_models_from_servers(server: str) -> dict:
     if server in ("llamacpp", "both"):
         data = fetch_json(LLAMACPP_URL)
         if data:
+            runtime = get_llamacpp_runtime_defaults()
             llamacpp = extract_llamacpp_models(data)
+            llamacpp = add_local_mlx_models_if_needed(llamacpp, runtime)
             console.print(f"[green]  LlamaCPP: {len(llamacpp)} modelos[/]")
 
     if server in ("lmstudio", "both"):
