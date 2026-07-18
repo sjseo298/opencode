@@ -27,6 +27,12 @@ type Attempt = PendingCall & {
   outcomeHash: string
 }
 
+type TurnCall = {
+  ts: number
+  signature: string
+  outcomeHash: string
+}
+
 type Guard = {
   text: string
   expiresAt: number
@@ -35,6 +41,7 @@ type Guard = {
 type SessionState = {
   pending: Map<string, PendingCall>
   attempts: Attempt[]
+  turnCalls: TurnCall[]
   cooldownUntil: number
   pendingGuard?: Guard
   lastTouched: number
@@ -176,23 +183,63 @@ function hasNoProgress(attempts: Attempt[]) {
   return attempts.every((attempt) => attempt.outcomeHash === first)
 }
 
+function buildVirtualSignature(calls: TurnCall[]) {
+  const signatures = calls.map((call) => call.signature).toSorted((a, b) => a.localeCompare(b))
+  return `virtual:${hash(signatures)}`
+}
+
+function buildVirtualOutcomeHash(calls: TurnCall[]) {
+  const outcomes = calls.map((call) => call.outcomeHash).toSorted((a, b) => a.localeCompare(b))
+  return hash(outcomes)
+}
+
+function finalizeTurn(state: SessionState, now: number, settings: Required<LoopGuardOptions>) {
+  if (!state.turnCalls.length) return
+  const ts = state.turnCalls.reduce((min, call) => Math.min(min, call.ts), now)
+  const signature = buildVirtualSignature(state.turnCalls)
+  const outcomeHash = buildVirtualOutcomeHash(state.turnCalls)
+  state.turnCalls = []
+  state.attempts.push({
+    ts,
+    tool: "virtual",
+    signature,
+    outcomeHash,
+  })
+  pruneSession(state, now, settings)
+  if (now < state.cooldownUntil) return
+
+  const tail = repeatedTail(state.attempts, signature)
+  const threshold = warningThreshold(settings)
+  if (threshold === undefined) return
+  if (tail.length < threshold) return
+  if (!settings.ignoreResults && settings.requireNoProgress && !hasNoProgress(tail)) return
+  if (settings.mode !== "warn_only") return
+
+  state.pendingGuard = {
+    text: guardText,
+    expiresAt: now + settings.windowMs,
+  }
+  state.cooldownUntil = now + settings.cooldownMs
+}
+
 const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
   const settings = normalizeOptions(options as LoopGuardOptions | undefined)
   const volatileKeys = new Set(settings.volatileKeys)
   const states = new Map<string, SessionState>()
 
-  const ensureState = (sessionID: string): SessionState => {
+    const ensureState = (sessionID: string): SessionState => {
     const existing = states.get(sessionID)
     if (existing) {
       existing.lastTouched = Date.now()
       return existing
     }
-    const next: SessionState = {
-      pending: new Map(),
-      attempts: [],
-      cooldownUntil: 0,
-      lastTouched: Date.now(),
-    }
+      const next: SessionState = {
+        pending: new Map(),
+        attempts: [],
+        turnCalls: [],
+        cooldownUntil: 0,
+        lastTouched: Date.now(),
+      }
     states.set(sessionID, next)
     if (states.size <= settings.maxSessionStates) return next
     const oldest = Array.from(states.entries()).toSorted((a, b) => a[1].lastTouched - b[1].lastTouched)[0]
@@ -208,6 +255,7 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
       state.pendingGuard = undefined
       state.cooldownUntil = 0
       state.attempts = []
+      state.turnCalls = []
       state.pending.clear()
       state.lastTouched = Date.now()
     },
@@ -235,35 +283,21 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
       const ts = pending?.ts ?? now
       state.pending.delete(input.callID)
       const outcomeHash = buildOutcomeHash(output, volatileKeys)
-      state.attempts.push({
+      state.turnCalls.push({
         ts,
-        tool: input.tool,
         signature,
         outcomeHash,
       })
-      pruneSession(state, now, settings)
-      if (now < state.cooldownUntil) return
-
-      const tail = repeatedTail(state.attempts, signature)
-      const threshold = warningThreshold(settings)
-      if (threshold === undefined) return
-      if (tail.length < threshold) return
-      // ignoreResults: true means we only check args match, ignore result differences
-      // requireNoProgress: true (legacy) means we require identical results to detect loop
-      if (!settings.ignoreResults && settings.requireNoProgress && !hasNoProgress(tail)) return
-      if (settings.mode !== "warn_only") return
-
-      state.pendingGuard = {
-        text: guardText,
-        expiresAt: now + settings.windowMs,
-      }
-      state.cooldownUntil = now + settings.cooldownMs
+      state.lastTouched = now
     },
     "experimental.chat.system.transform": async (input, output) => {
       const sessionID = input.sessionID
       if (!sessionID) return
       const state = states.get(sessionID)
-      if (!state?.pendingGuard) return
+      if (!state) return
+      const now = Date.now()
+      finalizeTurn(state, now, settings)
+      if (!state.pendingGuard) return
       if (state.pendingGuard.expiresAt <= Date.now()) {
         state.pendingGuard = undefined
         return
