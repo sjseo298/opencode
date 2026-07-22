@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from "solid-js"
+import { createEffect, createMemo, createSignal } from "solid-js"
 import { useLocal } from "../context/local"
 import { map, pipe, flatMap, entries, filter, sortBy, take } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
@@ -14,6 +14,21 @@ export function DialogModel(props: { providerID?: string }) {
   const sync = useSync()
   const dialog = useDialog()
   const [query, setQuery] = createSignal("")
+
+  // ── FORK: model-dialog-width ──
+  // MERGE INSTRUCTIONS:
+  // - Keep this block in fork builds.
+  // - If upstream refactors the dialog layout, adapt this block to the new API.
+  // - If conflict resolution needs it, this block may be removed temporarily and
+  //   restored after reconciling upstream changes.
+  const MODEL_DIALOG_TITLE_WIDTH = 122
+  // ── END FORK ──
+
+  createEffect(() => {
+    // ── FORK: model-dialog-width ──
+    dialog.setSize("xlarge")
+    // ── END FORK ──
+  })
 
   const connected = useConnected()
   const providers = createDialogProviderOptions()
@@ -38,6 +53,9 @@ export function DialogModel(props: { providerID?: string }) {
             key: item,
             value: { providerID: provider.id, modelID: model.id },
             title: model.name ?? item.modelID,
+            // ── FORK: model-dialog-width ──
+            titleWidth: MODEL_DIALOG_TITLE_WIDTH,
+            // ── END FORK ──
             description: provider.name,
             category,
             disabled: provider.id === "opencode" && model.id.includes("-nano"),
@@ -73,6 +91,9 @@ export function DialogModel(props: { providerID?: string }) {
           map(([model, info]) => ({
             value: { providerID: provider.id, modelID: model },
             title: info.name ?? model,
+            // ── FORK: model-dialog-width ──
+            titleWidth: MODEL_DIALOG_TITLE_WIDTH,
+            // ── END FORK ──
             releaseDate: info.release_date,
             description: favorites.some((item) => item.providerID === provider.id && item.modelID === model)
               ? "(Favorite)"
