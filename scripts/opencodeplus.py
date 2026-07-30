@@ -44,8 +44,8 @@ console = Console()
 
 # ── constants ────────────────────────────────────────────────────────────────
 
-LLAMACPP_URL = "http://192.168.8.151:9999/v1/models"
-LM_STUDIO_URL = "http://192.168.8.151:1234/api/v1/models"
+LLAMACPP_URL = "http://192.168.1.65:9999/v1/models"
+LM_STUDIO_URL = "http://192.168.1.65:1234/api/v1/models"
 
 # SCRIPT_DIR defaults to the scripts directory of this module;
 # the wrapper overrides it when called from the opencodeplus script.
@@ -511,7 +511,7 @@ def extract_lmstudio_models(data: dict) -> dict:
             "api": "openai",
             "name": name,
             "options": {
-                "baseURL": "http://192.168.8.151:1234/v1",
+                "baseURL": "http://192.168.1.65:1234/v1",
             },
             "models": {
                 model_key: model_config
