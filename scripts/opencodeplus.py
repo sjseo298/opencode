@@ -293,9 +293,6 @@ def capability_prefix(
     has_vision: bool,
     has_tool_call: bool,
     has_reasoning: bool,
-    has_audio: bool,
-    has_pdf: bool,
-    has_video: bool,
 ) -> str:
     """Build compact capability prefix like [VTR]L:."""
     letters = ""
@@ -305,12 +302,6 @@ def capability_prefix(
         letters += "T"
     if has_reasoning:
         letters += "R"
-    if has_audio:
-        letters += "A"
-    if has_pdf:
-        letters += "P"
-    if has_video:
-        letters += "D"
     if not letters:
         letters = "-"
     return f"[{letters}]{provider_short}:"
@@ -403,9 +394,6 @@ def extract_llamacpp_models(data: dict) -> dict:
             has_vision=has_vision,
             has_tool_call=True,
             has_reasoning=has_reasoning,
-            has_audio=has_audio_input or has_audio_output,
-            has_pdf=has_pdf_input,
-            has_video=has_video_input or has_video_output,
         )
         name = f"{prefix} {display_name}"
 
@@ -485,9 +473,6 @@ def add_local_mlx_models_if_needed(llamacpp_models: dict, runtime: dict) -> dict
             has_vision=False,
             has_tool_call=True,
             has_reasoning=False,
-            has_audio=False,
-            has_pdf=True,
-            has_video=False,
         )
         name = f"{prefix} {display_name}"
 
@@ -578,9 +563,6 @@ def extract_lmstudio_models(data: dict) -> dict:
             has_vision=has_vision,
             has_tool_call=has_tool_use,
             has_reasoning=has_reasoning,
-            has_audio=has_audio_input or capabilities.get("audio-output", False),
-            has_pdf=True,
-            has_video=has_video_input,
         )
         name = f"{prefix} {display}"
 
