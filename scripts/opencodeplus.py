@@ -122,6 +122,15 @@ def fmt_number(n: int) -> str:
     return f"{n:,}"
 
 
+def parse_positive_int(value: object) -> int:
+    """Parse positive int from number/string-like values, else return 0."""
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
 def derive_base_url(models_url: str) -> str:
     """Return scheme://host[:port] from a models endpoint URL."""
     p = urlsplit(models_url)
@@ -323,11 +332,29 @@ def extract_llamacpp_models(data: dict) -> dict:
         preset = parse_llamacpp_preset(preset_text)
         author = extract_author_from_path(preset_text) or infer_author_from_model_id(model_id)
 
-        ctx_size = int(preset.get("ctx-size", 0))
+        # Prefer per-model limits reported by the endpoint.
+        ctx_size = (
+            parse_positive_int(item.get("max_context_length"))
+            or parse_positive_int(item.get("context_length"))
+            or parse_positive_int(item.get("input_token_limit"))
+        )
+        output_limit = (
+            parse_positive_int(item.get("output_token_limit"))
+            or parse_positive_int(item.get("max_output_tokens"))
+            or parse_positive_int(item.get("max_tokens"))
+        )
+
+        # Fallback to preset/local/runtime only when endpoint values are unavailable.
+        if ctx_size <= 0:
+            ctx_size = parse_positive_int(preset.get("ctx-size"))
         if ctx_size <= 0:
             ctx_size = infer_context_from_model_path(model_id)
         if ctx_size <= 0:
             ctx_size = runtime_ctx
+        if output_limit <= 0:
+            output_limit = parse_positive_int(preset.get("n-predict"))
+        if output_limit <= 0:
+            output_limit = DEFAULT_OUTPUT_LIMIT
         has_reasoning = "reasoning-budget" in preset
         has_agent = preset.get("agent") == "1"
         has_flash_attn = preset.get("flash-attn") == "true"
@@ -397,7 +424,7 @@ def extract_llamacpp_models(data: dict) -> dict:
             },
             "limit": {
                 "context": ctx_size if ctx_size > 0 else DEFAULT_OUTPUT_LIMIT,
-                "output": DEFAULT_OUTPUT_LIMIT,
+                "output": output_limit,
             },
         }
         # Only include interleaved if the model has reasoning capability
@@ -504,7 +531,17 @@ def extract_lmstudio_models(data: dict) -> dict:
 
         display_name = item.get("display_name", model_key)
         author = item.get("author", "")
-        ctx_length = item.get("max_context_length", 0)
+        ctx_length = (
+            parse_positive_int(item.get("max_context_length"))
+            or parse_positive_int(item.get("context_length"))
+            or parse_positive_int(item.get("input_token_limit"))
+        )
+        output_limit = (
+            parse_positive_int(item.get("output_token_limit"))
+            or parse_positive_int(item.get("max_output_tokens"))
+            or parse_positive_int(item.get("max_tokens"))
+            or DEFAULT_OUTPUT_LIMIT
+        )
         capabilities = item.get("capabilities", {})
         has_vision = capabilities.get("vision", False)
         has_tool_use = capabilities.get("trained_for_tool_use", False)
@@ -562,7 +599,7 @@ def extract_lmstudio_models(data: dict) -> dict:
             },
             "limit": {
                 "context": ctx_length if ctx_length > 0 else DEFAULT_OUTPUT_LIMIT,
-                "output": DEFAULT_OUTPUT_LIMIT,
+                "output": output_limit,
             },
         }
         # Only include interleaved if the model has reasoning capability
