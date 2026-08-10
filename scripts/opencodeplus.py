@@ -279,6 +279,34 @@ def infer_context_from_model_path(model_id: str) -> int:
     return 0
 
 
+def capability_prefix(
+    provider_short: str,
+    has_vision: bool,
+    has_tool_call: bool,
+    has_reasoning: bool,
+    has_audio: bool,
+    has_pdf: bool,
+    has_video: bool,
+) -> str:
+    """Build compact capability prefix like [VTR]L:."""
+    letters = ""
+    if has_vision:
+        letters += "V"
+    if has_tool_call:
+        letters += "T"
+    if has_reasoning:
+        letters += "R"
+    if has_audio:
+        letters += "A"
+    if has_pdf:
+        letters += "P"
+    if has_video:
+        letters += "D"
+    if not letters:
+        letters = "-"
+    return f"[{letters}]{provider_short}:"
+
+
 # ── model extraction ─────────────────────────────────────────────────────────
 
 def extract_llamacpp_models(data: dict) -> dict:
@@ -305,8 +333,13 @@ def extract_llamacpp_models(data: dict) -> dict:
         has_flash_attn = preset.get("flash-attn") == "true"
         has_kv_unified = preset.get("kv-unified") == "1"
 
-        # Detect input modalities from preset fields
-        has_vision = has_flash_attn or "clip-model" in preset or "mmproj" in preset or "mmvqa" in preset or "vlm" in preset
+        capabilities = item.get("capabilities", [])
+        caps = [str(cap).strip().lower() for cap in capabilities] if isinstance(capabilities, list) else []
+
+        # Respect capabilities reported by the server endpoint first.
+        has_vision = "vision" in caps
+        if not caps:
+            has_vision = "clip-model" in preset or "mmproj" in preset or "mmvqa" in preset or "vlm" in preset
         has_audio_input = "audio-model" in preset or "audio-encoder" in preset or "whisper-model" in preset or "speech-to-text" in preset
         has_video_input = "video-model" in preset or "video-size" in preset
         has_pdf_input = True  # llama-compatible servers can accept PDFs in this project flow
@@ -335,10 +368,19 @@ def extract_llamacpp_models(data: dict) -> dict:
         if has_video_output:
             output_modalities.append("video")
 
-        # Build name with author
-        name = f"LlamaCPP - {model_id}"
+        display_name = model_id
         if author:
-            name = f"LlamaCPP - {author}/{model_id.split('/')[-1]}"
+            display_name = f"{author}/{model_id.split('/')[-1]}"
+        prefix = capability_prefix(
+            "L",
+            has_vision=has_vision,
+            has_tool_call=True,
+            has_reasoning=has_reasoning,
+            has_audio=has_audio_input or has_audio_output,
+            has_pdf=has_pdf_input,
+            has_video=has_video_input or has_video_output,
+        )
+        name = f"{prefix} {display_name}"
 
         # Build model config dict
         model_config = {
@@ -408,9 +450,19 @@ def add_local_mlx_models_if_needed(llamacpp_models: dict, runtime: dict) -> dict
         ctx_size = infer_context_from_model_path(model_id)
         if ctx_size <= 0:
             ctx_size = runtime_ctx if runtime_ctx > 0 else DEFAULT_OUTPUT_LIMIT
-        name = f"LlamaCPP - {model_id}"
+        display_name = model_id
         if author:
-            name = f"LlamaCPP - {author}/{model_id.split('/')[-1]}"
+            display_name = f"{author}/{model_id.split('/')[-1]}"
+        prefix = capability_prefix(
+            "L",
+            has_vision=False,
+            has_tool_call=True,
+            has_reasoning=False,
+            has_audio=False,
+            has_pdf=True,
+            has_video=False,
+        )
+        name = f"{prefix} {display_name}"
 
         model_config = {
             "id": model_id,
@@ -478,12 +530,22 @@ def extract_lmstudio_models(data: dict) -> dict:
         if capabilities.get("audio-output", False):
             output_modalities.append("audio")
 
-        # Build name with author and quantization info
-        name = f"LM Studio - {display_name}"
+        # Build compact name with capability prefix
+        display = display_name
         if author:
-            name = f"LM Studio - {author}/{display_name}"
+            display = f"{author}/{display_name}"
         if quant_name:
-            name += f"@{quant_name}"
+            display += f"@{quant_name}"
+        prefix = capability_prefix(
+            "S",
+            has_vision=has_vision,
+            has_tool_call=has_tool_use,
+            has_reasoning=has_reasoning,
+            has_audio=has_audio_input or capabilities.get("audio-output", False),
+            has_pdf=True,
+            has_video=has_video_input,
+        )
+        name = f"{prefix} {display}"
 
         # Build model config dict
         model_config = {
@@ -749,7 +811,7 @@ def display_model_table(models: dict, server: str) -> None:
         modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
 
         table.add_row(
-            model_id,
+            inner.get("name", model_id),
             author,
             fmt_number(ctx) if ctx else "—",
             fmt_number(output) if output else "—",
@@ -919,7 +981,7 @@ def action_sync_models() -> None:
             modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
             table.add_row(
                 "LlamaCPP",
-                model_id,
+                inner.get("name", model_id),
                 author,
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
@@ -938,7 +1000,7 @@ def action_sync_models() -> None:
             modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
             table.add_row(
                 "LM Studio",
-                model_id,
+                inner.get("name", model_id),
                 author,
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
