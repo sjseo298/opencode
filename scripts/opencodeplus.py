@@ -131,6 +131,44 @@ def parse_positive_int(value: object) -> int:
     return parsed if parsed > 0 else 0
 
 
+def parse_boolish(value: object) -> bool:
+    """Parse booleans from bool/int/string-like values."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def normalize_reasoning_levels(value: object) -> list[str]:
+    """Normalize reasoning effort levels from API values."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        level = item.strip().lower()
+        if not level:
+            continue
+        if level not in result:
+            result.append(level)
+    return result
+
+
+def resolve_reasoning_default(levels: list[str], value: object) -> str:
+    """Resolve default reasoning effort from API value and available levels."""
+    if isinstance(value, str):
+        level = value.strip().lower()
+        if level in levels:
+            return level
+    if "xhigh" in levels:
+        return "xhigh"
+    return levels[-1]
+
+
 def derive_base_url(models_url: str) -> str:
     """Return scheme://host[:port] from a models endpoint URL."""
     p = urlsplit(models_url)
@@ -307,6 +345,35 @@ def capability_prefix(
     return f"[{letters}]{provider_short}:"
 
 
+def reasoning_effort_summary(model_config: dict) -> str:
+    """Return compact reasoning effort summary from model options/variants."""
+    options = model_config.get("options", {}) if isinstance(model_config, dict) else {}
+    default_effort = options.get("reasoningEffort") if isinstance(options, dict) else None
+
+    variants = model_config.get("variants", {}) if isinstance(model_config, dict) else {}
+    levels: list[str] = []
+    if isinstance(variants, dict):
+        for level, settings in variants.items():
+            if not isinstance(level, str) or not isinstance(settings, dict):
+                continue
+            effort = settings.get("reasoningEffort")
+            if effort == level and level not in levels:
+                levels.append(level)
+
+    if isinstance(default_effort, str) and default_effort.strip():
+        default_effort = default_effort.strip().lower()
+    else:
+        default_effort = ""
+
+    if default_effort and levels:
+        return f"{default_effort} ({'/'.join(levels)})"
+    if default_effort:
+        return default_effort
+    if levels:
+        return "/".join(levels)
+    return "—"
+
+
 # ── model extraction ─────────────────────────────────────────────────────────
 
 def extract_llamacpp_models(data: dict) -> dict:
@@ -346,13 +413,22 @@ def extract_llamacpp_models(data: dict) -> dict:
             output_limit = parse_positive_int(preset.get("n-predict"))
         if output_limit <= 0:
             output_limit = DEFAULT_OUTPUT_LIMIT
-        has_reasoning = "reasoning-budget" in preset
+        capabilities = item.get("capabilities", [])
+        caps = [str(cap).strip().lower() for cap in capabilities] if isinstance(capabilities, list) else []
+
+        has_reasoning = (
+            parse_boolish(item.get("reasoning_effort"))
+            or ("reasoning_effort" in caps)
+            or ("reasoning" in caps)
+            or ("reasoning-budget" in preset)
+        )
+        reasoning_levels = normalize_reasoning_levels(item.get("reasoning_effort_levels"))
+        if has_reasoning and not reasoning_levels:
+            reasoning_levels = ["low", "medium", "high"]
+        reasoning_default = resolve_reasoning_default(reasoning_levels, item.get("reasoning_effort_default")) if reasoning_levels else ""
         has_agent = preset.get("agent") == "1"
         has_flash_attn = preset.get("flash-attn") == "true"
         has_kv_unified = preset.get("kv-unified") == "1"
-
-        capabilities = item.get("capabilities", [])
-        caps = [str(cap).strip().lower() for cap in capabilities] if isinstance(capabilities, list) else []
 
         # Respect capabilities reported by the server endpoint first.
         has_vision = "vision" in caps
@@ -418,6 +494,13 @@ def extract_llamacpp_models(data: dict) -> dict:
         # Only include interleaved if the model has reasoning capability
         if has_reasoning:
             model_config["interleaved"] = True
+            if reasoning_default:
+                model_config["options"] = {"reasoningEffort": reasoning_default}
+            if reasoning_levels:
+                model_config["variants"] = {
+                    level: {"reasoningEffort": level}
+                    for level in reasoning_levels
+                }
 
         models[model_id] = {
             "api": "openai",
@@ -816,6 +899,7 @@ def display_model_table(models: dict, server: str) -> None:
     table.add_column("Herramientas")
     table.add_column("Adjuntos")
     table.add_column("Razonamiento")
+    table.add_column("Effort")
     table.add_column("Modalidades")
 
     for model_id, model_data in models.items():
@@ -826,6 +910,7 @@ def display_model_table(models: dict, server: str) -> None:
         tool = "✓" if inner.get("tool_call") else ""
         attach = "✓" if inner.get("attachment") else ""
         reasoning = "✓" if inner.get("reasoning") else ""
+        effort = reasoning_effort_summary(inner) if inner.get("reasoning") else ""
         modalities = inner.get("modalities", {})
         modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
 
@@ -837,6 +922,7 @@ def display_model_table(models: dict, server: str) -> None:
             tool,
             attach,
             reasoning,
+            effort,
             modality_str,
         )
 
@@ -989,6 +1075,7 @@ def action_sync_models() -> None:
         table.add_column("Herramientas")
         table.add_column("Adjuntos")
         table.add_column("Razonamiento")
+        table.add_column("Effort")
         table.add_column("Modalidades")
 
         for model_id, model_data in llamacpp.items():
@@ -1007,6 +1094,7 @@ def action_sync_models() -> None:
                 "✓" if inner.get("tool_call") else "",
                 "✓" if inner.get("attachment") else "",
                 "✓" if inner.get("reasoning") else "",
+                reasoning_effort_summary(inner) if inner.get("reasoning") else "",
                 modality_str,
             )
 
@@ -1026,6 +1114,7 @@ def action_sync_models() -> None:
                 "✓" if inner.get("tool_call") else "",
                 "✓" if inner.get("attachment") else "",
                 "✓" if inner.get("reasoning") else "",
+                reasoning_effort_summary(inner) if inner.get("reasoning") else "",
                 modality_str,
             )
 
