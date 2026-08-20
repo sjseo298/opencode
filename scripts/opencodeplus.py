@@ -892,8 +892,8 @@ def show_config_menu() -> None:
 def display_model_table(models: dict, server: str) -> None:
     """Display a table of models from a server."""
     table = Table(title=f"Modelos ({server})", show_header=True, header_style="bold cyan")
-    table.add_column("Modelo", style="white")
-    table.add_column("Autor", style="dim")
+    table.add_column("Modelo", style="default")
+    table.add_column("Autor", style="default")
     table.add_column("Contexto", justify="right")
     table.add_column("Output", justify="right")
     table.add_column("Herramientas")
@@ -1068,8 +1068,8 @@ def action_sync_models() -> None:
         # Display combined table
         table = Table(title="Modelos Sincronizados", show_header=True, header_style="bold cyan")
         table.add_column("Servidor", style="cyan")
-        table.add_column("Modelo", style="white")
-        table.add_column("Autor", style="dim")
+        table.add_column("Modelo", style="default")
+        table.add_column("Autor", style="default")
         table.add_column("Contexto", justify="right")
         table.add_column("Output", justify="right")
         table.add_column("Herramientas")
@@ -1175,31 +1175,51 @@ def action_select_model() -> None:
     console.print(f"\n[bold]Modelo actual:[/bold] {current}")
     console.print()
 
+    filter_text = ""
     page_size = console.height - 10
     if page_size < 3:
         page_size = 15
 
-    num_pages = (len(all_models) + page_size - 1) // page_size
+    def filtered_models() -> list[dict]:
+        if not filter_text:
+            return all_models
+        needle = filter_text.lower()
+        return [
+            m for m in all_models
+            if needle in f"{m['id']} {m['name']} {m['provider']} {m['author']}".lower()
+        ]
 
-    def render_page(page: int) -> None:
+    def render_page(page: int) -> int:
+        models = filtered_models()
+        num_pages = max(1, (len(models) + page_size - 1) // page_size)
+        page = min(page, num_pages - 1)
         start = page * page_size
-        end = min(start + page_size, len(all_models))
+        end = min(start + page_size, len(models))
         page_num = page + 1
         compact = console.width < 140
+        title_suffix = f" — filtro: {filter_text}" if filter_text else ""
 
-        console.print(f"[bold]Modelos Disponibles (página {page_num} / {num_pages})[/]")
-        console.print(f"  [dim]── {end - start} de {len(all_models)} modelos mostrados ──[/dim]")
+        console.print(f"[bold]Modelos Disponibles{title_suffix} (página {page_num} / {num_pages})[/]")
+        if filter_text:
+            console.print(f"  [dim]── {end - start} de {len(models)} modelos coinciden ──[/dim]")
+        else:
+            console.print(f"  [dim]── {end - start} de {len(all_models)} modelos mostrados ──[/dim]")
         console.print()
+
+        if not models:
+            console.print(f"[yellow]⚠ Ningún modelo coincide con '{filter_text}'.[/]")
+            console.print()
+            return page
 
         table = Table(show_header=True, header_style="bold cyan", expand=True)
         table.add_column("#", style="bold cyan", justify="right", width=4)
         table.add_column("Proveedor", style="cyan", max_width=18, overflow="ellipsis")
-        table.add_column("Modelo", style="white", min_width=30, overflow="fold")
+        table.add_column("Modelo", style="default", min_width=30, overflow="fold")
         if compact:
             table.add_column("Ctx", justify="right", width=9)
             table.add_column("Out", justify="right", width=9)
         else:
-            table.add_column("Autor", style="dim", max_width=20, overflow="ellipsis")
+            table.add_column("Autor", style="default", max_width=20, overflow="ellipsis")
             table.add_column("Contexto", justify="right", width=10)
             table.add_column("Output", justify="right", width=10)
             table.add_column("Herramientas", width=12)
@@ -1207,8 +1227,8 @@ def action_select_model() -> None:
             table.add_column("Razonamiento", width=12)
             table.add_column("Modalidades", max_width=16, overflow="ellipsis")
 
-        table.title = f"Modelos Disponibles (página {page_num} / {num_pages})"
-        for idx, m in enumerate(all_models[start:end], start + 1):
+        table.title = f"Modelos Disponibles{title_suffix} (página {page_num} / {num_pages})"
+        for idx, m in enumerate(models[start:end], start + 1):
             if compact:
                 table.add_row(
                     str(idx),
@@ -1239,44 +1259,51 @@ def action_select_model() -> None:
             nav_parts.append("n")
         if num_pages > 1:
             nav_parts.append("j")
+        nav_parts.append("f")
         nav_parts.append("q")
         nav = " | ".join(f"[bold]{k}[/]" for k in nav_parts)
-        console.print(f"\n  [dim]Navegación: {nav} | Ingresar número para seleccionar[/dim]\n")
+        hint = "Ingresar número para seleccionar o texto para filtrar"
+        if filter_text:
+            hint += " · f sin texto limpia el filtro"
+        console.print(f"\n  [dim]Navegación: {nav} | {hint}[/dim]\n")
 
     page = 0
     render_page(page)
 
     while True:
-        raw = Prompt.ask("  ¿Número de modelo?")
+        raw = Prompt.ask("  ¿Número de modelo o filtro?")
         cmd = (raw or "").strip().lower()
+        models = filtered_models()
+        num_pages = max(1, (len(models) + page_size - 1) // page_size)
 
         if cmd in ("q", "quit"):
             console.print("[yellow]⚠ Cancelado.[/]")
             return
-        elif cmd in ("n", "next"):
-            page = min(page + 1, num_pages - 1)
+        elif cmd in ("f", "/", "filter", "filtrar"):
+            filter_text = (Prompt.ask("  Filtro por nombre (Enter para limpiar)") or "").strip()
+            page = 0
             render_page(page)
             continue
+        elif cmd in ("n", "next"):
+            page = render_page(min(page + 1, num_pages - 1))
+            continue
         elif cmd in ("p", "prev"):
-            page = max(page - 1, 0)
-            render_page(page)
+            page = render_page(max(page - 1, 0))
             continue
         elif cmd in ("j", "jump"):
             page_input = Prompt.ask("  ¿Número de página?", default="1", choices=[str(i) for i in range(1, num_pages + 1)])
-            page = max(0, min(int(page_input) - 1, num_pages - 1))
-            render_page(page)
+            page = render_page(max(0, min(int(page_input) - 1, num_pages - 1)))
             continue
         elif cmd == "":
             # empty = next page
             if page < num_pages - 1:
-                page += 1
-                render_page(page)
+                page = render_page(page + 1)
             continue
 
         try:
             num = int(cmd)
-            if 1 <= num <= len(all_models):
-                selected = all_models[num - 1]
+            if 1 <= num <= len(models):
+                selected = models[num - 1]
                 config["model"] = f"{selected['provider']}/{selected['id']}"
                 write_config_to_file(config, GENERATED_CONFIG)
                 console.print(f"[green]✓ Project config updated[/]")
@@ -1285,9 +1312,11 @@ def action_select_model() -> None:
                 console.print(f"\n[green]✓ Modelo por defecto: {selected['provider']}/{selected['id']}[/]")
                 return
             else:
-                console.print(f"[yellow]⚠ Número fuera de rango. Elige entre 1 y {len(all_models)}.[/]")
+                console.print(f"[yellow]⚠ Número fuera de rango. Elige entre 1 y {len(models)}.[/]")
         except ValueError:
-            console.print(f"[yellow]⚠ No se reconoce '{raw}'.[/]")
+            filter_text = (raw or "").strip()
+            page = 0
+            render_page(page)
 
 
 def action_run_build() -> None:
