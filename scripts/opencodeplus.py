@@ -1332,7 +1332,7 @@ def action_run_build() -> None:
     commit_count = len(upstream_commits.strip().splitlines())
     console.print(f"\n[green]✓ {commit_count} nuevo(s) commit(s) de upstream[/]")
 
-    # Generate LLM summary (mandatory for upstream updates)
+    # Try to generate an LLM summary for upstream updates
     model_info = get_default_model_from_config()
     if not model_info:
         console.print("[red]✗ Cancelando build: no se encontró modelo por defecto en la config.[/]")
@@ -1342,7 +1342,7 @@ def action_run_build() -> None:
     console.print("[dim]Generando resumen con LLM...[/]")
     summary = summarize_with_llm(upstream_commits, model_info)
     if not summary:
-        console.print("[red]✗ Cancelando build: no se pudo obtener resumen del LLM (obligatorio para actualizaciones de upstream).[/]")
+        console.print("[red]✗ Cancelando build: no se pudo obtener resumen del LLM tras esperar que el modelo remoto cargue.[/]")
         return
 
     # Display summary and ask for confirmation
@@ -1517,7 +1517,9 @@ def get_default_model_from_config() -> Optional[dict]:
 
 def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
     """Send commit log to LLM API and return summarized text. Returns None on failure."""
+    import time
     import urllib.request
+    from urllib.error import HTTPError, URLError
 
     url = f"{model_info['base_url']}/chat/completions"
 
@@ -1556,20 +1558,77 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
     payload_size = len(payload)
     timeout = max(600, 600 + (payload_size // 1000) * 60)
 
-    try:
-        req = urllib.request.Request(url, data=payload, headers={
-            "Content-Type": "application/json",
-        })
-        console.print(f"[dim]Payload: {payload_size} bytes, Timeout: {timeout}s[/]")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode())
-            choices = data.get("choices", [])
-            if choices:
-                return choices[0].get("message", {}).get("content", "")
+    startup_wait = max(120, parse_positive_int(os.environ.get("OPENCODEPLUS_MODEL_READY_TIMEOUT", "900")))
+    readiness_payload = json.dumps({
+        "model": model_info["model_id"],
+        "messages": [{"role": "user", "content": "Responde solo: ok"}],
+        "temperature": 0,
+        "max_tokens": 8,
+    }).encode("utf-8")
+
+    readiness_deadline = time.monotonic() + startup_wait
+    readiness_attempt = 0
+    while True:
+        readiness_attempt += 1
+        try:
+            req = urllib.request.Request(url, data=readiness_payload, headers={
+                "Content-Type": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=20):
+                if readiness_attempt > 1:
+                    console.print("[dim]Modelo remoto listo. Generando resumen...[/]")
+                break
+        except HTTPError as e:
+            if e.code not in {408, 409, 425, 429, 500, 502, 503, 504}:
+                console.print(f"[yellow]⚠ LLM API error de readiness (HTTP {e.code})[/]")
+                return None
+        except (URLError, TimeoutError, OSError):
+            pass
+
+        remaining = int(readiness_deadline - time.monotonic())
+        if remaining <= 0:
+            console.print(f"[yellow]⚠ Timeout esperando que el modelo remoto cargue ({startup_wait}s).[/]")
             return None
-    except Exception as e:
-        console.print(f"[yellow]⚠ LLM API error: {e}[/]")
-        return None
+        if readiness_attempt == 1 or readiness_attempt % 3 == 0:
+            console.print(f"[dim]Esperando carga del modelo remoto... ({remaining}s restantes)[/]")
+        time.sleep(min(8, max(1, remaining)))
+
+    max_attempts = 3
+    console.print(f"[dim]Payload: {payload_size} bytes, Timeout: {timeout}s[/]")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            req = urllib.request.Request(url, data=payload, headers={
+                "Content-Type": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode())
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
+                return None
+        except HTTPError as e:
+            retryable = e.code in {408, 409, 425, 429, 500, 502, 503, 504}
+            console.print(f"[yellow]⚠ LLM API error (HTTP {e.code}, intento {attempt}/{max_attempts})[/]")
+            if retryable and attempt < max_attempts:
+                wait_seconds = attempt * 3
+                console.print(f"[dim]Reintentando en {wait_seconds}s...[/]")
+                time.sleep(wait_seconds)
+                continue
+            return None
+        except (URLError, TimeoutError, OSError) as e:
+            console.print(f"[yellow]⚠ LLM API error ({e}, intento {attempt}/{max_attempts})[/]")
+            if attempt < max_attempts:
+                wait_seconds = attempt * 3
+                console.print(f"[dim]Reintentando en {wait_seconds}s...[/]")
+                time.sleep(wait_seconds)
+                continue
+            return None
+        except Exception as e:
+            console.print(f"[yellow]⚠ LLM API error: {e}[/]")
+            return None
+
+    return None
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
