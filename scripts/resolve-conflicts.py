@@ -16,19 +16,21 @@ Options:
 """
 
 import json
-import os
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 from typing import Optional
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import llm_monitor
 
 try:
     from rich.console import Console
     from rich.panel import Panel
     from rich.prompt import Confirm
-    from rich import box
-    from rich.markdown import Markdown
 except ImportError:
     print("\n[red]✗[/] rich no está instalada.\n\n"
           "Instálala con:\n"
@@ -40,7 +42,6 @@ console = Console()
 # ── defaults ─────────────────────────────────────────────────────────────────
 
 DEFAULT_LLM_TIMEOUT = 600  # 10 minutes
-SCRIPT_DIR = Path(__file__).parent.resolve()
 USER_CONFIG = Path.home() / ".config" / "opencode" / "opencode.jsonc"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -168,19 +169,16 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
         "max_tokens": 8192,
     }).encode("utf-8")
 
-    try:
-        req = urllib.request.Request(url, data=payload, headers={
-            "Content-Type": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode())
-            choices = data.get("choices", [])
-            if choices:
-                return choices[0].get("message", {}).get("content", "")
-            return None
-    except Exception as e:
-        console.print(f"[yellow]⚠ LLM API error: {e}[/]")
-        return None
+    monitor = model_info.get("provider") == "llamacpp" and bool(llm_monitor.derive_host_base(model_info.get("base_url", "")))
+    socket_timeout = max(timeout, llm_monitor.SOCKET_BACKSTOP) if monitor else timeout
+    return llm_monitor.run_llm_request(
+        url,
+        payload,
+        model_info["model_id"],
+        model_info["base_url"],
+        socket_timeout,
+        monitor,
+    )
 
 def apply_resolution(file_path: Path, repo_dir: Path, resolution: str) -> bool:
     """Apply the LLM's resolution to the file."""
@@ -215,14 +213,17 @@ def show_conflict_details(repo_dir: Path, files: list[str]) -> None:
         if preview_lines:
             console.print(f"  [dim]Conflicto en: {preview_lines[0]}[/dim]")
 
-def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, timeout: int) -> None:
+def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, timeout: int) -> bool:
     """Ask LLM to resolve each conflict and apply the resolution."""
     console.print(Panel("Resolviendo conflictos con LLM", border_style="cyan"))
 
     resolved_files = []
     failed_files = []
+    cancelled = False
+    processed = 0
 
     for file_name in files:
+        processed += 1
         file_path = repo_dir / file_name
         if not file_path.exists():
             failed_files.append(file_name)
@@ -237,6 +238,10 @@ def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, t
 
         console.print(f"\n  [dim]── Resolviendo: {file_name} ──[/dim]")
         resolution = resolve_conflict_with_llm(header, content, model_info, timeout)
+        if llm_monitor.was_cancelled():
+            failed_files.append(file_name)
+            cancelled = True
+            break
 
         if resolution:
             if apply_resolution(file_path, repo_dir, resolution):
@@ -256,6 +261,13 @@ def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, t
         console.print(f"\n[yellow]✗ No resueltos: {len(failed_files)} archivo(s)[/]")
         for f in failed_files:
             console.print(f"  {f}")
+    if cancelled:
+        pending = len(files) - processed
+        if pending > 0:
+            console.print(f"\n[yellow]⚠ Cancelado por el usuario. Pendientes: {pending} archivo(s).[/]")
+        else:
+            console.print("\n[yellow]⚠ Cancelado por el usuario.[/]")
+    return cancelled
 
 def resolve_conflicts(repo_dir: Path, auto: bool = False, timeout: int = DEFAULT_LLM_TIMEOUT) -> int:
     """Main resolution logic. Returns 0 on success, 1 on failure."""
@@ -270,7 +282,12 @@ def resolve_conflicts(repo_dir: Path, auto: bool = False, timeout: int = DEFAULT
         return 1
 
     console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
-    console.print(f"[green]✓ Timeout: {timeout}s[/]\n")
+    if model_info.get("provider") == "llamacpp":
+        console.print(
+            f"[green]✓ Modo monitoreado: /status (+ /metrics si es seguro) (pregunta de cancelación cada {llm_monitor.working_cap_seconds()}s)[/]\n"
+        )
+    else:
+        console.print(f"[green]✓ Timeout: {timeout}s[/]\n")
 
     # Get conflicted files
     files = get_conflicted_files(repo_dir)
@@ -293,7 +310,9 @@ def resolve_conflicts(repo_dir: Path, auto: bool = False, timeout: int = DEFAULT
             return 1
 
     # Resolve with LLM
-    ask_llm_for_resolution(repo_dir, files, model_info, timeout)
+    cancelled = ask_llm_for_resolution(repo_dir, files, model_info, timeout)
+    if cancelled:
+        return 1
 
     return 0
 

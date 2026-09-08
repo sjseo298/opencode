@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit
 
+SCRIPT_DIR = Path(__file__).parent.resolve()
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import llm_monitor
+
 # ── rich import ──────────────────────────────────────────────────────────────
 
 try:
@@ -49,7 +55,6 @@ LM_STUDIO_URL = "http://192.168.1.65:1234/api/v1/models"
 
 # SCRIPT_DIR defaults to the scripts directory of this module;
 # the wrapper overrides it when called from the opencodeplus script.
-SCRIPT_DIR = Path(__file__).parent.resolve()
 CONFIG_DIR = SCRIPT_DIR / "config"
 GENERATED_CONFIG = CONFIG_DIR / "opencode.jsonc"
 
@@ -1342,7 +1347,7 @@ def action_run_build() -> None:
     console.print("[dim]Generando resumen con LLM...[/]")
     summary = summarize_with_llm(upstream_commits, model_info)
     if not summary:
-        console.print("[red]✗ Cancelando build: no se pudo obtener resumen del LLM tras esperar que el modelo remoto cargue.[/]")
+        console.print("[red]✗ Cancelando build: no se pudo obtener el resumen del LLM.[/]")
         return
 
     # Display summary and ask for confirmation
@@ -1558,6 +1563,21 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
     payload_size = len(payload)
     timeout = max(600, 600 + (payload_size // 1000) * 60)
 
+    monitor = model_info.get("provider") == "llamacpp" and bool(derive_base_url(model_info.get("base_url", "")))
+    if monitor:
+        console.print(
+            f"[dim]Payload: {payload_size} bytes | espera de carga: <= {llm_monitor.startup_wait_seconds()}s | "
+            f"working: pregunta cada {llm_monitor.working_cap_seconds()}s | estado: /status (+ /metrics si es seguro)[/]"
+        )
+        return llm_monitor.run_llm_request(
+            url,
+            payload,
+            model_info["model_id"],
+            model_info["base_url"],
+            max(timeout, llm_monitor.SOCKET_BACKSTOP),
+            True,
+        )
+
     startup_wait = max(120, parse_positive_int(os.environ.get("OPENCODEPLUS_MODEL_READY_TIMEOUT", "900")))
     readiness_payload = json.dumps({
         "model": model_info["model_id"],
@@ -1593,42 +1613,15 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
             console.print(f"[dim]Esperando carga del modelo remoto... ({remaining}s restantes)[/]")
         time.sleep(min(8, max(1, remaining)))
 
-    max_attempts = 3
     console.print(f"[dim]Payload: {payload_size} bytes, Timeout: {timeout}s[/]")
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            req = urllib.request.Request(url, data=payload, headers={
-                "Content-Type": "application/json",
-            })
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode())
-                choices = data.get("choices", [])
-                if choices:
-                    return choices[0].get("message", {}).get("content", "")
-                return None
-        except HTTPError as e:
-            retryable = e.code in {408, 409, 425, 429, 500, 502, 503, 504}
-            console.print(f"[yellow]⚠ LLM API error (HTTP {e.code}, intento {attempt}/{max_attempts})[/]")
-            if retryable and attempt < max_attempts:
-                wait_seconds = attempt * 3
-                console.print(f"[dim]Reintentando en {wait_seconds}s...[/]")
-                time.sleep(wait_seconds)
-                continue
-            return None
-        except (URLError, TimeoutError, OSError) as e:
-            console.print(f"[yellow]⚠ LLM API error ({e}, intento {attempt}/{max_attempts})[/]")
-            if attempt < max_attempts:
-                wait_seconds = attempt * 3
-                console.print(f"[dim]Reintentando en {wait_seconds}s...[/]")
-                time.sleep(wait_seconds)
-                continue
-            return None
-        except Exception as e:
-            console.print(f"[yellow]⚠ LLM API error: {e}[/]")
-            return None
-
-    return None
+    return llm_monitor.run_llm_request(
+        url,
+        payload,
+        model_info["model_id"],
+        model_info["base_url"],
+        timeout,
+        False,
+    )
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
