@@ -32,7 +32,8 @@ import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 
-const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
+const PROVIDER_HEADER_CHUNK_TIMEOUT_DEFAULT = 7_200_000
+const OPENAI_HEADER_TIMEOUT_DEFAULT = PROVIDER_HEADER_CHUNK_TIMEOUT_DEFAULT
 
 function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   if (typeof ms !== "number" || ms <= 0) return res
@@ -1796,8 +1797,8 @@ const layer = Layer.effect(
         if (existing) return existing
 
         const customFetch = options["fetch"]
-        const chunkTimeout = options["chunkTimeout"] ?? 300_000
-        const headerTimeout = options["headerTimeout"] ?? 300_000
+        const chunkTimeout = options["chunkTimeout"] ?? PROVIDER_HEADER_CHUNK_TIMEOUT_DEFAULT
+        const headerTimeout = options["headerTimeout"] ?? PROVIDER_HEADER_CHUNK_TIMEOUT_DEFAULT
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
 
