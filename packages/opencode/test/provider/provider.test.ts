@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
+import { createServer, type Server } from "node:http"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -178,6 +179,85 @@ it.instance(
 )
 
 it.instance(
+  "llama.cpp runtime /props context updates model limit for legacy providers",
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => llamaRuntimeServer({ propsContext: 196_608, modelsContext: 262_144 })),
+      (value) => Effect.sync(() => value.server.close()),
+    )
+
+    yield* set("LLAMA_TEST_BASE_URL", server.url)
+    const providers = yield* list
+    const model = providers[ProviderV2.ID.make("llamacpp")].models["qwen-runtime"]
+    expect(model.limit.context).toBe(196_608)
+    expect(server.calls).toEqual({ props: 1, models: 0 })
+  }),
+  {
+    config: {
+      provider: {
+        llamacpp: {
+          name: "llama.cpp",
+          npm: "@ai-sdk/openai-compatible",
+          env: [],
+          api: "${LLAMA_TEST_BASE_URL}/v1",
+          models: {
+            "qwen-runtime": {
+              id: "qwen-runtime",
+              name: "Qwen Runtime",
+              tool_call: true,
+              limit: { context: 8192, output: 4096 },
+            },
+          },
+          options: {
+            apiKey: "test",
+            baseURL: "${LLAMA_TEST_BASE_URL}/v1",
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "llama.cpp runtime falls back to /slots context when /props omits n_ctx",
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => llamaRuntimeServer({ propsContext: undefined, slotsContext: 131_072, modelsContext: 98_304 })),
+      (value) => Effect.sync(() => value.server.close()),
+    )
+
+    yield* set("LLAMA_TEST_BASE_URL", server.url)
+    const providers = yield* list
+    const model = providers[ProviderV2.ID.make("llamacpp")].models["qwen-runtime"]
+    expect(model.limit.context).toBe(131_072)
+    expect(server.calls).toEqual({ props: 1, models: 0 })
+  }),
+  {
+    config: {
+      provider: {
+        llamacpp: {
+          name: "llama.cpp",
+          npm: "@ai-sdk/openai-compatible",
+          env: [],
+          options: {
+            apiKey: "test",
+            baseURL: "${LLAMA_TEST_BASE_URL}/v1",
+          },
+          models: {
+            "qwen-runtime": {
+              id: "qwen-runtime",
+              name: "Qwen Runtime",
+              tool_call: true,
+              limit: { context: 8192, output: 4096 },
+            },
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
   "custom model alias via config",
   Effect.gen(function* () {
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
@@ -194,6 +274,68 @@ it.instance(
     },
   },
 )
+
+async function llamaRuntimeServer(input: { propsContext?: number; slotsContext?: number; modelsContext?: number } = {}) {
+  const calls = { props: 0, models: 0 }
+  const slotsContext = input.slotsContext ?? input.modelsContext ?? 262_144
+  const context = input.modelsContext ?? 262_144
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost")
+    if (url.pathname === "/props") {
+      calls.props += 1
+      response.writeHead(200, { "content-type": "application/json" })
+      response.end(
+        JSON.stringify({
+          default_generation_settings:
+            input.propsContext === undefined
+              ? { params: {} }
+              : {
+                  n_ctx: input.propsContext,
+                },
+          model_alias: "qwen-runtime",
+        }),
+      )
+      return
+    }
+    if (url.pathname === "/v1/models") {
+      calls.models += 1
+      response.writeHead(200, { "content-type": "application/json" })
+      response.end(
+        JSON.stringify({
+          data: [
+            {
+              id: "qwen-runtime",
+              aliases: ["Qwen Runtime"],
+              limit: {
+                context,
+                output: 4096,
+              },
+            },
+          ],
+        }),
+      )
+      return
+    }
+    if (url.pathname === "/slots") {
+      response.writeHead(200, { "content-type": "application/json" })
+      response.end(
+        JSON.stringify({
+          "0": {
+            id: 0,
+            ctx: `0/${slotsContext} tok (0%)`,
+          },
+        }),
+      )
+      return
+    }
+    response.writeHead(404)
+    response.end("missing")
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port")
+  return { server, url: `http://127.0.0.1:${address.port}`, calls }
+}
 
 it.instance(
   "custom provider with npm package",

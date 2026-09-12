@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { LlamaRuntimeContext } from "@opencode-ai/core/llama-runtime-context"
 
 const PROVIDER_HEADER_CHUNK_TIMEOUT_DEFAULT = 7_200_000
 const OPENAI_HEADER_TIMEOUT_DEFAULT = PROVIDER_HEADER_CHUNK_TIMEOUT_DEFAULT
@@ -1387,6 +1388,63 @@ function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enabl
     .map((item) => item.id)
 }
 
+function providerModelBaseURL(
+  provider: Info,
+  model: Model,
+  varsLoader: CustomVarsLoader | undefined,
+  envs: Record<string, string | undefined>,
+) {
+  let url =
+    typeof provider.options["baseURL"] === "string" && provider.options["baseURL"] !== ""
+      ? provider.options["baseURL"]
+      : model.api.url
+  if (!url) return
+  if (varsLoader) {
+    const vars = varsLoader(provider.options)
+    for (const [key, value] of Object.entries(vars)) {
+      const field = "${" + key + "}"
+      url = url.replaceAll(field, value)
+    }
+  }
+  return url.replace(/\$\{([^}]+)\}/g, (item, key) => envs[String(key)] ?? item)
+}
+
+function fetchOption(value: unknown) {
+  if (typeof value !== "function") return
+  return value as typeof fetch
+}
+
+async function applyRuntimeContextLimits(input: {
+  providers: Record<ProviderV2.ID, Info>
+  varsLoaders: Record<string, CustomVarsLoader>
+  envs: Record<string, string | undefined>
+}) {
+  const all = Object.values(input.providers).flatMap((provider) => {
+    const varsLoader = input.varsLoaders[provider.id]
+    return Object.values(provider.models).map((model) => ({
+      provider,
+      model,
+      baseURL: providerModelBaseURL(provider, model, varsLoader, input.envs),
+      fetch: fetchOption(model.options.fetch) ?? fetchOption(provider.options.fetch),
+    }))
+  })
+
+  await Promise.all(
+    all.map(async (item) => {
+      if (!item.baseURL) return
+      if (!LlamaRuntimeContext.shouldResolve({ baseURL: item.baseURL, providerID: item.provider.id })) return
+      const context = await LlamaRuntimeContext.resolve({
+        baseURL: item.baseURL,
+        providerID: item.provider.id,
+        modelIDs: [item.model.api.id, item.model.id],
+        fetch: item.fetch,
+      })
+      if (context === undefined || context === item.model.limit.context) return
+      item.model.limit.context = context
+    }),
+  )
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1718,6 +1776,10 @@ const layer = Layer.effect(
             continue
           }
         }
+
+        yield* Effect.promise(() =>
+          applyRuntimeContextLimits({ providers, varsLoaders, envs }).catch(() => undefined),
+        )
 
         return {
           models: languages,
