@@ -53,6 +53,14 @@ export type WorkspaceAdapter = {
   target(config: WorkspaceInfo): WorkspaceTarget | Promise<WorkspaceTarget>
 }
 
+export type PluginQuestion = {
+  question: string
+  header: string
+  options: Array<{ label: string; description: string }>
+  multiple?: boolean
+  custom?: boolean
+}
+
 export type PluginInput = {
   client: ReturnType<typeof createOpencodeClient>
   project: Project
@@ -60,6 +68,17 @@ export type PluginInput = {
   worktree: string
   experimental_workspace: {
     register(type: string, adapter: WorkspaceAdapter): void
+  }
+  experimental_question?: {
+    /**
+     * Ask the user a blocking question through the native question UI (TUI,
+     * `opencode run`, web). Resolves with one answer array per question
+     * (selected labels); rejects if the user dismisses the question.
+     */
+    ask: (input: {
+      sessionID: string
+      questions: PluginQuestion[]
+    }) => Promise<ReadonlyArray<ReadonlyArray<string>>>
   }
   serverUrl: URL
   $: BunShell

@@ -4,6 +4,7 @@ import type {
   PluginInput,
   Plugin as PluginInstance,
   PluginModule,
+  PluginQuestion,
   WorkspaceAdapter as PluginWorkspaceAdapter,
 } from "@opencode-ai/plugin"
 import { Config } from "@/config/config"
@@ -22,6 +23,7 @@ import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { XaiAuthPlugin } from "./xai"
 import { CerebrasPlugin } from "./cerebras"
 import { SnowflakeCortexAuthPlugin } from "./snowflake-cortex"
+import { LlamacppContextPlugin } from "./llamacpp-context"
 import { Effect, Layer, Context } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
@@ -33,6 +35,8 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
+import { Question } from "@/question"
+import { SessionID } from "@/session/schema"
 
 type State = {
   hooks: Hooks[]
@@ -82,6 +86,9 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     SnowflakeCortexAuthPlugin,
     XaiAuthPlugin,
     CerebrasPlugin,
+    // ── FORK: detect llama.cpp context size from /props and confirm with user ──
+    LlamacppContextPlugin,
+    // ── END FORK ──────────────────────────────────────────────────────────────
   ]
 }
 
@@ -130,6 +137,7 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
     const flags = yield* RuntimeFlags.Service
+    const question = yield* Question.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Plugin.state")(function* (ctx) {
@@ -160,6 +168,27 @@ const layer = Layer.effect(
               registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
             },
           },
+          // ── FORK: expose Question to plugins ─────────────────────────────
+          // Lets plugins ask the user a blocking question through the native
+          // question UI (TUI / opencode run / web), e.g. to confirm a dynamic
+          // model context size detected from a local llama.cpp server.
+          //
+          // MERGE INSTRUCTIONS FOR LLM:
+          // - Keep this block inside the PluginInput object literal, after
+          //   experimental_workspace.
+          // - Requires `question` (Question.Service) yielded above and
+          //   `bridge` (EffectBridge) from the InstanceState closure.
+          // - If upstream renames those variables, adapt this block.
+          experimental_question: {
+            ask: (req: { sessionID: string; questions: PluginQuestion[] }) =>
+              bridge.promise(
+                question.ask({
+                  sessionID: req.sessionID as SessionID,
+                  questions: req.questions,
+                }),
+              ),
+          },
+          // ── END FORK ─────────────────────────────────────────────────────
           get serverUrl(): URL {
             return Server.url ?? new URL("http://localhost:4096")
           },
@@ -336,7 +365,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node],
+  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node, Question.node],
 })
 
 export * as Plugin from "."
