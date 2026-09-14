@@ -14,6 +14,7 @@ import {
   untrack,
   useContext,
 } from "solid-js"
+import { reconcile } from "solid-js/store"
 import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
@@ -758,6 +759,7 @@ export function Session() {
         aliases: ["refresh-context"],
       },
       run: () => {
+        const current = session()
         const selected = local.model.current()
         if (!selected) {
           toast.show({
@@ -790,10 +792,34 @@ export function Session() {
         void sdk.client.experimental.session.context
           .refresh({
             sessionID: route.sessionID,
-            workspace: project.workspace.current(),
+            ...(current?.directory ? { directory: current.directory } : {}),
+            ...(current?.workspaceID ? { workspace: current.workspaceID } : {}),
           })
           .then((res) => {
             if (res.data) {
+              const query = {
+                ...(current?.directory ? { directory: current.directory } : {}),
+                ...(current?.workspaceID ? { workspace: current.workspaceID } : {}),
+              }
+              void Promise.all([
+                sdk.client.config.providers(query, { throwOnError: true }),
+                sdk.client.provider.list(query, { throwOnError: true }),
+              ])
+                .then(([providers, providerList]) => {
+                  batch(() => {
+                    sync.set("provider", reconcile(providers.data!.providers))
+                    sync.set("provider_default", reconcile(providers.data!.default))
+                    sync.set("provider_next", reconcile(providerList.data!))
+                  })
+                })
+                .catch((error) => {
+                  toast.show({
+                    variant: "warning",
+                    title: "llama.cpp context",
+                    message: `Context refreshed but provider reload failed: ${errorMessage(error)}`,
+                    duration: 5000,
+                  })
+                })
               toast.show({
                 variant: "success",
                 title: "llama.cpp context",

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "../../../fixture/fixture"
-import { mount, wait } from "./sync-fixture"
+import { json, mount, wait } from "./sync-fixture"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 
 function branchEvent(branch: string, workspace?: string): GlobalEvent {
@@ -13,6 +13,19 @@ function branchEvent(branch: string, workspace?: string): GlobalEvent {
       id: `evt_vcs_${branch}`,
       type: "vcs.branch.updated",
       properties: { branch },
+    },
+  }
+}
+
+function catalogEvent(input: { directory: string; workspace?: string }): GlobalEvent {
+  return {
+    directory: input.directory,
+    project: "proj_test",
+    workspace: input.workspace,
+    payload: {
+      id: "evt_catalog_update",
+      type: "catalog.updated",
+      properties: {},
     },
   }
 }
@@ -58,6 +71,43 @@ describe("tui sync", () => {
       await wait(() => sync.data.vcs?.branch === "feature")
 
       expect(sync.data.vcs?.branch).toBe("feature")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("catalog updates refresh providers with event workspace and directory", async () => {
+    const configCalls: URL[] = []
+    const providerCalls: URL[] = []
+    const { app, emit, project } = await mount((url) => {
+      if (url.pathname === "/config/providers") {
+        configCalls.push(new URL(url.toString()))
+        return json({ providers: [], default: {} })
+      }
+      if (url.pathname === "/provider") {
+        providerCalls.push(new URL(url.toString()))
+        return json({ all: [], default: {}, connected: [] })
+      }
+    })
+
+    try {
+      project.workspace.set("ws_local")
+      const beforeConfig = configCalls.length
+      const beforeProvider = providerCalls.length
+
+      emit(
+        catalogEvent({
+          directory: "/tmp/catalog-location",
+          workspace: "ws_remote",
+        }),
+      )
+
+      await wait(() => configCalls.length > beforeConfig && providerCalls.length > beforeProvider)
+
+      expect(configCalls.at(-1)?.searchParams.get("workspace")).toBe("ws_remote")
+      expect(configCalls.at(-1)?.searchParams.get("directory")).toBe("/tmp/catalog-location")
+      expect(providerCalls.at(-1)?.searchParams.get("workspace")).toBe("ws_remote")
+      expect(providerCalls.at(-1)?.searchParams.get("directory")).toBe("/tmp/catalog-location")
     } finally {
       app.renderer.destroy()
     }

@@ -173,22 +173,32 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    function refreshProviders(input?: { directory?: string; workspace?: string }) {
+      const workspace = input?.workspace ?? project.workspace.current()
+      const query = {
+        ...(input?.directory ? { directory: input.directory } : {}),
+        ...(workspace ? { workspace } : {}),
+      }
+      return Promise.all([
+        sdk.client.config.providers(query, { throwOnError: true }),
+        sdk.client.provider.list(query, { throwOnError: true }),
+      ]).then(([providers, providerList]) => {
+        batch(() => {
+          setStore("provider", reconcile(providers.data!.providers))
+          setStore("provider_default", reconcile(providers.data!.default))
+          setStore("provider_next", reconcile(providerList.data!))
+        })
+      })
+    }
+
     event.subscribe((event, { directory, workspace }) => {
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()
           break
         case "catalog.updated": {
-          const workspace = project.workspace.current()
-          void Promise.all([
-            sdk.client.config.providers({ workspace }, { throwOnError: true }),
-            sdk.client.provider.list({ workspace }, { throwOnError: true }),
-          ]).then(([providers, providerList]) => {
-            batch(() => {
-              setStore("provider", reconcile(providers.data!.providers))
-              setStore("provider_default", reconcile(providers.data!.default))
-              setStore("provider_next", reconcile(providerList.data!))
-            })
+          void refreshProviders({ directory, workspace }).catch((error) => {
+            console.error("failed to refresh providers after catalog update", error)
           })
           break
         }
