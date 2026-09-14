@@ -17,6 +17,7 @@ import { Effect } from "effect"
 import * as ACPService from "@/acp/service"
 import * as ACPError from "@/acp/error"
 import { UsageService } from "@/acp/usage"
+import { Directory } from "@/acp/directory"
 import type { Provider } from "@/provider/provider"
 
 const providerID = ProviderV2.ID.make("test")
@@ -27,18 +28,28 @@ const secondModelID = ModelV2.ID.make("second-model")
 function createEventStream() {
   const queue: Event[] = []
   const waiters: Array<(event: Event | undefined) => void> = []
+  const state = { closed: false }
   const push = (event: Event) => {
+    if (state.closed) return
     const waiter = waiters.shift()
     if (waiter) return waiter(event)
     queue.push(event)
   }
+  const close = () => {
+    state.closed = true
+    for (const waiter of waiters.splice(0)) {
+      waiter(undefined)
+    }
+  }
   const stream = async function* (signal?: AbortSignal) {
-    while (!signal?.aborted) {
+    while (true) {
+      if (signal?.aborted) return
       const event = queue.shift()
       if (event) {
         yield { payload: event }
         continue
       }
+      if (state.closed) return
       const next = await new Promise<Event | undefined>((resolve) => {
         waiters.push(resolve)
         signal?.addEventListener("abort", () => resolve(undefined), { once: true })
@@ -47,7 +58,7 @@ function createEventStream() {
       yield { payload: next }
     }
   }
-  return { push, stream }
+  return { push, close, stream }
 }
 
 function idleEvent(sessionID: string): Event {
@@ -1296,6 +1307,223 @@ describe("ACP service sessions", () => {
       messages: 0,
       creates: 2,
     })
+  })
+
+  it("clears cached directory snapshots after catalog updates", async () => {
+    let directoryLoads = 0
+    const events = createEventStream()
+    const sdk = {
+      global: {
+        event: (input?: { signal?: AbortSignal }) => Promise.resolve({ stream: events.stream(input?.signal) }),
+      },
+      config: {
+        providers: () => Promise.resolve({ data: { providers: [provider], default: { test: modelID } } }),
+        get: () => Promise.resolve({ data: {} }),
+      },
+      app: {
+        agents: () => Promise.resolve({ data: [{ name: "build", mode: "primary", permission: [], options: {} }] }),
+        skills: () => Promise.resolve({ data: [] }),
+      },
+      command: {
+        list: () => Promise.resolve({ data: [] }),
+      },
+      session: {
+        create: () => Promise.resolve({ data: { id: "ses_cache" } }),
+        list: () => Promise.resolve({ data: [] }),
+        prompt: (input: { sessionID: string }) => {
+          events.push(idleEvent(input.sessionID))
+          return Promise.resolve({
+            data: {
+              info: assistantInfo({
+                input: 1,
+                output: 1,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+              }),
+            },
+          })
+        },
+      },
+      mcp: {
+        add: () => Promise.resolve({ data: {} }),
+      },
+    } as unknown as OpencodeClient
+    const connection = {
+      sessionUpdate: (_update: SessionNotification) => Promise.resolve(),
+    } as Pick<AgentSideConnection, "sessionUpdate">
+    const service = ACPService.make({
+      sdk,
+      connection,
+      directory: {
+        get: () =>
+          Effect.sync(() => {
+            directoryLoads++
+            return Directory.build({
+              directory: "/workspace",
+              providers: { [providerID]: provider },
+              modes: [{ id: "build", name: "build" }],
+              defaultModeID: "build",
+              commands: [],
+            })
+          }),
+        refresh: () =>
+          Effect.sync(() => {
+            directoryLoads++
+            return Directory.build({
+              directory: "/workspace",
+              providers: { [providerID]: provider },
+              modes: [{ id: "build", name: "build" }],
+              defaultModeID: "build",
+              commands: [],
+            })
+          }),
+        variants: Directory.variants,
+      },
+    })
+    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+
+    expect(directoryLoads).toBe(1)
+
+    await Effect.runPromise(
+      service.setSessionConfigOption({
+        sessionId: session.sessionId,
+        configId: "mode",
+        value: "build",
+      }),
+    )
+
+    expect(directoryLoads).toBe(1)
+
+    events.push({
+      id: "evt_catalog",
+      type: "catalog.updated",
+      properties: {},
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    await Effect.runPromise(
+      service.setSessionConfigOption({
+        sessionId: session.sessionId,
+        configId: "mode",
+        value: "build",
+      }),
+    )
+
+    expect(directoryLoads).toBe(2)
+    events.close()
+  })
+
+  it("recomputes usage context limits after catalog updates", async () => {
+    const events = createEventStream()
+    let context = 128000
+    let providerCalls = 0
+    const updates: SessionNotification[] = []
+    const sdk = {
+      global: {
+        event: (input?: { signal?: AbortSignal }) => Promise.resolve({ stream: events.stream(input?.signal) }),
+      },
+      config: {
+        providers: () => {
+          providerCalls++
+          return Promise.resolve({
+            data: {
+              providers: [
+                {
+                  ...provider,
+                  models: {
+                    ...provider.models,
+                    [modelID]: {
+                      ...provider.models[modelID],
+                      limit: { ...provider.models[modelID].limit, context },
+                    },
+                  },
+                },
+              ],
+              default: { test: modelID },
+            },
+          })
+        },
+        get: () => Promise.resolve({ data: {} }),
+      },
+      app: {
+        agents: () => Promise.resolve({ data: [{ name: "build", mode: "primary", permission: [], options: {} }] }),
+        skills: () => Promise.resolve({ data: [] }),
+      },
+      command: {
+        list: () => Promise.resolve({ data: [] }),
+      },
+      session: {
+        create: () => Promise.resolve({ data: { id: "ses_usage" } }),
+        list: () => Promise.resolve({ data: [] }),
+        prompt: (input: { sessionID: string }) => {
+          events.push(idleEvent(input.sessionID))
+          return Promise.resolve({
+            data: {
+              info: assistantInfo({
+                input: 10,
+                output: 0,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+              }),
+            },
+          })
+        },
+        messages: () =>
+          Promise.resolve({
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  providerID: providerID,
+                  modelID,
+                  cost: 0,
+                  tokens: {
+                    input: 10,
+                    output: 0,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                  },
+                },
+                parts: [],
+              },
+            ],
+          }),
+      },
+      mcp: {
+        add: () => Promise.resolve({ data: {} }),
+      },
+    } as unknown as OpencodeClient
+    const connection = {
+      sessionUpdate: (update: SessionNotification) => {
+        updates.push(update)
+        return Promise.resolve()
+      },
+    } as Pick<AgentSideConnection, "sessionUpdate">
+    const service = ACPService.make({ sdk, connection })
+    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+
+    await Effect.runPromise(service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "first" }] }))
+    const firstUsage = updates.findLast((update) => update.update.sessionUpdate === "usage_update")
+    expect(firstUsage?.update.sessionUpdate).toBe("usage_update")
+    const firstSize = firstUsage?.update.sessionUpdate === "usage_update" ? firstUsage.update.size : undefined
+    expect(firstSize).toBe(128000)
+    expect(providerCalls).toBe(2)
+
+    context = 64000
+    events.push({
+      id: "evt_catalog_usage",
+      type: "catalog.updated",
+      properties: {},
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    await Effect.runPromise(service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "second" }] }))
+    const secondUsage = updates.findLast((update) => update.update.sessionUpdate === "usage_update")
+    expect(secondUsage?.update.sessionUpdate).toBe("usage_update")
+    const secondSize = secondUsage?.update.sessionUpdate === "usage_update" ? secondUsage.update.size : undefined
+    expect(secondSize).toBe(64000)
+    expect(providerCalls).toBe(4)
+    events.close()
   })
 
   it("normal text prompt sends model variant mode and converted parts", async () => {

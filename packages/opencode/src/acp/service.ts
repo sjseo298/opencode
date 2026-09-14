@@ -72,6 +72,11 @@ export type Interface = {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ACP/Service") {}
 
+type UsageRuntime = {
+  service: UsageService.Interface
+  invalidateContextLimits: () => void
+}
+
 export function make(input: {
   sdk: OpencodeClient
   connection?: ServiceConnection
@@ -82,10 +87,23 @@ export function make(input: {
 }): Interface {
   const session = input.session ?? makeSessionService()
   const directoryService = input.directory ?? makeDirectoryService(input.sdk)
+  const usage = input.usage ? makeProvidedUsageRuntime(input.usage) : makeUsageService(input.sdk)
   const registeredMcp = new Map<string, Set<string>>()
   const sessionSnapshots = new Map<string, Directory.Snapshot>()
+  const directorySnapshotRevision = new Map<string, number>()
+  let catalogRevision = 0
   const events = input.connection
-    ? ACPEvent.start({ sdk: input.sdk, connection: input.connection, session })
+    ? ACPEvent.start({
+        sdk: input.sdk,
+        connection: input.connection,
+        session,
+        onEvent(event) {
+          if (event.type !== "catalog.updated") return
+          catalogRevision += 1
+          sessionSnapshots.clear()
+          usage.invalidateContextLimits()
+        },
+      })
     : undefined
   if (events) input.eventSubscription?.(events)
   const runUntilIdle = <A>(sessionId: string, fn: () => Promise<A>) =>
@@ -147,7 +165,12 @@ export function make(input: {
 
   const directorySnapshot = Effect.fn("ACP.directorySnapshot")(function* (cwd: string) {
     const started = performance.now()
-    const snapshot = yield* directoryService.get(cwd)
+    const current = directorySnapshotRevision.get(cwd)
+    const snapshot =
+      current === undefined || current === catalogRevision
+        ? yield* directoryService.get(cwd)
+        : yield* directoryService.refresh(cwd)
+    directorySnapshotRevision.set(cwd, catalogRevision)
     ACPProfile.duration("acp.directory.snapshot", started)
     return snapshot
   })
@@ -539,7 +562,7 @@ export function make(input: {
             ),
           "session",
         )
-        yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
+        yield* sendUsageUpdate(usage.service, input.connection, current.id, current.cwd)
         return yield* promptResponse(response.info, params.messageId)
       }
 
@@ -563,7 +586,7 @@ export function make(input: {
             ),
           "session",
         )
-        yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
+        yield* sendUsageUpdate(usage.service, input.connection, current.id, current.cwd)
         return yield* promptResponse(response.info, params.messageId)
       }
 
@@ -585,10 +608,17 @@ export function make(input: {
         )
       }
 
-      yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
+      yield* sendUsageUpdate(usage.service, input.connection, current.id, current.cwd)
       return yield* promptResponse(undefined, params.messageId)
     }),
     cancel,
+  }
+}
+
+function makeProvidedUsageRuntime(service: UsageService.Interface): UsageRuntime {
+  return {
+    service,
+    invalidateContextLimits() {},
   }
 }
 
@@ -614,7 +644,7 @@ function makeDirectoryService(sdk: OpencodeClient) {
   ).runSync(Directory.Service.use((service) => Effect.succeed(service)))
 }
 
-function makeUsageService(sdk: OpencodeClient) {
+function makeUsageService(sdk: OpencodeClient): UsageRuntime {
   const limits = new Map<string, Promise<number | undefined>>()
   const contextLimit: UsageService.Interface["contextLimit"] = Effect.fn("ACP.promptUsage.contextLimit")(
     function* (params) {
@@ -680,13 +710,18 @@ function makeUsageService(sdk: OpencodeClient) {
     )
   })
 
-  return UsageService.Service.of({
-    buildUsage: UsageService.buildUsage,
-    latestAssistantMessage: UsageService.latestAssistantMessage,
-    totalSessionCost: UsageService.totalSessionCost,
-    contextLimit,
-    sendUpdate,
-  })
+  return {
+    service: UsageService.Service.of({
+      buildUsage: UsageService.buildUsage,
+      latestAssistantMessage: UsageService.latestAssistantMessage,
+      totalSessionCost: UsageService.totalSessionCost,
+      contextLimit,
+      sendUpdate,
+    }),
+    invalidateContextLimits() {
+      limits.clear()
+    },
+  }
 }
 
 function replayMessages(subscription: ACPEvent.Subscription | undefined, messages: SessionMessageResponse[]) {
@@ -893,14 +928,13 @@ function promptErrorMessage(error: AssistantError) {
 }
 
 function sendUsageUpdate(
-  usage: UsageService.Interface | undefined,
-  sdk: OpencodeClient,
+  usage: UsageService.Interface,
   connection: ServiceConnection | undefined,
   sessionID: string,
   directory: string,
 ) {
   if (!connection) return Effect.void
-  return (usage ?? makeUsageService(sdk)).sendUpdate({
+  return usage.sendUpdate({
     connection,
     sessionID,
     directory,

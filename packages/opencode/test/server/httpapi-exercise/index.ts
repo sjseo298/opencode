@@ -593,6 +593,18 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       check(body === false, "background route should be a no-op without running subagents")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/context/refresh", "experimental.session.context.refresh")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Context refresh route owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/context/refresh", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { providerID: "missing", modelID: "missing" },
+    }))
+    .json(200, (body) => {
+      check(body === false, "context refresh route should return false when target model is unavailable")
+    }),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .post("/sync/history", "sync.history.list")

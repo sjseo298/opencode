@@ -24,6 +24,7 @@ const TTL_MS = 15_000
 const FETCH_TIMEOUT_MS = 15_000
 const ASK_TIMEOUT_MS = 90_000
 const HEADER = "llama.cpp context"
+export const FORCE_CONTEXT_REFRESH_OPTION = "__opencode_force_context_refresh"
 
 type Entry = {
   checkedAt: number
@@ -60,6 +61,7 @@ export async function LlamacppContextPlugin(input: PluginInput): Promise<Hooks> 
     sessionID: string
     model: { id: string; providerID: string; name: string; limit: { context: number } }
     provider: { options?: Record<string, any> }
+    force?: boolean
   }) {
     const model = params.model
     if (!PROVIDERS.includes(model.providerID)) return
@@ -70,7 +72,7 @@ export async function LlamacppContextPlugin(input: PluginInput): Promise<Hooks> 
     const key = `${model.providerID}/${model.id}`
     let entry = cache.get(key)
     const now = Date.now()
-    if (!entry || now - entry.checkedAt >= TTL_MS) {
+    if (!entry || params.force || now - entry.checkedAt >= TTL_MS) {
       const url = propsUrl(params.provider.options?.baseURL)
       if (!url) return
       let nCtx: number | undefined
@@ -89,7 +91,7 @@ export async function LlamacppContextPlugin(input: PluginInput): Promise<Hooks> 
     }
     if (entry.nCtx === undefined) return
     if (entry.nCtx === model.limit.context) return
-    if (entry.dismissed === entry.nCtx) return
+    if (!params.force && entry.dismissed === entry.nCtx) return
 
     const accept = `Use ${entry.nCtx} tokens`
     const keep = "Keep current context"
@@ -143,11 +145,12 @@ export async function LlamacppContextPlugin(input: PluginInput): Promise<Hooks> 
   }
 
   return {
-    "chat.params": (params) =>
+    "chat.params": (params, output) =>
       check({
         sessionID: params.sessionID,
         model: params.model,
         provider: params.provider,
+        force: output.options[FORCE_CONTEXT_REFRESH_OPTION] === true,
       }),
   }
 }

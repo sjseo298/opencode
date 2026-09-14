@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { llmClient } from "@opencode-ai/core/effect/app-node-platform"
+import { Catalog } from "@opencode-ai/core/catalog"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -111,6 +112,9 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      if (prepared.catalogUpdated) {
+        yield* events.publish(Catalog.Event.Updated, {})
+      }
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system

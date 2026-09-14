@@ -2027,6 +2027,7 @@ export type Config = {
     openTelemetry?: boolean
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
+    doom_loop_threshold?: number
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
@@ -7860,6 +7861,38 @@ export type ExperimentalSessionBackgroundResponses = {
 
 export type ExperimentalSessionBackgroundResponse =
   ExperimentalSessionBackgroundResponses[keyof ExperimentalSessionBackgroundResponses]
+
+export type ExperimentalSessionContextRefreshData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/context/refresh"
+}
+
+export type ExperimentalSessionContextRefreshErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalSessionContextRefreshError =
+  ExperimentalSessionContextRefreshErrors[keyof ExperimentalSessionContextRefreshErrors]
+
+export type ExperimentalSessionContextRefreshResponses = {
+  /**
+   * Refreshed dynamic model context
+   */
+  200: boolean
+}
+
+export type ExperimentalSessionContextRefreshResponse =
+  ExperimentalSessionContextRefreshResponses[keyof ExperimentalSessionContextRefreshResponses]
 
 export type ExperimentalResourceListData = {
   body?: never

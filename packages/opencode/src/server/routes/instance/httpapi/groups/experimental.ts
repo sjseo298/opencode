@@ -98,6 +98,7 @@ export const ExperimentalPaths = {
   worktreeReset: "/experimental/worktree/reset",
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
+  sessionContextRefresh: "/experimental/session/:sessionID/context/refresh",
   resource: "/experimental/resource",
 } as const
 
@@ -243,6 +244,19 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "Background subagents",
             description:
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
+          }),
+        ),
+        HttpApiEndpoint.post("sessionContextRefresh", ExperimentalPaths.sessionContextRefresh, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Refreshed dynamic model context"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.context.refresh",
+            summary: "Refresh dynamic model context",
+            description:
+              "Force a dynamic context refresh for the current session model and publish catalog updates when limits change.",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

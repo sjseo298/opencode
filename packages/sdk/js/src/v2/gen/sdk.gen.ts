@@ -44,6 +44,8 @@ import type {
   ExperimentalResourceListResponses,
   ExperimentalSessionBackgroundErrors,
   ExperimentalSessionBackgroundResponses,
+  ExperimentalSessionContextRefreshErrors,
+  ExperimentalSessionContextRefreshResponses,
   ExperimentalSessionListErrors,
   ExperimentalSessionListResponses,
   ExperimentalWorkspaceAdapterListErrors,
@@ -802,6 +804,44 @@ export class Console extends HeyApiClient {
   }
 }
 
+export class Context extends HeyApiClient {
+  /**
+   * Refresh dynamic model context
+   *
+   * Force a dynamic context refresh for the current session model and publish catalog updates when limits change.
+   */
+  public refresh<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalSessionContextRefreshResponses,
+      ExperimentalSessionContextRefreshErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/context/refresh",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Session extends HeyApiClient {
   /**
    * List sessions
@@ -883,6 +923,11 @@ export class Session extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _context?: Context
+  get context(): Context {
+    return (this._context ??= new Context({ client: this.client }))
   }
 }
 

@@ -128,6 +128,7 @@ const sessionBindingCommands = [
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
+  "session.context.refresh",
   "session.first",
   "session.last",
   "session.messages_last_user",
@@ -745,6 +746,77 @@ export function Session() {
       category: "Session",
       run: () => {
         setShowGenericToolOutput((prev) => !prev)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Refresh dynamic model context",
+      value: "session.context.refresh",
+      category: "Session",
+      slash: {
+        name: "context",
+        aliases: ["refresh-context"],
+      },
+      run: () => {
+        const selected = local.model.current()
+        if (!selected) {
+          toast.show({
+            variant: "warning",
+            message: "No model selected for this session",
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+        const provider = providers().get(selected.providerID)
+        if (!provider) {
+          toast.show({
+            variant: "warning",
+            message: `Provider not found: ${selected.providerID}`,
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+        if (!provider.models[selected.modelID]) {
+          toast.show({
+            variant: "warning",
+            message: `Model not found: ${selected.providerID}/${selected.modelID}`,
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
+        void sdk.client.experimental.session.context
+          .refresh({
+            sessionID: route.sessionID,
+            workspace: project.workspace.current(),
+          })
+          .then((res) => {
+            if (res.data) {
+              toast.show({
+                variant: "success",
+                title: "llama.cpp context",
+                message: "Context refreshed from server",
+                duration: 3000,
+              })
+              return
+            }
+            toast.show({
+              variant: "info",
+              title: "llama.cpp context",
+              message: "Context unchanged",
+              duration: 3000,
+            })
+          })
+          .catch(() => {
+            toast.show({
+              variant: "error",
+              title: "llama.cpp context",
+              message: "Failed to refresh context",
+              duration: 3000,
+            })
+          })
         dialog.clear()
       },
     },

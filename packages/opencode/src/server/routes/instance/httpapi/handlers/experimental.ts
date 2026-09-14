@@ -1,13 +1,16 @@
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
+import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "@/mcp"
+import { Plugin } from "@/plugin"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
-import type { SessionID } from "@/session/schema"
+import { MessageID, type SessionID } from "@/session/schema"
+import { LLMRequestPrep } from "@/session/llm/request"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
@@ -16,6 +19,9 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ConsoleSwitchPayload, SessionListQuery, ToolListQuery, WorktreeApiError } from "../groups/experimental"
+import { Provider } from "@/provider/provider"
+import { Catalog } from "@opencode-ai/core/catalog"
+import { EventV2Bridge } from "@/event-v2-bridge"
 
 function mapWorktreeError<A, R>(self: Effect.Effect<A, Worktree.Error, R>) {
   return self.pipe(
@@ -27,14 +33,18 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
   Effect.gen(function* () {
     const account = yield* Account.Service
     const agents = yield* Agent.Service
+    const auth = yield* Auth.Service
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
+    const plugin = yield* Plugin.Service
     const project = yield* Project.Service
     const registry = yield* ToolRegistry.Service
     const worktreeSvc = yield* Worktree.Service
     const sessions = yield* Session.Service
     const background = yield* BackgroundJob.Service
     const flags = yield* RuntimeFlags.Service
+    const providers = yield* Provider.Service
+    const events = yield* EventV2Bridge.Service
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
       return { backgroundSubagents: flags.experimentalBackgroundSubagents }
@@ -171,6 +181,57 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return promoted.some((job) => job !== undefined)
     })
 
+    const sessionContextRefresh = Effect.fn("ExperimentalHttpApi.sessionContextRefresh")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      const session = yield* sessions.get(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      const modelRef = session.model
+      if (!modelRef) return false
+      const loaded = yield* providers
+        .getModel(modelRef.providerID, modelRef.id)
+        .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
+      if (!loaded) return false
+      const configuredAgent = session.agent ? yield* agents.get(session.agent) : undefined
+      const agent = configuredAgent ?? (yield* agents.defaultInfo())
+      const authInfo = yield* auth.get(loaded.providerID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      const provider = yield* providers.getProvider(loaded.providerID)
+      const before = loaded.limit.context
+      const user = {
+        id: MessageID.ascending(),
+        role: "user" as const,
+        sessionID: ctx.params.sessionID,
+        time: { created: Date.now() },
+        agent: agent.name,
+        model: {
+          providerID: loaded.providerID,
+          modelID: loaded.id,
+          ...(modelRef.variant && modelRef.variant !== "default" ? { variant: modelRef.variant } : {}),
+        },
+      }
+      const prepared = yield* LLMRequestPrep.prepare({
+        user,
+        sessionID: ctx.params.sessionID,
+        parentSessionID: session.parentID,
+        model: loaded,
+        agent,
+        permission: session.permission,
+        system: [],
+        messages: [],
+        tools: {},
+        provider,
+        auth: authInfo,
+        plugin,
+        flags,
+        isWorkflow: false,
+        forceContextRefresh: true,
+      })
+      const changed = prepared.catalogUpdated || loaded.limit.context !== before
+      if (changed) {
+        yield* events.publish(Catalog.Event.Updated, {})
+      }
+      return changed
+    })
+
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
       return yield* mcp.resources()
     })
@@ -188,6 +249,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("worktreeReset", worktreeReset)
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
+      .handle("sessionContextRefresh", sessionContextRefresh)
       .handle("resource", resource)
   }),
 )

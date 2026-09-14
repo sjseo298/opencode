@@ -13,6 +13,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
+import { FORCE_CONTEXT_REFRESH_OPTION } from "@/plugin/llamacpp-context"
 import { mergeDeep } from "remeda"
 
 const USER_AGENT = `opencode/${InstallationVersion}`
@@ -33,12 +34,14 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  readonly forceContextRefresh?: boolean
 }
 
 export type Prepared = {
   readonly system: string[]
   readonly messages: ModelMessage[]
   readonly tools: Record<string, Tool>
+  readonly catalogUpdated: boolean
   readonly params: {
     readonly temperature?: number
     readonly topP?: number
@@ -89,6 +92,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
         providerOptions: input.provider.options,
       })
   const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
+  if (input.forceContextRefresh) options[FORCE_CONTEXT_REFRESH_OPTION] = true
   if (
     input.model.api.npm === "@ai-sdk/azure" &&
     (input.provider.options.useCompletionUrls || input.model.options.useCompletionUrls || options.useCompletionUrls)
@@ -111,6 +115,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           ...input.messages,
         ]
 
+  const contextBefore = input.model.limit.context
+
   const params = yield* input.plugin.trigger(
     "chat.params",
     {
@@ -130,6 +136,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       options,
     },
   )
+  const catalogUpdated = contextBefore !== input.model.limit.context
 
   const { headers } = yield* input.plugin.trigger(
     "chat.headers",
@@ -182,6 +189,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system,
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
+    catalogUpdated,
     params,
     messageTransformOptions: options,
     headers: {

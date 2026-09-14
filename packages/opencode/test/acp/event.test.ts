@@ -552,6 +552,23 @@ describe("acp event routing", () => {
     expect(harness.updates).toHaveLength(0)
   })
 
+  it("calls onEvent for each consumed payload", async () => {
+    const harness = createHarness()
+    const seen: string[] = []
+    const subscription = new ACPEvent.Subscription({
+      sdk: harness.sdk,
+      connection: harness.connection,
+      session: harness.session,
+      onEvent(event) {
+        seen.push(event.type)
+      },
+    })
+
+    await subscription.handle(textDelta("ses_missing", "msg_missing", "part_missing", "ignored"))
+
+    expect(seen).toEqual(["message.part.delta"])
+  })
+
   it("exposes the shell command on the synthetic pending tool call", async () => {
     const harness = createHarness()
     await Effect.runPromise(harness.session.create({ id: "ses_tool", cwd: "/workspace" }))

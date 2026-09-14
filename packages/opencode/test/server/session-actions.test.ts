@@ -107,4 +107,23 @@ describe("session action routes", () => {
       }),
     { git: true },
   )
+
+  it.instance(
+    "experimental context refresh route returns false when session has no model",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* Effect.acquireRelease(SessionNs.use.create({}), (created) =>
+          SessionNs.use.remove(created.id).pipe(Effect.ignore),
+        )
+
+        const res = yield* requestInDirectory(`/experimental/session/${session.id}/context/refresh`, test.directory, {
+          method: "POST",
+        })
+
+        expect(res.status).toBe(200)
+        expect(yield* res.json).toBe(false)
+      }),
+    { git: true },
+  )
 })

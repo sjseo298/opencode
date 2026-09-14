@@ -30,7 +30,12 @@ type GlobalEventStream = {
   stream: AsyncIterable<GlobalEventEnvelope>
 }
 
-export function start(input: { sdk: OpencodeClient; connection: Connection; session: ACPSession.Interface }) {
+export function start(input: {
+  sdk: OpencodeClient
+  connection: Connection
+  session: ACPSession.Interface
+  onEvent?: (event: Event) => void
+}) {
   const subscription = new Subscription(input)
   subscription.start()
   return subscription
@@ -51,6 +56,7 @@ export class Subscription {
       sdk: OpencodeClient
       connection: Connection
       session: ACPSession.Interface
+      onEvent?: (event: Event) => void
     },
   ) {
     this.permission = new ACPPermission.Handler(input)
@@ -91,6 +97,7 @@ export class Subscription {
   }
 
   async handle(event: Event) {
+    this.input.onEvent?.(event)
     switch (event.type) {
       case "session.status":
         if (event.properties.status.type === "idle") this.idle(event.properties.sessionID)
