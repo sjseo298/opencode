@@ -10,9 +10,10 @@ Requiere: pip install rich
 
 import json
 import os
+import glob
+import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit
@@ -62,6 +63,27 @@ USER_CONFIG = Path.home() / ".config" / "opencode" / "opencode.jsonc"
 
 DEFAULT_OUTPUT_LIMIT = 32768
 DEFAULT_MLX_SCAN_ROOTS = ["/Volumes/Samsung2T/lmstudio"]
+TEMP_PATTERN_KEYWORDS = (
+    "tmp",
+    "temp",
+    "cache",
+    ".ds_store",
+    "bun-build",
+    "tsbuildinfo",
+)
+TEMP_PATTERN_EXACT = {
+    ".ds_store",
+    "*~",
+    ".tmp",
+    "tmp",
+    ".turbo",
+    ".sst",
+    "logs",
+    "result",
+    "*.bun-build",
+    "*.log",
+    "tsconfig.tsbuildinfo",
+}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -125,6 +147,19 @@ def infer_author_from_model_id(model_id: str) -> str:
 def fmt_number(n: int) -> str:
     """Format number with thousands separators."""
     return f"{n:,}"
+
+
+def fmt_bytes(num_bytes: int) -> str:
+    """Format bytes to a compact human-readable string."""
+    size = float(max(num_bytes, 0))
+    units = ["B", "KB", "MB", "GB", "TB"]
+    for unit in units:
+        if size < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return "0 B"
 
 
 def parse_positive_int(value: object) -> int:
@@ -195,6 +230,229 @@ def get_mlx_scan_roots() -> list[Path]:
     else:
         roots = [Path(p) for p in DEFAULT_MLX_SCAN_ROOTS]
     return roots
+
+
+def is_temporary_gitignore_pattern(pattern: str) -> bool:
+    """Heuristic: keep only temporary/cache-like entries from .gitignore."""
+    normalized = pattern.strip().lower().lstrip("/").rstrip("/")
+    while normalized.startswith("**/"):
+        normalized = normalized[3:]
+    if not normalized:
+        return False
+    if normalized in TEMP_PATTERN_EXACT:
+        return True
+
+    parts = [part for part in normalized.split("/") if part]
+    for part in parts:
+        if part in TEMP_PATTERN_KEYWORDS:
+            return True
+        if part.startswith("tmp.") or part.endswith(".tmp"):
+            return True
+        if part.startswith("cache.") or part.endswith(".cache"):
+            return True
+    return False
+
+
+def load_temp_gitignore_patterns(gitignore_path: Path) -> list[str]:
+    """Load temporary-oriented patterns from root .gitignore."""
+    if not gitignore_path.exists():
+        return []
+
+    patterns: list[str] = []
+    try:
+        lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith("!"):
+            continue
+        if is_temporary_gitignore_pattern(line) and line not in patterns:
+            patterns.append(line)
+    return patterns
+
+
+def pattern_to_globs(pattern: str) -> list[str]:
+    """Convert a .gitignore entry to a few filesystem globs."""
+    anchored = pattern.startswith("/")
+    directory_only = pattern.endswith("/")
+    body = pattern.lstrip("/").rstrip("/")
+    if not body:
+        return []
+
+    has_slash = "/" in body
+    out: list[str] = []
+    if anchored or has_slash:
+        out.append(body)
+        if directory_only:
+            out.append(f"{body}/**")
+    else:
+        out.append(body)
+        out.append(f"**/{body}")
+        if directory_only:
+            out.append(f"{body}/**")
+            out.append(f"**/{body}/**")
+
+    unique: list[str] = []
+    for item in out:
+        if item not in unique:
+            unique.append(item)
+    return unique
+
+
+def list_temp_matches(repo_root: Path, pattern: str) -> list[Path]:
+    """Resolve filesystem matches for one temporary pattern."""
+    matches: list[Path] = []
+    for rel_glob in pattern_to_globs(pattern):
+        for raw_path in glob.glob(str(repo_root / rel_glob), recursive=True):
+            path = Path(raw_path)
+            if not path.exists() and not path.is_symlink():
+                continue
+            try:
+                rel = path.relative_to(repo_root)
+            except ValueError:
+                continue
+            if ".git" in rel.parts:
+                continue
+            matches.append(path)
+    return matches
+
+
+def collapse_temp_targets(repo_root: Path, paths: list[Path]) -> list[Path]:
+    """Drop duplicates and child paths when parent directory is already selected."""
+    kept: list[Path] = []
+    for path in sorted(paths, key=lambda p: (len(p.parts), str(p))):
+        try:
+            rel = path.relative_to(repo_root)
+        except ValueError:
+            continue
+        if ".git" in rel.parts:
+            continue
+
+        skip = False
+        for parent in kept:
+            if parent == path or parent in path.parents:
+                skip = True
+                break
+        if not skip:
+            kept.append(path)
+    return kept
+
+
+def path_usage(path: Path) -> tuple[int, int]:
+    """Return (file_count, total_bytes) for a file/dir path."""
+    if not path.exists() and not path.is_symlink():
+        return (0, 0)
+
+    if path.is_symlink():
+        try:
+            return (1, int(path.lstat().st_size))
+        except OSError:
+            return (0, 0)
+
+    if path.is_file():
+        try:
+            return (1, int(path.stat().st_size))
+        except OSError:
+            return (0, 0)
+
+    if not path.is_dir():
+        return (0, 0)
+
+    files = 0
+    total = 0
+    for root, dirs, file_names in os.walk(path):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for name in file_names:
+            fpath = Path(root) / name
+            try:
+                stat = fpath.lstat() if fpath.is_symlink() else fpath.stat()
+            except OSError:
+                continue
+            files += 1
+            total += int(stat.st_size)
+    return (files, total)
+
+
+def collect_temp_cleanup_targets(repo_root: Path) -> tuple[list[Path], list[str], int, int]:
+    """Collect root .gitignore temporary targets and aggregate size usage."""
+    gitignore_path = repo_root / ".gitignore"
+    patterns = load_temp_gitignore_patterns(gitignore_path)
+    if not patterns:
+        return ([], [], 0, 0)
+
+    matches: list[Path] = []
+    for pattern in patterns:
+        matches.extend(list_temp_matches(repo_root, pattern))
+
+    targets = collapse_temp_targets(repo_root, matches)
+    total_files = 0
+    total_bytes = 0
+    for target in targets:
+        files, size = path_usage(target)
+        total_files += files
+        total_bytes += size
+
+    return (targets, patterns, total_files, total_bytes)
+
+
+def cleanup_temp_targets(targets: list[Path]) -> tuple[int, int, int, list[str]]:
+    """Delete temporary targets. Returns (paths, files, bytes, errors)."""
+    removed_paths = 0
+    removed_files = 0
+    freed_bytes = 0
+    errors: list[str] = []
+
+    for target in sorted(targets, key=lambda p: len(p.parts), reverse=True):
+        files, size = path_usage(target)
+        if not target.exists() and not target.is_symlink():
+            continue
+
+        try:
+            if target.is_symlink() or target.is_file():
+                target.unlink(missing_ok=True)
+            elif target.is_dir():
+                shutil.rmtree(target)
+            else:
+                continue
+        except OSError as exc:
+            errors.append(f"{target}: {exc}")
+            continue
+
+        removed_paths += 1
+        removed_files += files
+        freed_bytes += size
+
+    return (removed_paths, removed_files, freed_bytes, errors)
+
+
+def prompt_temp_cleanup_on_startup() -> None:
+    """Ask to clean temporary files discovered from .gitignore on startup."""
+    repo_root = SCRIPT_DIR.parent
+    console.print("[dim]Buscando archivos temporales (.gitignore)...[/]")
+    targets, patterns, total_files, total_bytes = collect_temp_cleanup_targets(repo_root)
+    if not patterns:
+        return
+
+    console.print(
+        f"[dim]Temporales detectados: {fmt_number(total_files)} archivos · {fmt_bytes(total_bytes)}[/]"
+    )
+    if total_files == 0:
+        console.print("[green]✓ No se encontraron archivos temporales para limpiar.[/]")
+        return
+
+    if not Confirm.ask("¿Limpiar archivos temporales ahora?", default=False):
+        return
+
+    removed_paths, removed_files, freed_bytes, errors = cleanup_temp_targets(targets)
+    console.print(
+        "[green]✓ Limpieza completada: "
+        f"{fmt_number(removed_files)} archivos · {fmt_bytes(freed_bytes)} "
+        f"({removed_paths} rutas).[/]"
+    )
+    if errors:
+        console.print(f"[yellow]⚠ No se pudieron eliminar {len(errors)} ruta(s).[/]")
 
 
 def is_mlx_model_dir(model_dir: Path) -> bool:
@@ -1627,6 +1885,7 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    prompt_temp_cleanup_on_startup()
     show_welcome()
 
     menu_items = {
