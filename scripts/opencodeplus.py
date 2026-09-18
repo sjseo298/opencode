@@ -1885,7 +1885,6 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    prompt_temp_cleanup_on_startup()
     show_welcome()
 
     menu_items = {
@@ -1896,6 +1895,7 @@ def main() -> None:
         "5": ("Seleccionar Modelo", action_select_model),
         "6": ("Build Completo", action_run_build),
         "7": ("Sync de Fork", action_sync_fork),
+        "8": ("Limpiar temporales", prompt_temp_cleanup_on_startup),
         "0": ("Salir", lambda: None),
     }
 
@@ -1914,9 +1914,10 @@ def main() -> None:
         console.print("  [5] Modelo por defecto — Selecciona el modelo por defecto")
         console.print("  [6] Build Completo     — Sync fork + upstream + instalar deps + compilar")
         console.print("  [7] Sync de Fork       — Sync fork (origin) + instalar deps + compilar")
+        console.print("  [8] Limpiar temporales — Escanea y limpia temporales según .gitignore")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8"], default="0")
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
@@ -1935,6 +1936,8 @@ def main() -> None:
             action_run_build()
         elif choice == "7":
             action_sync_fork()
+        elif choice == "8":
+            prompt_temp_cleanup_on_startup()
 
 
 if __name__ == "__main__":
