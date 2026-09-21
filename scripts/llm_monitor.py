@@ -113,6 +113,7 @@ def get_llamacpp_server_state(base: str) -> dict:
         "deferred": 0,
         "slots_busy": False,
         "metrics_blocked": _is_metrics_blocked(base),
+        "last_error": "",
     }
 
     try:
@@ -137,8 +138,8 @@ def get_llamacpp_server_state(base: str) -> dict:
                 for s in slots
                 if isinstance(s, dict)
             )
-    except (HTTPError, URLError, OSError, json.JSONDecodeError):
-        pass
+    except Exception as e:
+        out["last_error"] = str(e) or e.__class__.__name__
 
     if out["status_ok"]:
         smart_proxy = str(out["server_name"] or "").strip().lower() == "smart-model-proxy"
@@ -272,7 +273,8 @@ def _send_sync(url: str, payload: bytes, socket_timeout: int) -> tuple:
             data = json.loads(resp.read().decode())
         choices = data.get("choices") or []
         if choices:
-            content = (choices[0].get("message") or {}).get("content")
+            msg = choices[0].get("message") or {}
+            content = (msg.get("content") or msg.get("reasoning_content") or "").strip()
             if content:
                 return ("ok", content)
         return ("fatal", "respuesta del LLM sin contenido")
@@ -418,8 +420,9 @@ def send_monitored(
             if not state_ok:
                 remaining = int(load_deadline - now)
                 if remaining <= 0:
-                    return ("fatal", f"el servidor no respondió y el modelo no cargó tras {load_wait}s")
-                phase_print(f"Esperando el servidor... ({remaining}s restantes)")
+                    return ("fatal", f"el servidor en {base} no respondió y el modelo no cargó tras {load_wait}s")
+                err_hint = f" ({state['last_error']})" if state.get("last_error") else ""
+                phase_print(f"Esperando el servidor en {base}{err_hint}... ({remaining}s restantes)")
                 time.sleep(min(POLL_INTERVAL, max(1, remaining)))
                 continue
 
@@ -479,8 +482,9 @@ def send_monitored(
         if not state_ok:
             remaining = int(load_deadline - now)
             if remaining <= 0:
-                return ("fatal", f"el servidor se volvió inaccesible y el modelo no cargó tras {load_wait}s")
-            phase_print(f"Esperando el servidor... ({remaining}s restantes)")
+                return ("fatal", f"el servidor en {base} se volvió inaccesible y el modelo no cargó tras {load_wait}s")
+            err_hint = f" ({state['last_error']})" if state.get("last_error") else ""
+            phase_print(f"Esperando el servidor en {base}{err_hint}... ({remaining}s restantes)")
             time.sleep(min(POLL_INTERVAL, max(1, remaining)))
             continue
 
