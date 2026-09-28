@@ -6,16 +6,20 @@ After a stash pop or merge conflict, this script:
 1. Detects conflicted files
 2. Sends the conflict context to the LLM
 3. Applies the LLM's resolution
+4. Verifies resolution with typecheck and project compilation (build & smoke test)
 
 Usage:
-  python3 resolve-conflicts.py [--auto] [--llm-timeout SECONDS]
+  python3 resolve-conflicts.py [--auto] [--compile] [--skip-compile] [--llm-timeout SECONDS]
 
 Options:
-  --auto         Skip confirmation before applying LLM resolution
-  --llm-timeout  Override LLM timeout (default: 600)
+  --auto          Skip confirmation before applying LLM resolution
+  --compile       Force compilation and smoke test after resolution
+  --skip-compile  Skip compilation check
+  --llm-timeout   Override LLM timeout (default: 600)
 """
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -132,32 +136,37 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
         {
             "role": "system",
             "content": (
-                "Eres un asistente experto en resolución de conflictos de git. "
-                "Debes analizar el conflicto y proporcionar una resolución clara y correcta.\n\n"
-                "REGLAS:\n"
-                "1. Debes devolver SOLO el contenido del archivo resuelto, SIN marcadores de conflicto.\n"
-                "2. NO incluyas marcas de inicio o fin como ``` o ```\n"
-                "3. No incluyas explicaciones, comentarios ni texto adicional.\n"
-                "4. Si el conflicto tiene dos opciones claras (ours y theirs), elige la mejor opción\n"
-                "   o combina ambas según el contexto.\n"
-                "5. Si no puedes resolver el conflicto, responde con: <UNRESOLVABLE>\n"
-                "6. Responde en español.\n\n"
-                "BLOQUES FORK:\n"
-                "Este repositorio tiene bloques de código específicos del fork marcados con:\n"
-                "  // ── FORK: [nombre] ──\n"
-                "  [código]\n"
-                "  // ── END FORK ──\n\n"
-                "Cuando resuelvas conflictos:\n"
-                "1. SIEMPRE preserva estos bloques FORK intactos.\n"
-                "2. Sigue las instrucciones MERGE INSTRUCTIONS en los comentarios del bloque.\n"
-                "3. Si upstream cambió nombres de variables (ej: cfg -> config), actualiza\n"
-                "   el bloque FORK para usar los nuevos nombres.\n"
-                "4. Mantén el bloque en la misma posición lógica relativa al código circundante."
+                "Eres un asistente experto en ingeniería de software y resolución de conflictos de merge de Git en TypeScript, Bun y Effect.\n"
+                "Se te proporcionará una sección de código que contiene un conflicto delimitado por <<<<<<<, =======, y >>>>>>>.\n\n"
+                "OBJETIVO:\n"
+                "Producir ÚNICAMENTE el bloque de código resultante que reemplazará el conflicto, integrando armoniosamente los cambios.\n\n"
+                "REGLAS CRÍTICAS:\n"
+                "1. Devuelve SOLAMENTE el código resuelto correspondiente a la sección en conflicto.\n"
+                "2. NO devuelvas el archivo entero.\n"
+                "3. NUNCA incluyas bloques markdown (``` ni ```ts, etc.). Devuelve solo texto plano de código.\n"
+                "4. NUNCA agregues comentarios explicativos antes o después del código.\n"
+                "5. Elimina completamente todos los delimitadores de conflicto (<<<<<<<, =======, >>>>>>>).\n\n"
+                "CRITERIOS DE INTEGRACIÓN TÉCNICA:\n"
+                "1. COMPATIBILIDAD CON COMPILACIÓN: Tras aplicar tu código, el proyecto se compilará con `bun typecheck` y `build.ts`.\n"
+                "   No introduzcas variables no declaradas, imports faltantes, ni rompas firmas o interfaces.\n"
+                "2. FUSIÓN DE REFACTORIZACIONES Y CUSTOMIZACIONES:\n"
+                "   - Si upstream refactoriza una lógica (ej. crea un helper o renombra parámetros) y el fork tiene personalizaciones (ej. timeouts de 2 horas o flags):\n"
+                "     INTEGRA las personalizaciones del fork DENTRO de la nueva arquitectura de upstream.\n"
+                "   - NO descartes ciegamente ni los cambios de upstream ni las personalizaciones del fork.\n"
+                "3. CONSERVACIÓN DE EXPORTS:\n"
+                "   - Si la sección en conflicto incluye exports (como export const, export function, export namespace), NUNCA los borres.\n"
+                "4. BLOQUES ESPECÍFICOS DEL FORK:\n"
+                "   - Los bloques marcados con:\n"
+                "     // ── FORK: [nombre] ──\n"
+                "     [código]\n"
+                "     // ── END FORK ──\n"
+                "     deben preservarse intactos y adaptarse a las variables actualizadas de upstream.\n"
+                "5. Si la resolución es imposible sin romper el contrato del código, responde exactamente: <UNRESOLVABLE>"
             ),
         },
         {
             "role": "user",
-            "content": f"{file_header}\n\n{conflict_content}",
+            "content": f"{file_header}\n\nConflicto a resolver:\n{conflict_content}",
         },
     ]
 
@@ -179,6 +188,91 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
         monitor,
     )
 
+def fix_compilation_error_with_llm(
+    file_path: Path,
+    repo_dir: Path,
+    error_msg: str,
+    model_info: dict,
+    timeout: int,
+) -> bool:
+    """Ask LLM to fix a compilation or typecheck error in the specified file."""
+    url = f"{model_info['base_url']}/chat/completions"
+    content = file_path.read_text()
+    rel_path = file_path.relative_to(repo_dir)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Eres un asistente experto en ingeniería de software y depuración en TypeScript, Bun y Effect.\n"
+                "Se aplicó una resolución de conflicto de merge, pero la compilación/typecheck falló con un error.\n"
+                "Debes proporcionar un reemplazo exacto (bloque old_str por new_str) para corregir el error en el archivo indicado.\n\n"
+                "REGLAS:\n"
+                "1. Devuelve ÚNICAMENTE un objeto JSON válido con las claves 'old_str' y 'new_str'.\n"
+                "2. 'old_str' debe ser un fragmento de código que exista LITERALMENTE en el archivo.\n"
+                "3. 'new_str' debe ser el código corregido que resuelve el error sin romper funcionalidades del fork ni de upstream.\n"
+                "4. NUNCA agregues explicaciones fuera del JSON ni uses bloques markdown ```json.\n"
+                'Ejemplo:\n{"old_str": "const timeout = 300_000", "new_str": "const timeout = 7_200_000"}'
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Archivo: {rel_path}\n\n"
+                f"Error de compilación / typecheck:\n{error_msg}\n\n"
+                f"Contenido del archivo (primeras 200 líneas):\n"
+                + "\n".join(content.splitlines()[:200])
+            ),
+        },
+    ]
+
+    payload = json.dumps({
+        "model": model_info["model_id"],
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 4096,
+    }).encode("utf-8")
+
+    monitor = model_info.get("provider") == "llamacpp" and bool(llm_monitor.derive_host_base(model_info.get("base_url", "")))
+    socket_timeout = max(timeout, llm_monitor.SOCKET_BACKSTOP) if monitor else timeout
+    raw_response = llm_monitor.run_llm_request(
+        url,
+        payload,
+        model_info["model_id"],
+        model_info["base_url"],
+        socket_timeout,
+        monitor,
+    )
+
+    if not raw_response:
+        return False
+
+    # Extract JSON
+    try:
+        data = json.loads(raw_response.strip())
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw_response)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return False
+        else:
+            return False
+
+    old_str = data.get("old_str")
+    new_str = data.get("new_str")
+    if not old_str or new_str is None:
+        return False
+
+    if old_str in content:
+        content = content.replace(old_str, new_str, 1)
+        file_path.write_text(content)
+        console.print(f"[green]✓ Corrección automática aplicada en: {rel_path}[/]")
+        return True
+
+    return False
+
 def apply_resolution(file_path: Path, repo_dir: Path, resolution: str, conflict_start: int, conflict_end: int) -> bool:
     """Apply the LLM's resolution to the conflict region in the file."""
     resolved = resolution.strip()
@@ -186,6 +280,16 @@ def apply_resolution(file_path: Path, repo_dir: Path, resolution: str, conflict_
     if resolved.startswith("<UNRESOLVABLE>"):
         console.print(f"[yellow]⚠ Archivo no resoluble automáticamente: {file_path.relative_to(repo_dir)}[/]")
         return False
+
+    # Strip code block wrappers if the LLM returned markdown
+    if resolved.startswith("```"):
+        lines = resolved.splitlines()
+        # Drop opening ``` or ```language
+        lines = lines[1:]
+        # Drop closing ```
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        resolved = "\n".join(lines).strip()
 
     content = file_path.read_text()
     lines = content.splitlines(keepends=True)
@@ -215,7 +319,135 @@ def show_conflict_details(repo_dir: Path, files: list[str]) -> None:
         if preview_lines:
             console.print(f"  [dim]Conflicto en: {preview_lines[0]}[/dim]")
 
-def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, timeout: int) -> bool:
+def get_affected_packages(file_paths: list[str]) -> set[str]:
+    """Determine which package names under packages/ were affected."""
+    packages = set()
+    for f in file_paths:
+        parts = Path(f).parts
+        if len(parts) >= 2 and parts[0] == "packages":
+            packages.add(parts[1])
+    return packages
+
+def has_code_files(file_paths: list[str]) -> bool:
+    """Check if any of the affected files are code files."""
+    code_exts = {".ts", ".tsx", ".js", ".jsx", ".json", ".jsonc"}
+    return any(Path(f).suffix.lower() in code_exts for f in file_paths)
+
+def run_typecheck(repo_dir: Path, packages: set[str]) -> tuple[bool, str, Optional[str]]:
+    """Run bun typecheck for affected packages."""
+    pkgs = packages if packages else {"opencode"}
+    for pkg in pkgs:
+        pkg_dir = repo_dir / "packages" / pkg
+        if not pkg_dir.exists():
+            continue
+        console.print(f"[dim]  Verificando tipos en packages/{pkg} (bun typecheck)...[/dim]")
+        res = run_cmd(["bun", "--cwd", str(pkg_dir), "typecheck"], cwd=repo_dir)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout).strip()
+            return False, f"packages/{pkg} typecheck falló:\n{err}", pkg
+    return True, "", None
+
+def run_binary_build(repo_dir: Path) -> tuple[bool, str]:
+    """Run single target build of opencode and smoke test."""
+    pkg_dir = repo_dir / "packages" / "opencode"
+    console.print("[dim]  Compilando binario de prueba (packages/opencode script/build.ts --single)...[/dim]")
+    res = run_cmd(["bun", "--cwd", str(pkg_dir), "run", "script/build.ts", "--single"], cwd=repo_dir)
+    if res.returncode != 0:
+        err = (res.stderr or res.stdout).strip()
+        lines = err.splitlines()
+        tail = "\n".join(lines[-40:]) if len(lines) > 40 else err
+        return False, tail
+    return True, ""
+
+def verify_resolution(
+    repo_dir: Path,
+    resolved_files: list[str],
+    compile_binary: bool,
+    model_info: dict,
+    timeout: int,
+) -> bool:
+    """Verify that resolved files compile and pass typecheck, with auto-repair."""
+    if not has_code_files(resolved_files):
+        console.print("[green]✓ Los archivos resueltos no contienen código TypeScript/JavaScript; se omite compilación.[/]")
+        return True
+
+    console.print(Panel("Verificando compilación y tipos del proyecto", border_style="cyan"))
+    affected_packages = get_affected_packages(resolved_files)
+
+    # 1. Typecheck
+    max_repair_attempts = 2
+    typecheck_passed = False
+
+    for attempt in range(max_repair_attempts + 1):
+        ok, err_msg, failed_pkg = run_typecheck(repo_dir, affected_packages)
+        if ok:
+            typecheck_passed = True
+            console.print("[green]✓ Typecheck superado exitosamente.[/]")
+            break
+
+        console.print(f"[yellow]⚠ Error de typecheck detectado (intento {attempt + 1}/{max_repair_attempts + 1}):[/]")
+        console.print(f"[dim]{err_msg[:600]}[/dim]")
+
+        if attempt < max_repair_attempts:
+            target_file = None
+            for rf in resolved_files:
+                if Path(rf).name in err_msg or (failed_pkg and f"packages/{failed_pkg}" in rf):
+                    target_file = repo_dir / rf
+                    break
+            if not target_file and resolved_files:
+                target_file = repo_dir / resolved_files[0]
+
+            if target_file and target_file.exists():
+                console.print(f"[cyan]Intentando corrección automática con LLM en {target_file.relative_to(repo_dir)}...[/]")
+                fixed = fix_compilation_error_with_llm(target_file, repo_dir, err_msg, model_info, timeout)
+                if not fixed:
+                    console.print("[yellow]⚠ El LLM no pudo proponer una corrección válida.[/]")
+                    break
+            else:
+                break
+
+    if not typecheck_passed:
+        console.print(Panel("✗ La verificación de typecheck falló tras la resolución del conflicto.", border_style="red"))
+        return False
+
+    # 2. Binary Compilation
+    if compile_binary:
+        build_passed = False
+        for attempt in range(max_repair_attempts + 1):
+            ok, err_msg = run_binary_build(repo_dir)
+            if ok:
+                build_passed = True
+                console.print("[green]✓ Compilación del binario y smoke test superados exitosamente.[/]")
+                break
+
+            console.print(f"[yellow]⚠ Error en compilación del binario (intento {attempt + 1}/{max_repair_attempts + 1}):[/]")
+            console.print(f"[dim]{err_msg[:600]}[/dim]")
+
+            if attempt < max_repair_attempts:
+                target_file = None
+                for rf in resolved_files:
+                    if Path(rf).name in err_msg:
+                        target_file = repo_dir / rf
+                        break
+                if not target_file and resolved_files:
+                    target_file = repo_dir / resolved_files[0]
+
+                if target_file and target_file.exists():
+                    console.print(f"[cyan]Intentando corrección automática con LLM en {target_file.relative_to(repo_dir)}...[/]")
+                    fixed = fix_compilation_error_with_llm(target_file, repo_dir, err_msg, model_info, timeout)
+                    if not fixed:
+                        console.print("[yellow]⚠ El LLM no pudo proponer una corrección válida.[/]")
+                        break
+                else:
+                    break
+
+        if not build_passed:
+            console.print(Panel("✗ La compilación del binario falló tras la resolución del conflicto.", border_style="red"))
+            return False
+
+    return True
+
+def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, timeout: int) -> tuple[bool, list[str]]:
     """Ask LLM to resolve each conflict and apply the resolution."""
     console.print(Panel("Resolviendo conflictos con LLM", border_style="cyan"))
 
@@ -281,9 +513,16 @@ def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, t
             console.print(f"\n[yellow]⚠ Cancelado por el usuario. Pendientes: {pending} archivo(s).[/]")
         else:
             console.print("\n[yellow]⚠ Cancelado por el usuario.[/]")
-    return cancelled
 
-def resolve_conflicts(repo_dir: Path, auto: bool = False, timeout: int = DEFAULT_LLM_TIMEOUT) -> int:
+    success = not cancelled and len(failed_files) == 0
+    return success, resolved_files
+
+def resolve_conflicts(
+    repo_dir: Path,
+    auto: bool = False,
+    compile_binary: Optional[bool] = None,
+    timeout: int = DEFAULT_LLM_TIMEOUT,
+) -> int:
     """Main resolution logic. Returns 0 on success, 1 on failure."""
     console.print(Panel("Resolución de conflictos con LLM", border_style="cyan"))
 
@@ -324,15 +563,39 @@ def resolve_conflicts(repo_dir: Path, auto: bool = False, timeout: int = DEFAULT
             return 1
 
     # Resolve with LLM
-    cancelled = ask_llm_for_resolution(repo_dir, files, model_info, timeout)
-    if cancelled:
+    success, resolved_files = ask_llm_for_resolution(repo_dir, files, model_info, timeout)
+    if not success:
         return 1
+
+    if resolved_files:
+        # Determine whether to compile/test binary
+        should_compile = compile_binary
+        if should_compile is None:
+            if auto:
+                # In auto mode, compile if core/opencode packages were modified
+                pkgs = get_affected_packages(resolved_files)
+                should_compile = bool(pkgs.intersection({"opencode", "core"}))
+            else:
+                should_compile = Confirm.ask(
+                    "\n  ¿Deseas compilar el proyecto (build & smoke test) para confirmar que la resolución funciona?",
+                    default=True,
+                )
+
+        verified = verify_resolution(repo_dir, resolved_files, should_compile, model_info, timeout)
+        if not verified:
+            return 1
 
     return 0
 
 def main() -> None:
     """Parse args and run resolution."""
     auto = "--auto" in sys.argv
+    compile_binary = None
+    if "--compile" in sys.argv:
+        compile_binary = True
+    elif "--skip-compile" in sys.argv or "--no-compile" in sys.argv:
+        compile_binary = False
+
     timeout = DEFAULT_LLM_TIMEOUT
 
     for i, arg in enumerate(sys.argv):
@@ -344,7 +607,7 @@ def main() -> None:
                 timeout = DEFAULT_LLM_TIMEOUT
 
     repo_dir = SCRIPT_DIR.parent
-    exit_code = resolve_conflicts(repo_dir, auto=auto, timeout=timeout)
+    exit_code = resolve_conflicts(repo_dir, auto=auto, compile_binary=compile_binary, timeout=timeout)
     sys.exit(exit_code)
 
 if __name__ == "__main__":

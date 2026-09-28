@@ -58,11 +58,11 @@ ensure_scripts_executable() {
 
 # ── resolve conflicts ─────────────────────────────────────────────
 # Attempts to resolve merge/stash conflicts using LLM.
-# Returns 0 if resolved, 1 if manual resolution needed.
+# Returns 0 if resolved and verified (compile/typecheck), 1 if manual resolution needed.
 resolve_conflicts_with_llm() {
   local script="$REPO_ROOT/scripts/resolve-conflicts.py"
   if [[ -f "$script" ]]; then
-    python3 "$script" --auto
+    python3 "$script" --auto --compile
   else
     echo "⚠️  resolve-conflicts.py not found — manual resolution needed."
     return 1
