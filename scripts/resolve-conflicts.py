@@ -57,10 +57,10 @@ def get_conflicted_files(repo_dir: Path) -> list[str]:
         return result.stdout.strip().splitlines()
     return []
 
-def get_conflict_markers(file_path: Path, repo_dir: Path) -> tuple[str, str]:
+def get_conflict_markers(file_path: Path, repo_dir: Path) -> tuple[str, str, int, int]:
     """
     Get conflict information for a file.
-    Returns (file_header, conflict_content)
+    Returns (file_header, conflict_content, conflict_start, conflict_end)
     """
     # Get the conflict markers from the file
     content = file_path.read_text()
@@ -72,14 +72,13 @@ def get_conflict_markers(file_path: Path, repo_dir: Path) -> tuple[str, str]:
     for i, line in enumerate(lines):
         if line.startswith("<<<<<<<"):
             conflict_start = i
-        elif line.startswith("=======") and conflict_start is not None:
-            separator_line = i
         elif line.startswith(">>>>>>>") and conflict_start is not None:
             conflict_end = i
+            break
 
-    if conflict_start is None:
+    if conflict_start is None or conflict_end is None:
         # No conflict markers in the file (might have been resolved)
-        return ("", "")
+        return ("", "", -1, -1)
 
     # Get the conflict section with context
     context_before = 5
@@ -90,7 +89,7 @@ def get_conflict_markers(file_path: Path, repo_dir: Path) -> tuple[str, str]:
     conflict_section = "\n".join(lines[start:end])
     file_header = f"\n{'='*80}\n  FILE: {file_path.relative_to(repo_dir)}\n{'='*80}\n"
 
-    return (file_header, conflict_section)
+    return (file_header, conflict_section, conflict_start, conflict_end)
 
 def get_default_model_from_config() -> Optional[dict]:
     """Read the default model from the user config."""
@@ -180,16 +179,19 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
         monitor,
     )
 
-def apply_resolution(file_path: Path, repo_dir: Path, resolution: str) -> bool:
-    """Apply the LLM's resolution to the file."""
+def apply_resolution(file_path: Path, repo_dir: Path, resolution: str, conflict_start: int, conflict_end: int) -> bool:
+    """Apply the LLM's resolution to the conflict region in the file."""
     resolved = resolution.strip()
 
     if resolved.startswith("<UNRESOLVABLE>"):
         console.print(f"[yellow]⚠ Archivo no resoluble automáticamente: {file_path.relative_to(repo_dir)}[/]")
         return False
 
-    # Write the resolved content
-    file_path.write_text(resolved)
+    content = file_path.read_text()
+    lines = content.splitlines(keepends=True)
+    replacement = resolved + ("\n" if not resolved.endswith("\n") else "")
+    new_content = "".join(lines[:conflict_start]) + replacement + "".join(lines[conflict_end + 1:])
+    file_path.write_text(new_content)
     console.print(f"[green]✓ Resolución aplicada: {file_path.relative_to(repo_dir)}[/]")
     return True
 
@@ -202,7 +204,7 @@ def show_conflict_details(repo_dir: Path, files: list[str]) -> None:
         if not file_path.exists():
             continue
 
-        header, content = get_conflict_markers(file_path, repo_dir)
+        header, content, _, _ = get_conflict_markers(file_path, repo_dir)
         if not content:
             continue
 
@@ -229,27 +231,39 @@ def ask_llm_for_resolution(repo_dir: Path, files: list[str], model_info: dict, t
             failed_files.append(file_name)
             continue
 
-        header, content = get_conflict_markers(file_path, repo_dir)
-        if not content:
-            # No conflict markers, try to resolve anyway
-            console.print(f"[green]✓ Sin marcadores de conflicto: {file_name}[/]")
-            resolved_files.append(file_name)
-            continue
+        file_has_conflicts = False
+        file_success = True
 
-        console.print(f"\n  [dim]── Resolviendo: {file_name} ──[/dim]")
-        resolution = resolve_conflict_with_llm(header, content, model_info, timeout)
-        if llm_monitor.was_cancelled():
-            failed_files.append(file_name)
-            cancelled = True
+        while True:
+            header, content, start_idx, end_idx = get_conflict_markers(file_path, repo_dir)
+            if not content:
+                break
+
+            file_has_conflicts = True
+            console.print(f"\n  [dim]── Resolviendo conflicto en: {file_name} ──[/dim]")
+            resolution = resolve_conflict_with_llm(header, content, model_info, timeout)
+            if llm_monitor.was_cancelled():
+                failed_files.append(file_name)
+                cancelled = True
+                break
+
+            if resolution and apply_resolution(file_path, repo_dir, resolution, start_idx, end_idx):
+                continue
+            else:
+                file_success = False
+                break
+
+        if cancelled:
             break
 
-        if resolution:
-            if apply_resolution(file_path, repo_dir, resolution):
+        if file_has_conflicts:
+            if file_success:
                 resolved_files.append(file_name)
             else:
                 failed_files.append(file_name)
         else:
-            failed_files.append(file_name)
+            console.print(f"[green]✓ Sin marcadores de conflicto: {file_name}[/]")
+            resolved_files.append(file_name)
 
     # Summary
     console.print("\n[bold]Resumen:[/bold]")
