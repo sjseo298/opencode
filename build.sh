@@ -12,12 +12,12 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-OPENCODE_DIR="$REPO_ROOT/packages/opencode"
+OPENCODE_DIR="$REPO_ROOT/packages/cli"
 
 # ── configure PATH ───────────────────────────────────────────────
 configure_path() {
   local scripts_dir="$REPO_ROOT/scripts"
-  local old_bin_dir="$OPENCODE_DIR/dist/opencode-darwin-arm64/bin"
+  local old_bin_dir="$OPENCODE_DIR/dist/cli-darwin-arm64/bin"
 
   # Detect shell config file
   local shell="$(basename "$SHELL")"

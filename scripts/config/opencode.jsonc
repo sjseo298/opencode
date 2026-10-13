@@ -28,7 +28,7 @@
             ]
           },
           "limit": {
-            "context": 131072,
+            "context": 56832,
             "output": 32768
           }
         },
@@ -51,7 +51,7 @@
             ]
           },
           "limit": {
-            "context": 135168,
+            "context": 121344,
             "output": 32768
           }
         },
@@ -101,12 +101,12 @@
             "output": 32768
           }
         },
-        "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.8-27B-Escha-W2": {
-          "id": "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.8-27B-Escha-W2",
-          "name": "[VTR]L: EschaLabs/Qwen3.8-27B-Escha-W2",
+        "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.6-35B-A3B-Escha-W2": {
+          "id": "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.6-35B-A3B-Escha-W2",
+          "name": "[VT]L: EschaLabs/Qwen3.6-35B-A3B-Escha-W2",
           "author": "EschaLabs",
           "tool_call": true,
-          "reasoning": true,
+          "reasoning": false,
           "temperature": true,
           "attachment": true,
           "modalities": {
@@ -122,27 +122,12 @@
           "limit": {
             "context": 262144,
             "output": 32768
-          },
-          "interleaved": true,
-          "options": {
-            "reasoningEffort": "xhigh"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "xhigh": {
-              "reasoningEffort": "xhigh"
-            }
           }
         },
-        "ISTA-DASLab-Qwen3.8-27B-GSQ-RCO-GGUF-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp": {
-          "id": "ISTA-DASLab-Qwen3.8-27B-GSQ-RCO-GGUF-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp",
-          "name": "[VTR]L: ISTA-DASLab/ISTA-DASLab-Qwen3.8-27B-GSQ-RCO-GGUF-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp",
-          "author": "ISTA-DASLab",
+        "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.8-27B-Escha-W2": {
+          "id": "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.8-27B-Escha-W2",
+          "name": "[VTR]L: EschaLabs/Qwen3.8-27B-Escha-W2",
+          "author": "EschaLabs",
           "tool_call": true,
           "reasoning": true,
           "temperature": true,
@@ -196,72 +181,6 @@
           },
           "limit": {
             "context": 262144,
-            "output": 32768
-          }
-        },
-        "Qwen-Qwen3-Embedding-0.6B-GGUF-Qwen3-Embedding-0.6B-Q8_0": {
-          "id": "Qwen-Qwen3-Embedding-0.6B-GGUF-Qwen3-Embedding-0.6B-Q8_0",
-          "name": "[T]L: Qwen/Qwen-Qwen3-Embedding-0.6B-GGUF-Qwen3-Embedding-0.6B-Q8_0",
-          "author": "Qwen",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 32768,
-            "output": 32768
-          }
-        },
-        "Qwen-Qwen3-Embedding-4B-GGUF-Qwen3-Embedding-4B-Q4_K_M": {
-          "id": "Qwen-Qwen3-Embedding-4B-GGUF-Qwen3-Embedding-4B-Q4_K_M",
-          "name": "[T]L: Qwen/Qwen-Qwen3-Embedding-4B-GGUF-Qwen3-Embedding-4B-Q4_K_M",
-          "author": "Qwen",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 32768,
-            "output": 32768
-          }
-        },
-        "Qwen-Qwen3-Embedding-8B-GGUF-Qwen3-Embedding-8B-Q4_K_M": {
-          "id": "Qwen-Qwen3-Embedding-8B-GGUF-Qwen3-Embedding-8B-Q4_K_M",
-          "name": "[T]L: Qwen/Qwen-Qwen3-Embedding-8B-GGUF-Qwen3-Embedding-8B-Q4_K_M",
-          "author": "Qwen",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 32768,
             "output": 32768
           }
         },
@@ -396,7 +315,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 188928,
             "output": 32768
           }
         },
@@ -419,8 +338,8 @@
             ]
           },
           "limit": {
-            "context": 183296,
-            "output": 32768
+            "context": 512,
+            "output": 512
           }
         },
         "bartowski-Qwen3.8-27B-GGUF-Qwen3.8-27B-Q4_K_L": {
@@ -442,7 +361,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 163328,
             "output": 32768
           },
           "interleaved": true,
@@ -480,7 +399,7 @@
             ]
           },
           "limit": {
-            "context": 183296,
+            "context": 80384,
             "output": 32768
           },
           "interleaved": true,
@@ -541,7 +460,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 157184,
             "output": 32768
           }
         },
@@ -564,7 +483,7 @@
             ]
           },
           "limit": {
-            "context": 196608,
+            "context": 99328,
             "output": 32768
           }
         },
@@ -587,8 +506,8 @@
             ]
           },
           "limit": {
-            "context": 131072,
-            "output": 32768
+            "context": 512,
+            "output": 512
           }
         },
         "bartowski-Qwen_Qwen3.6-35B-A3B-GGUF-Qwen_Qwen3.6-35B-A3B-Q4_K_L": {
@@ -610,7 +529,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 150016,
             "output": 32768
           }
         },
@@ -633,122 +552,8 @@
             ]
           },
           "limit": {
-            "context": 196608,
-            "output": 32768
-          }
-        },
-        "bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q4_K_L": {
-          "id": "bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q4_K_L",
-          "name": "[VTR]L: bartowski/bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q4_K_L",
-          "author": "bartowski",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 196608,
-            "output": 32768
-          },
-          "interleaved": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
-          }
-        },
-        "bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q5_K_L": {
-          "id": "bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q5_K_L",
-          "name": "[VTR]L: bartowski/bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q5_K_L",
-          "author": "bartowski",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 131072,
-            "output": 32768
-          },
-          "interleaved": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
-          }
-        },
-        "bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q6_K": {
-          "id": "bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q6_K",
-          "name": "[VTR]L: bartowski/bartowski-bottlecapai_ThinkingCap-Qwen3.6-27B-GGUF-bottlecapai_ThinkingCap-Qwen3.6-27B-Q6_K",
-          "author": "bartowski",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 131072,
-            "output": 32768
-          },
-          "interleaved": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
+            "context": 512,
+            "output": 512
           }
         },
         "bartowski-nex-agi_Nex-N2-mini-GGUF-nex-agi_Nex-N2-mini-Q4_K_L": {
@@ -797,9 +602,9 @@
             "output": 32768
           }
         },
-        "bottlecapai-ThinkingCap-Qwen3.6-27B-GGUF-ThinkingCap-Qwen3.6-27B-Q4_K_M": {
-          "id": "bottlecapai-ThinkingCap-Qwen3.6-27B-GGUF-ThinkingCap-Qwen3.6-27B-Q4_K_M",
-          "name": "[VTR]L: bottlecapai/bottlecapai-ThinkingCap-Qwen3.6-27B-GGUF-ThinkingCap-Qwen3.6-27B-Q4_K_M",
+        "bottlecapai-ThinkingCap-Qwen3.8-27B-GGUF-ThinkingCap-Qwen3.8-27B-Q4_K_M": {
+          "id": "bottlecapai-ThinkingCap-Qwen3.8-27B-GGUF-ThinkingCap-Qwen3.8-27B-Q4_K_M",
+          "name": "[VTR]L: bottlecapai/bottlecapai-ThinkingCap-Qwen3.8-27B-GGUF-ThinkingCap-Qwen3.8-27B-Q4_K_M",
           "author": "bottlecapai",
           "tool_call": true,
           "reasoning": true,
@@ -816,12 +621,12 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 200704,
             "output": 32768
           },
           "interleaved": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           },
           "variants": {
             "low": {
@@ -830,14 +635,14 @@
             "medium": {
               "reasoningEffort": "medium"
             },
-            "high": {
-              "reasoningEffort": "high"
+            "xhigh": {
+              "reasoningEffort": "xhigh"
             }
           }
         },
-        "bottlecapai-ThinkingCap-Qwen3.6-27B-GGUF-ThinkingCap-Qwen3.6-27B-Q6_K": {
-          "id": "bottlecapai-ThinkingCap-Qwen3.6-27B-GGUF-ThinkingCap-Qwen3.6-27B-Q6_K",
-          "name": "[VTR]L: bottlecapai/bottlecapai-ThinkingCap-Qwen3.6-27B-GGUF-ThinkingCap-Qwen3.6-27B-Q6_K",
+        "bottlecapai-ThinkingCap-Qwen3.8-27B-GGUF-ThinkingCap-Qwen3.8-27B-Q6_K": {
+          "id": "bottlecapai-ThinkingCap-Qwen3.8-27B-GGUF-ThinkingCap-Qwen3.8-27B-Q6_K",
+          "name": "[VTR]L: bottlecapai/bottlecapai-ThinkingCap-Qwen3.8-27B-GGUF-ThinkingCap-Qwen3.8-27B-Q6_K",
           "author": "bottlecapai",
           "tool_call": true,
           "reasoning": true,
@@ -854,12 +659,12 @@
             ]
           },
           "limit": {
-            "context": 262144,
-            "output": 32768
+            "context": 16896,
+            "output": 16896
           },
           "interleaved": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           },
           "variants": {
             "low": {
@@ -868,8 +673,8 @@
             "medium": {
               "reasoningEffort": "medium"
             },
-            "high": {
-              "reasoningEffort": "high"
+            "xhigh": {
+              "reasoningEffort": "xhigh"
             }
           }
         },
@@ -898,10 +703,10 @@
         },
         "lmstudio-community-Qwen3-8B-GGUF-Qwen3-8B-Q6_K": {
           "id": "lmstudio-community-Qwen3-8B-GGUF-Qwen3-8B-Q6_K",
-          "name": "[TR]L: lmstudio-community/lmstudio-community-Qwen3-8B-GGUF-Qwen3-8B-Q6_K",
+          "name": "[T]L: lmstudio-community/lmstudio-community-Qwen3-8B-GGUF-Qwen3-8B-Q6_K",
           "author": "lmstudio-community",
           "tool_call": true,
-          "reasoning": true,
+          "reasoning": false,
           "temperature": true,
           "attachment": true,
           "modalities": {
@@ -916,21 +721,6 @@
           "limit": {
             "context": 16384,
             "output": 16384
-          },
-          "interleaved": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
           }
         },
         "lmstudio-community-Qwen3.8-27B-GGUF-Qwen3.8-27B-Q6_K": {
@@ -952,7 +742,7 @@
             ]
           },
           "limit": {
-            "context": 157184,
+            "context": 54272,
             "output": 32768
           },
           "interleaved": true,
@@ -1101,44 +891,6 @@
             "output": 32768
           }
         },
-        "/Volumes/Samsung2T/lmstudio/mlx-community/ThinkingCap-Qwen3.6-27B-mlx-6Bit": {
-          "id": "/Volumes/Samsung2T/lmstudio/mlx-community/ThinkingCap-Qwen3.6-27B-mlx-6Bit",
-          "name": "[VTR]L: mlx-community/ThinkingCap-Qwen3.6-27B-mlx-6Bit",
-          "author": "mlx-community",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          },
-          "interleaved": true,
-          "options": {
-            "reasoningEffort": "high"
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low"
-            },
-            "medium": {
-              "reasoningEffort": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high"
-            }
-          }
-        },
         "mradermacher-Qwen3.6-35B-A3B-StyleTune-GGUF-Qwen3.6-35B-A3B-StyleTune.Q5_K_M": {
           "id": "mradermacher-Qwen3.6-35B-A3B-StyleTune-GGUF-Qwen3.6-35B-A3B-StyleTune.Q5_K_M",
           "name": "[VT]L: mradermacher/mradermacher-Qwen3.6-35B-A3B-StyleTune-GGUF-Qwen3.6-35B-A3B-StyleTune.Q5_K_M",
@@ -1181,7 +933,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 197120,
             "output": 32768
           },
           "interleaved": true,
@@ -1242,7 +994,7 @@
             ]
           },
           "limit": {
-            "context": 220672,
+            "context": 200704,
             "output": 32768
           }
         },
@@ -1265,7 +1017,7 @@
             ]
           },
           "limit": {
-            "context": 196608,
+            "context": 121344,
             "output": 32768
           }
         },
@@ -1448,7 +1200,7 @@
           },
           "interleaved": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           },
           "variants": {
             "low": {
@@ -1457,8 +1209,8 @@
             "medium": {
               "reasoningEffort": "medium"
             },
-            "high": {
-              "reasoningEffort": "high"
+            "xhigh": {
+              "reasoningEffort": "xhigh"
             }
           }
         },
@@ -1481,7 +1233,7 @@
             ]
           },
           "limit": {
-            "context": 183296,
+            "context": 130560,
             "output": 32768
           }
         },
@@ -1504,12 +1256,12 @@
             ]
           },
           "limit": {
-            "context": 131072,
+            "context": 54784,
             "output": 32768
           },
           "interleaved": true,
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           },
           "variants": {
             "low": {
@@ -1518,8 +1270,8 @@
             "medium": {
               "reasoningEffort": "medium"
             },
-            "high": {
-              "reasoningEffort": "high"
+            "xhigh": {
+              "reasoningEffort": "xhigh"
             }
           }
         },
@@ -1542,7 +1294,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 186880,
             "output": 32768
           }
         },
@@ -1611,7 +1363,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 132608,
             "output": 32768
           }
         },
@@ -1634,8 +1386,8 @@
             ]
           },
           "limit": {
-            "context": 169984,
-            "output": 32768
+            "context": 512,
+            "output": 512
           }
         },
         "unsloth-Qwen3.8-27B-GGUF-Qwen3.8-27B-UD-Q2_K_XL": {
@@ -1733,7 +1485,7 @@
             ]
           },
           "limit": {
-            "context": 262144,
+            "context": 186368,
             "output": 32768
           },
           "interleaved": true,
@@ -1771,7 +1523,7 @@
             ]
           },
           "limit": {
-            "context": 183296,
+            "context": 119296,
             "output": 32768
           },
           "interleaved": true,
@@ -1855,8 +1607,8 @@
             ]
           },
           "limit": {
-            "context": 131072,
-            "output": 32768
+            "context": 2560,
+            "output": 2560
           }
         },
         "unsloth-gemma-4-26B-A4B-it-qat-GGUF-gemma-4-26B-A4B-it-qat-UD-Q4_K_XL": {
@@ -1878,8 +1630,8 @@
             ]
           },
           "limit": {
-            "context": 262144,
-            "output": 32768
+            "context": 19456,
+            "output": 19456
           }
         },
         "unsloth-gemma-4-31B-it-GGUF-gemma-4-31B-it-UD-Q5_K_XL": {
@@ -1901,8 +1653,8 @@
             ]
           },
           "limit": {
-            "context": 196608,
-            "output": 32768
+            "context": 1536,
+            "output": 1536
           }
         },
         "unsloth-gemma-4-31B-it-qat-GGUF-gemma-4-31B-it-qat-UD-Q4_K_XL": {
@@ -1924,14 +1676,14 @@
             ]
           },
           "limit": {
-            "context": 262144,
-            "output": 32768
+            "context": 3072,
+            "output": 3072
           }
         },
-        "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.6-35B-A3B-Escha-W2": {
-          "id": "/Volumes/Samsung2T/lmstudio/EschaLabs/Qwen3.6-35B-A3B-Escha-W2",
-          "name": "[VT]L: EschaLabs/Qwen3.6-35B-A3B-Escha-W2",
-          "author": "EschaLabs",
+        "prithivMLmods-JEV-27B-VL-GGUF-JEV-27B-VL.Q4_K_M": {
+          "id": "prithivMLmods-JEV-27B-VL-GGUF-JEV-27B-VL.Q4_K_M",
+          "name": "[VT]L: prithivMLmods/prithivMLmods-JEV-27B-VL-GGUF-JEV-27B-VL.Q4_K_M",
+          "author": "prithivMLmods",
           "tool_call": true,
           "reasoning": false,
           "temperature": true,
@@ -1948,144 +1700,6 @@
           },
           "limit": {
             "context": 262144,
-            "output": 32768
-          }
-        },
-        "bartowski-Cloudflare_clef-flash-GGUF-Cloudflare_clef-flash-Q4_K_M": {
-          "id": "bartowski-Cloudflare_clef-flash-GGUF-Cloudflare_clef-flash-Q4_K_M",
-          "name": "[VT]L: bartowski/bartowski-Cloudflare_clef-flash-GGUF-Cloudflare_clef-flash-Q4_K_M",
-          "author": "bartowski",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          }
-        },
-        "bartowski-Cloudflare_clef-GGUF-Cloudflare_clef-Q4_K_L": {
-          "id": "bartowski-Cloudflare_clef-GGUF-Cloudflare_clef-Q4_K_L",
-          "name": "[VT]L: bartowski/bartowski-Cloudflare_clef-GGUF-Cloudflare_clef-Q4_K_L",
-          "author": "bartowski",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          }
-        },
-        "unsloth-gemma-4-26B-A4B-it-GGUF-mtp-gemma-4-26B-A4B-it": {
-          "id": "unsloth-gemma-4-26B-A4B-it-GGUF-mtp-gemma-4-26B-A4B-it",
-          "name": "[VT]L: unsloth/unsloth-gemma-4-26B-A4B-it-GGUF-mtp-gemma-4-26B-A4B-it",
-          "author": "unsloth",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          }
-        },
-        "unsloth-gemma-4-26B-A4B-it-qat-GGUF-mtp-gemma-4-26B-A4B-it": {
-          "id": "unsloth-gemma-4-26B-A4B-it-qat-GGUF-mtp-gemma-4-26B-A4B-it",
-          "name": "[VT]L: unsloth/unsloth-gemma-4-26B-A4B-it-qat-GGUF-mtp-gemma-4-26B-A4B-it",
-          "author": "unsloth",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 131072,
-            "output": 32768
-          }
-        },
-        "unsloth-gemma-4-31B-it-GGUF-mtp-gemma-4-31B-it": {
-          "id": "unsloth-gemma-4-31B-it-GGUF-mtp-gemma-4-31B-it",
-          "name": "[VT]L: unsloth/unsloth-gemma-4-31B-it-GGUF-mtp-gemma-4-31B-it",
-          "author": "unsloth",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          }
-        },
-        "unsloth-gemma-4-31B-it-qat-GGUF-mtp-gemma-4-31B-it": {
-          "id": "unsloth-gemma-4-31B-it-qat-GGUF-mtp-gemma-4-31B-it",
-          "name": "[VT]L: unsloth/unsloth-gemma-4-31B-it-qat-GGUF-mtp-gemma-4-31B-it",
-          "author": "unsloth",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 131072,
             "output": 32768
           }
         },
@@ -2323,28 +1937,6 @@
             "output": 32768
           }
         },
-        "mlx-community/ThinkingCap-Qwen3.6-27B-mlx-6Bit": {
-          "id": "mlx-community/ThinkingCap-Qwen3.6-27B-mlx-6Bit",
-          "name": "[T]L: mlx-community/ThinkingCap-Qwen3.6-27B-mlx-6Bit",
-          "author": "mlx-community",
-          "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          }
-        },
         "mlx-community/Qwen3.6-27B-5bit": {
           "id": "mlx-community/Qwen3.6-27B-5bit",
           "name": "[T]L: mlx-community/Qwen3.6-27B-5bit",
@@ -2413,6 +2005,5 @@
         }
       }
     }
-  },
-  "model": "llamacpp/unsloth-Qwen3.6-35B-A3B-MTP-GGUF-Qwen3.6-35B-A3B-UD-Q4_K_XL"
+  }
 }

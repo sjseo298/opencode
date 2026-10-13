@@ -687,7 +687,7 @@ def extract_llamacpp_models(data: dict) -> dict:
         )
         reasoning_levels = normalize_reasoning_levels(item.get("reasoning_effort_levels"))
         if has_reasoning and not reasoning_levels:
-            reasoning_levels = ["low", "medium", "high"]
+            reasoning_levels = ["low", "medium", "xhigh"]
         reasoning_default = resolve_reasoning_default(reasoning_levels, item.get("reasoning_effort_default")) if reasoning_levels else ""
         has_agent = preset.get("agent") == "1"
         has_flash_attn = preset.get("flash-attn") == "true"
