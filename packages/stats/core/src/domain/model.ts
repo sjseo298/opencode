@@ -9,7 +9,6 @@ import {
   collapseRows,
   DATA_SITE_TIERS,
   inserted,
-  isMissingUniqueUsersColumn,
   omitUniqueUsers,
   rankBy,
   statPeriodKey,
@@ -17,6 +16,7 @@ import {
   synthesizeAllTierRows,
   toStatBaseRow,
   UPSERT_CHUNK_SIZE,
+  withUniqueUsersFallback,
   type StatBaseAggregate,
 } from "./stat"
 
@@ -46,7 +46,10 @@ export declare namespace ModelStatRepo {
     readonly listDaily: () => Effect.Effect<ModelStatMetric[], DatabaseError>
     readonly lastSyncedAt: () => Effect.Effect<Date | null, DatabaseError>
     readonly upsert: (rows: ModelStatRow[]) => Effect.Effect<void, DatabaseError>
-    readonly deleteRetiredDimensions: (rows: ModelStatRow[]) => Effect.Effect<void, DatabaseError>
+    readonly deleteRetiredDimensions: (
+      rows: ModelStatRow[],
+      hiddenModels: readonly string[],
+    ) => Effect.Effect<void, DatabaseError>
     readonly deleteUnknownDimensions: (rows: ModelStatRow[]) => Effect.Effect<void, DatabaseError>
   }
 }
@@ -61,31 +64,31 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
 
       const listDaily = Effect.fn("ModelStatRepo.listDaily")(function* () {
         return yield* Effect.tryPromise({
-          try: async () => {
-            try {
-              return await db
-                .select({
-                  periodKey: modelStat.period_key,
-                  updatedAt: modelStat.updated_at,
-                  tier: modelStat.tier,
-                  provider: modelStat.provider,
-                  model: modelStat.model,
-                  sessions: modelStat.sessions,
-                  uniqueUsers: modelStat.unique_users,
-                  inputTokens: modelStat.input_tokens,
-                  outputTokens: modelStat.output_tokens,
-                  reasoningTokens: modelStat.reasoning_tokens,
-                  cacheReadTokens: modelStat.cache_read_tokens,
-                  totalTokens: modelStat.total_tokens,
-                  inputCostMicrocents: modelStat.input_cost_microcents,
-                  outputCostMicrocents: modelStat.output_cost_microcents,
-                  totalCostMicrocents: modelStat.total_cost_microcents,
-                })
-                .from(modelStat)
-                .where(modelDailyScope())
-                .orderBy(asc(modelStat.period_key))
-            } catch (cause) {
-              if (!isMissingUniqueUsersColumn(cause)) throw cause
+          try: () =>
+            withUniqueUsersFallback(async (includeUniqueUsers) => {
+              if (includeUniqueUsers)
+                return await db
+                  .select({
+                    periodKey: modelStat.period_key,
+                    updatedAt: modelStat.updated_at,
+                    tier: modelStat.tier,
+                    provider: modelStat.provider,
+                    model: modelStat.model,
+                    sessions: modelStat.sessions,
+                    uniqueUsers: modelStat.unique_users,
+                    inputTokens: modelStat.input_tokens,
+                    outputTokens: modelStat.output_tokens,
+                    reasoningTokens: modelStat.reasoning_tokens,
+                    cacheReadTokens: modelStat.cache_read_tokens,
+                    totalTokens: modelStat.total_tokens,
+                    inputCostMicrocents: modelStat.input_cost_microcents,
+                    outputCostMicrocents: modelStat.output_cost_microcents,
+                    totalCostMicrocents: modelStat.total_cost_microcents,
+                  })
+                  .from(modelStat)
+                  .where(modelDailyScope())
+                  .orderBy(asc(modelStat.period_key))
+
               return (
                 await db
                   .select({
@@ -108,8 +111,7 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
                   .where(modelDailyScope())
                   .orderBy(asc(modelStat.period_key))
               ).map((row) => ({ ...row, uniqueUsers: 0 }))
-            }
-          },
+            }),
           catch: (cause) => DatabaseError.make({ cause }),
         })
       })
@@ -127,14 +129,7 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
           chunks(rows, UPSERT_CHUNK_SIZE),
           (chunk) =>
             Effect.tryPromise({
-              try: async () => {
-                try {
-                  return await upsertModelChunk(chunk, true)
-                } catch (cause) {
-                  if (!isMissingUniqueUsersColumn(cause)) throw cause
-                  return upsertModelChunk(chunk, false)
-                }
-              },
+              try: () => withUniqueUsersFallback((includeUniqueUsers) => upsertModelChunk(chunk, includeUniqueUsers)),
               catch: (cause) => DatabaseError.make({ cause }),
             }),
           { discard: true },
@@ -178,6 +173,7 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
 
       const deleteRetiredDimensions = Effect.fn("ModelStatRepo.deleteRetiredDimensions")(function* (
         rows: ModelStatRow[],
+        hiddenModels: readonly string[],
       ) {
         const scope = statRowScope(rows)
         if (!scope) return
@@ -195,7 +191,7 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
                   inArray(modelStat.source, scope.sources),
                   or(
                     inArray(modelStat.provider, RETIRED_STAT_PROVIDERS),
-                    inArray(modelStat.model, RETIRED_STAT_MODELS),
+                    inArray(modelStat.model, [...RETIRED_STAT_MODELS, ...hiddenModels]),
                     and(eq(modelStat.provider, "unknown"), eq(modelStat.model, "hy4-preview")),
                   ),
                 ),
