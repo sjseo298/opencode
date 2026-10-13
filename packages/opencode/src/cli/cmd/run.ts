@@ -785,7 +785,9 @@ export const RunCommand = effectCmd({
               if ("data" in props.error && props.error.data && "message" in props.error.data) {
                 err = String(props.error.data.message)
               }
-              error = error ? error + EOL + err : err
+              if (props.error.name !== "ContextOverflowError") {
+                error = error ? error + EOL + err : err
+              }
               if (emit("error", { error: props.error })) continue
               UI.error(err)
             }
