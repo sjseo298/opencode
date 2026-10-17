@@ -335,7 +335,8 @@ def has_code_files(file_paths: list[str]) -> bool:
 
 def run_typecheck(repo_dir: Path, packages: set[str]) -> tuple[bool, str, Optional[str]]:
     """Run bun typecheck for affected packages."""
-    pkgs = packages if packages else {"opencode"}
+    default_pkg = "cli" if (repo_dir / "packages" / "cli").exists() else "opencode"
+    pkgs = packages if packages else {default_pkg}
     for pkg in pkgs:
         pkg_dir = repo_dir / "packages" / pkg
         if not pkg_dir.exists():
@@ -349,8 +350,9 @@ def run_typecheck(repo_dir: Path, packages: set[str]) -> tuple[bool, str, Option
 
 def run_binary_build(repo_dir: Path) -> tuple[bool, str]:
     """Run single target build of opencode and smoke test."""
-    pkg_dir = repo_dir / "packages" / "opencode"
-    console.print("[dim]  Compilando binario de prueba (packages/opencode script/build.ts --single)...[/dim]")
+    pkg_name = "cli" if (repo_dir / "packages" / "cli").exists() else "opencode"
+    pkg_dir = repo_dir / "packages" / pkg_name
+    console.print(f"[dim]  Compilando binario de prueba (packages/{pkg_name} script/build.ts --single)...[/dim]")
     res = run_cmd(["bun", "--cwd", str(pkg_dir), "run", "script/build.ts", "--single"], cwd=repo_dir)
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()

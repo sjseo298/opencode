@@ -1273,23 +1273,32 @@ def action_launch_opencode() -> None:
     """Launch the opencode binary."""
     import platform as _platform
 
-    dist_dir = SCRIPT_DIR.parent / "packages" / "opencode" / "dist"
+    cli_dist = SCRIPT_DIR.parent / "packages" / "cli" / "dist"
+    legacy_dist = SCRIPT_DIR.parent / "packages" / "opencode" / "dist"
 
     machine = _platform.machine().lower()
     if sys.platform == "linux":
         arch_map = {"x86_64": "x64", "aarch64": "arm64", "armv7l": "arm"}
         arch = arch_map.get(machine, machine)
-        target_dir = f"opencode-linux-{arch}"
+        cli_target = f"cli-linux-{arch}"
+        legacy_target = f"opencode-linux-{arch}"
     elif sys.platform == "darwin":
         arch_map = {"arm64": "arm64", "x86_64": "x64"}
         arch = arch_map.get(machine, machine)
-        target_dir = f"opencode-darwin-{arch}"
+        cli_target = f"cli-darwin-{arch}"
+        legacy_target = f"opencode-darwin-{arch}"
     else:
         console.print(f"[yellow]⚠ Unsupported platform: {sys.platform}[/]")
         return
 
-    binary = dist_dir / target_dir / "bin" / "opencode"
+    binary = cli_dist / cli_target / "bin" / "opencode"
     if not binary.exists():
+        legacy_binary = legacy_dist / legacy_target / "bin" / "opencode"
+        if legacy_binary.exists():
+            binary = legacy_binary
+
+    if not binary.exists():
+        dist_dir = cli_dist if cli_dist.exists() else legacy_dist
         available = [d.name for d in dist_dir.iterdir() if d.is_dir()] if dist_dir.exists() else []
         console.print(f"[red]✗ Binary not found: {binary}[/]")
         if available:
