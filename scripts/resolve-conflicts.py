@@ -348,12 +348,31 @@ def run_typecheck(repo_dir: Path, packages: set[str]) -> tuple[bool, str, Option
             return False, f"packages/{pkg} typecheck falló:\n{err}", pkg
     return True, "", None
 
+def _clean_build_residuals(repo_dir: Path) -> None:
+    """Elimina residuos temporales de compilación y caches muertos."""
+    import shutil
+    try:
+        shutil.rmtree(repo_dir / ".turbo", ignore_errors=True)
+        shutil.rmtree(repo_dir / "packages" / "opencode" / "dist", ignore_errors=True)
+        shutil.rmtree(repo_dir / "packages" / "cli" / ".cache", ignore_errors=True)
+        pkg_base = repo_dir / "packages"
+        if pkg_base.exists():
+            for p in pkg_base.rglob(".*.bun-build"):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 def run_binary_build(repo_dir: Path) -> tuple[bool, str]:
     """Run single target build of opencode and smoke test."""
+    _clean_build_residuals(repo_dir)
     pkg_name = "cli" if (repo_dir / "packages" / "cli").exists() else "opencode"
     pkg_dir = repo_dir / "packages" / pkg_name
     console.print(f"[dim]  Compilando binario de prueba (packages/{pkg_name} script/build.ts --single)...[/dim]")
     res = run_cmd(["bun", "--cwd", str(pkg_dir), "run", "script/build.ts", "--single"], cwd=repo_dir)
+    _clean_build_residuals(repo_dir)
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()
         lines = err.splitlines()

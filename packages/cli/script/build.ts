@@ -23,6 +23,25 @@ const outdir = path.resolve(
 if (outdir === dir) throw new Error("--outdir must not be the package directory")
 process.chdir(dir)
 
+async function purgeResiduals() {
+  try {
+    const glob = new Bun.Glob(".*.bun-build")
+    for await (const file of glob.scan({ cwd: dir, dot: true })) {
+      await rm(path.join(dir, file), { force: true })
+    }
+  } catch {}
+}
+
+await purgeResiduals()
+process.on("SIGINT", async () => {
+  await purgeResiduals()
+  process.exit(130)
+})
+process.on("SIGTERM", async () => {
+  await purgeResiduals()
+  process.exit(143)
+})
+
 await rm(outdir, { recursive: true, force: true })
 
 const singleFlag = process.argv.includes("--single")
@@ -224,6 +243,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
   )
   await verifyArtifact(path.join(outdir, name))
 }
+await purgeResiduals()
 
 async function compileExecutable(item: (typeof allTargets)[number]) {
   const release = process.env.BUN_COMPILE_RELEASE

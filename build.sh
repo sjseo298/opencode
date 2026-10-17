@@ -199,12 +199,19 @@ install_deps() {
   echo "✅ Dependencies installed."
 }
 
-# ── clean turbo cache ──────────────────────────────────────────────
-clean_turbo() {
-  echo "🧹  Cleaning turbo cache..."
+# ── clean build residuals & temporary artifacts ────────────────────
+clean_residuals() {
+  echo "🧹  Limpiando archivos residuales y cachés temporales..."
   cd "$REPO_ROOT"
   rm -rf .turbo
-  echo "✅ Turbo cache cleaned."
+  rm -rf "$REPO_ROOT/packages/opencode/dist" 2>/dev/null || true
+  rm -rf "$REPO_ROOT/packages/cli/.cache" 2>/dev/null || true
+  find "$REPO_ROOT/packages" -maxdepth 3 -name ".*.bun-build" -exec rm -f {} + 2>/dev/null || true
+  echo "✅ Archivos residuales eliminados."
+}
+
+clean_turbo() {
+  clean_residuals
 }
 
 # ── typecheck report ──────────────────────────────────────────────
@@ -271,6 +278,7 @@ build() {
   echo "🔨  Building opencode (single target)..."
   cd "$OPENCODE_DIR"
   bun run script/build.ts --single
+  clean_residuals
   echo "✅ Build complete."
 }
 
