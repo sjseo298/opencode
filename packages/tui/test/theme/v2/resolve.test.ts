@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { ResourceContext, RGBA } from "@opentui/core"
+import { RGBA } from "@opentui/core"
 import {
   generateSyntax,
   resolveTheme,
@@ -109,15 +109,10 @@ test("validates hue relationships in every provided mode while parsing", () => {
 
 test("generates syntax with one categorical hue", () => {
   const theme = resolveSource(complete("light", { categorical: ["red"] }), "light")
-  const owner = new ResourceContext({ objectCapacity: 1, renderCellsMax: 1 })
-  const syntax = generateSyntax(theme, owner)
+  const syntax = generateSyntax(theme)
 
-  try {
-    expect(syntax.getStyleId("extmark.skill")).not.toBeNull()
-  } finally {
-    syntax.destroy()
-    owner.destroy()
-  }
+  expect(syntax.getStyleId("extmark.skill")).not.toBeNull()
+  syntax.destroy()
 })
 
 test("rejects incomplete themes instead of merging defaults", () => {
@@ -271,6 +266,15 @@ test("resolves matched action variants and states", () => {
   expect(theme.background.action.primary.selected).toBeInstanceOf(RGBA)
   expect(theme.background.action.destructive.disabled).toBeInstanceOf(RGBA)
   expect(theme.background.formfield.hovered).toBeInstanceOf(RGBA)
+})
+
+test("defaults faint text to muted unless a theme sets it", () => {
+  const fallback = resolveTheme(light)
+  const explicit = resolveTheme({ ...light, text: { ...light.text, faint: "#123456" } })
+
+  expect(fallback.text.faint).toBe(fallback.text.muted)
+  expect(fallback.surface("dialog").text.faint).toBe(fallback.surface("dialog").text.muted)
+  expect(explicit.text.faint.toInts()).toEqual([18, 52, 86, 255])
 })
 
 test("resolves dialog surfaces from direct colors", () => {

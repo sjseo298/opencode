@@ -241,10 +241,12 @@ const source = {
   "ui.message.collapse": "Collapse message",
   "ui.message.copy": "Copy",
   "ui.message.copyMessage": "Copy message",
+  "ui.message.copyFullMessage": "Copy full message",
   "ui.message.forkMessage": "Fork to new session",
   "ui.message.revertMessage": "Revert message",
   "ui.message.moveToQueue": "Move to queue",
   "ui.message.pending": "Pending",
+  "ui.message.voice": "Voice",
   "ui.message.deletePending": "Delete",
   "ui.message.copyResponse": "Copy response",
   "ui.message.copied": "Copied",
@@ -279,6 +281,7 @@ const source = {
   "ui.question.multiHint": "Select all answers that apply",
   "ui.question.singleHint": "Select one answer",
   "ui.question.custom.placeholder": "Type your answer…",
+  "ui.question.custom.answerPlaceholder": "Type your own answer…",
 } satisfies Record<string, string>
 
 export type Key = keyof typeof source

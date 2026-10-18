@@ -87,7 +87,7 @@ import { FormPrompt } from "./form"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
 import { sessionEpilogue } from "../../util/presentation"
-import { useConfig } from "../../config"
+import { useConfig, useNewDesigns } from "../../config"
 import { useClipboard } from "../../context/clipboard"
 import { nextThinkingMode, type ThinkingMode } from "../../context/thinking"
 import { getScrollAcceleration } from "../../util/scroll"
@@ -234,7 +234,6 @@ export function Session(props: {
   })
   const disabled = createMemo(() => promptedPermissions().length > 0 || forms().length > 0)
 
-  const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const thinkingMode = createMemo<ThinkingMode>(() => config.session?.thinking ?? "hide")
   const showScrollbar = createMemo(() => config.session?.scrollbar ?? false)
@@ -394,8 +393,8 @@ export function Session(props: {
 
   /** Runs after layout has settled (two frames), unless the transcript was torn down. */
   const afterLayout = (continuation: () => void) => {
-    renderer.requestAnimationFrame(() => {
-      renderer.requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
         if (!scroll || scroll.isDestroyed) return
         continuation()
       })
@@ -407,7 +406,7 @@ export function Session(props: {
   // Renderable positions are still stale at that point; read the computed layout instead.
   let held: { node: Renderable; top: number } | undefined
   const layoutTop = (node: Renderable): number =>
-    node === scroll.content || !node.parent ? 0 : node.getComputedLayout().top + layoutTop(node.parent)
+    node === scroll.content || !node.parent ? 0 : node.getLayoutNode().getComputedTop() + layoutTop(node.parent)
   const holdAnchor = () => {
     if (held && !held.node.isDestroyed) scroll.scrollTo(layoutTop(held.node) - held.top)
   }
@@ -624,6 +623,7 @@ export function Session(props: {
     current.submit()
   })
   const dialog = useDialog()
+  const renderer = useRenderer()
   const runPendingAction = createSingleFlight<string>()
   const mutatePending = async (action: PendingAction, inboxID: string, failureLabel?: string) => {
     const result = await runPendingAction(inboxID, async () => {
@@ -648,6 +648,8 @@ export function Session(props: {
     dialog.replace(() => (
       <DialogSelect
         title="Queued prompts"
+        searchInTitle
+        titlePlaceholder="Search queued prompts"
         options={queuedPrompts().map((prompt, index) => ({
           title: prompt.text,
           value: prompt.id,
@@ -683,27 +685,16 @@ export function Session(props: {
               void mutatePending("cancel", queued.id, "undo").then((undone) => {
                 if (!undone) return
                 target.setMode("normal")
-                target.set(
-                  appendPrompt(
-                    target.current,
-                    { ...projectedPromptInput(queued.payload), pasted: [] },
-                    renderer.widthMethod,
-                  ),
-                )
+                target.set(appendPrompt(target.current, { ...projectedPromptInput(queued.payload), pasted: [] }))
                 dialog.clear()
                 target.focus()
               })
             },
           },
         ]}
-        footerHints={[{ title: "steer", label: "enter" }]}
+        footerHints={[{ title: "steer", label: "enter", group: "primary" }]}
       />
     ))
-  const unavailable = (feature: string) => {
-    toast.show({ message: `${feature} is not implemented for V2 sessions yet`, variant: "error", duration: 5000 })
-    dialog.clear()
-  }
-
   const alignMessage = (messageID: string, top: number) => {
     scroll.stickyScroll = false
     setNavigationMessage(messageID)
@@ -913,14 +904,6 @@ export function Session(props: {
   ]
 
   const baseCommands = createMemo(() => [
-    {
-      title: "Share session",
-      id: "session.share",
-      suggested: route.type === "session",
-      group: "Session",
-      slash: { name: "share" },
-      run: () => unavailable("Sharing"),
-    },
     {
       title: "Rename session",
       id: "session.rename",
@@ -1154,9 +1137,12 @@ export function Session(props: {
       title: "Copy last assistant message",
       id: "messages.copy",
       group: "Session",
+      slash: {
+        name: "copy",
+      },
       run: () => {
         const lastAssistantMessage = messagesBeforeRevert().findLast(
-          (msg): msg is SessionMessageAssistant => msg.type === "assistant",
+          (msg) => msg.type === "assistant" || (msg.type === "compaction" && msg.status === "completed" && msg.summary.trim() !== ""),
         )
         if (!lastAssistantMessage) {
           toast.show({ message: "No assistant messages found", variant: "error" })
@@ -1164,17 +1150,16 @@ export function Session(props: {
           return
         }
 
-        const textParts = lastAssistantMessage.content.filter((part) => part.type === "text")
-        if (textParts.length === 0) {
-          toast.show({ message: "No text parts found in last assistant message", variant: "error" })
-          dialog.clear()
-          return
-        }
-
-        const text = textParts
-          .map((part) => part.text)
-          .join("\n")
-          .trim()
+        const text =
+          lastAssistantMessage.type === "assistant"
+            ? lastAssistantMessage.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n")
+                .trim()
+            : lastAssistantMessage.type === "compaction" && lastAssistantMessage.status === "completed"
+              ? lastAssistantMessage.summary.trim()
+              : ""
         if (!text) {
           toast.show({
             message: "No text content found in last assistant message",
@@ -1207,9 +1192,6 @@ export function Session(props: {
       title: "Copy session transcript",
       id: "session.copy",
       group: "Session",
-      slash: {
-        name: "copy",
-      },
       run: async () => {
         try {
           const sessionData = session()
@@ -2233,6 +2215,7 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
 
 function UserMessage(props: { message: SessionMessageUser }) {
   const ctx = use()
+  const newDesigns = useNewDesigns()
   const data = useData()
   const local = useLocal()
   const files = createMemo(() => deduplicateVisibleImages(props.message.files ?? []))
@@ -2278,6 +2261,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
               dialog.replace(() => (
                 <DialogSelect
                   title="Pending steer"
+                  renderFilter={!newDesigns()}
                   options={[
                     { title: "Move to queue", value: "queue" as const },
                     { title: "Delete", value: "cancel" as const },

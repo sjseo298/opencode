@@ -1,6 +1,5 @@
 import { domain } from "./stage"
 import { EMAILOCTOPUS_API_KEY } from "./app"
-import { SECRET } from "./secret"
 
 // Preview stages have no new Console or inference deployment to forward to.
 const migrationDomain =
@@ -20,7 +19,6 @@ const consoleMigration = new sst.Linkable("ConsoleMigration", {
 new sst.cloudflare.Bucket("ZenData")
 new sst.cloudflare.Bucket("ZenDataNew")
 
-const DISCORD_INCIDENT_WEBHOOK_URL = new sst.Secret("DISCORD_INCIDENT_WEBHOOK_URL")
 const AWS_SES_ACCESS_KEY_ID = new sst.Secret("AWS_SES_ACCESS_KEY_ID")
 const AWS_SES_SECRET_ACCESS_KEY = new sst.Secret("AWS_SES_SECRET_ACCESS_KEY")
 const ENTERPRISE_SALES_INBOX_EMAIL = new sst.Secret("ENTERPRISE_SALES_INBOX_EMAIL")
@@ -28,10 +26,9 @@ const ENTERPRISE_SALES_INBOX_EMAIL = new sst.Secret("ENTERPRISE_SALES_INBOX_EMAI
 const SALESFORCE_CLIENT_ID = new sst.Secret("SALESFORCE_CLIENT_ID")
 const SALESFORCE_CLIENT_SECRET = new sst.Secret("SALESFORCE_CLIENT_SECRET")
 const SALESFORCE_INSTANCE_URL = new sst.Secret("SALESFORCE_INSTANCE_URL")
-
-const logProcessor = new sst.cloudflare.Worker("LogProcessor", {
-  handler: "packages/console/function/src/log-processor.ts",
-  link: [SECRET.HoneycombApiKey],
+const CONSOLE_CRM_TOKEN = new sst.Secret("CONSOLE_CRM_TOKEN")
+const CONSOLE_CRM_LOOKUP_URL = new sst.Linkable("CONSOLE_CRM_LOOKUP_URL", {
+  properties: { value: `https://${domain}/console/api/internal/console-account` },
 })
 
 new sst.cloudflare.x.SolidStart("Console", {
@@ -39,8 +36,6 @@ new sst.cloudflare.x.SolidStart("Console", {
   path: "packages/console/app",
   link: [
     consoleMigration,
-    DISCORD_INCIDENT_WEBHOOK_URL,
-    SECRET.HoneycombWebhookSecret,
     EMAILOCTOPUS_API_KEY,
     AWS_SES_ACCESS_KEY_ID,
     AWS_SES_SECRET_ACCESS_KEY,
@@ -48,6 +43,8 @@ new sst.cloudflare.x.SolidStart("Console", {
     SALESFORCE_CLIENT_ID,
     SALESFORCE_CLIENT_SECRET,
     SALESFORCE_INSTANCE_URL,
+    CONSOLE_CRM_TOKEN,
+    CONSOLE_CRM_LOOKUP_URL,
   ],
   environment: {
     //VITE_DOCS_URL: web.url.apply((url) => url!),
@@ -69,7 +66,6 @@ new sst.cloudflare.x.SolidStart("Console", {
               ...(bindings ?? []),
               { type: "service", name: "INFERENCE", service: `opencode-inference-${$app.stage}` },
             ])
-          args.tailConsumers = [{ service: logProcessor.nodes.worker.scriptName }]
         },
       },
     },

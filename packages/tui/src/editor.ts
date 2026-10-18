@@ -13,10 +13,11 @@ type EditorStdio = "inherit" | "pipe" | "ignore" | number | Stream
 
 export async function openEditor(input: { value: string; renderer: CliRenderer; cwd?: string; stdin?: EditorStdio }) {
   const editor = process.env.VISUAL || process.env.EDITOR
-  if (!editor) return
+  if (!editor) throw new Error("Set $VISUAL or $EDITOR to open an external editor")
   const file = path.join(os.tmpdir(), `${Date.now()}.md`)
   await writeFile(file, input.value)
-  await input.renderer.suspend()
+  input.renderer.suspend()
+  input.renderer.currentRenderBuffer.clear()
   try {
     await new Promise<void>((resolve, reject) => {
       const parts = editor.split(" ")
@@ -34,7 +35,9 @@ export async function openEditor(input: { value: string; renderer: CliRenderer; 
     return (await readFile(file, "utf8")) || undefined
   } finally {
     await rm(file, { force: true }).catch(() => {})
-    await input.renderer.resume()
+    input.renderer.currentRenderBuffer.clear()
+    input.renderer.resume()
+    input.renderer.requestRender()
   }
 }
 
