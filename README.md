@@ -33,14 +33,12 @@ Script principal para sincronizar el fork con el repositorio upstream y construi
 
 # Also available via package managers:
 npm i -g @opencode/cli@latest      # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
+brew install anomalyco/tap/opencode-v2 # macOS and Linux (recommended, always up to date)
 brew install opencode              # macOS and Linux (official brew formula, updated less)
 sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
+paru -S opencode-beta              # Arch Linux (Latest from AUR)
 mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+nix run github:anomalyco/opencode  # Nix
 ```
 
 #### Qué hace cada paso
