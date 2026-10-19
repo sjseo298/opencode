@@ -658,11 +658,15 @@ def extract_llamacpp_models(data: dict) -> dict:
             parse_positive_int(item.get("max_context_length"))
             or parse_positive_int(item.get("context_length"))
             or parse_positive_int(item.get("input_token_limit"))
+            or parse_positive_int((item.get("limits") or {}).get("context") if isinstance(item.get("limits"), dict) else None)
+            or parse_positive_int((item.get("limit") or {}).get("context") if isinstance(item.get("limit"), dict) else None)
         )
         output_limit = (
             parse_positive_int(item.get("output_token_limit"))
             or parse_positive_int(item.get("max_output_tokens"))
             or parse_positive_int(item.get("max_tokens"))
+            or parse_positive_int((item.get("limits") or {}).get("output") if isinstance(item.get("limits"), dict) else None)
+            or parse_positive_int((item.get("limit") or {}).get("output") if isinstance(item.get("limit"), dict) else None)
         )
 
         # Fallback to preset/local/runtime only when endpoint values are unavailable.
@@ -672,6 +676,8 @@ def extract_llamacpp_models(data: dict) -> dict:
             ctx_size = infer_context_from_model_path(model_id)
         if ctx_size <= 0:
             ctx_size = runtime_ctx
+        if ctx_size <= 32768 and ("qwen" in model_id.lower() or "splash" in model_id.lower()):
+            ctx_size = 262144
         if output_limit <= 0:
             output_limit = parse_positive_int(preset.get("n-predict"))
         if output_limit <= 0:
@@ -750,7 +756,7 @@ def extract_llamacpp_models(data: dict) -> dict:
                 "output": output_modalities,
             },
             "limit": {
-                "context": ctx_size if ctx_size > 0 else DEFAULT_OUTPUT_LIMIT,
+                "context": ctx_size if ctx_size > 0 else (262144 if ("qwen" in model_id.lower() or "splash" in model_id.lower()) else DEFAULT_OUTPUT_LIMIT),
                 "output": output_limit,
             },
         }
