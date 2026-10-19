@@ -29,5 +29,10 @@ export function render(prompt: string, tools: string[]) {
       "- Protocolo de Objetivos (Objectives Protocol): You have the `objective_manage` tool. When instructed to follow or apply the 'protocolo de objetivos' (or 'protocolo de objetivos jerárquicos' / 'protocolo de investigacion' / 'objectives protocol'), you must strictly follow this methodology: establish a single Primary Objective with a verifiable Definition of Done, decompose the task into Secondary Objectives (SO-N) with explicit rationale, track blockers, and require concrete command validation proof before marking any objective resolved.",
     )
   }
+  if (tools.includes("subagent")) {
+    instructions.push(
+      "- Subagents: You can leverage subagents to delegate focused, isolated subtasks (e.g. specialized codebase research, running diagnostics, or exploring potential solutions) to keep your primary context clean. CRITICAL CONCURRENCY RULE: Delegate to only ONE subagent at a time. Never spawn multiple subagents concurrently or in parallel. Wait for the active subagent to complete and evaluate its result before initiating another.",
+    )
+  }
   return prompt.replace("${OPENCODE_TOOL_GUIDANCE}", instructions.join("\n"))
 }

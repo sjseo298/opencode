@@ -254,4 +254,37 @@ describe("SidebarObjectives TUI component", () => {
     expect(po?.secondaries[1].id).toBe("SO-2")
     expect(po?.secondaries[1].status).toBe("exploring")
   })
+
+  test("extracts objectives from compaction checkpoint summary as fallback", () => {
+    const sid = "test-session-compaction-fallback"
+    const messages = [
+      {
+        id: "c1",
+        type: "compaction",
+        summary: [
+          "## Protocolo de Objetivos - Resumen de Objetivos (Insumo de Compactación)",
+          "[PO] Core Engine Modernization [EXPLORING]",
+          "Definition of Done: Zero compilation warnings and all unit tests pass",
+          "",
+          "### Completed Objectives",
+          "- [SO-1] [RESOLVED] Update build script (Validation Proof: bash build.sh exit 0)",
+          "",
+          "### Active / Exploring Objectives",
+          "- [SO-2] [EXPLORING] Refactor session runner (Rationale: Improve concurrency)",
+        ].join("\n"),
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.title).toBe("Core Engine Modernization")
+    expect(po?.definitionOfDone).toBe("Zero compilation warnings and all unit tests pass")
+    expect(po?.secondaries.length).toBe(2)
+    expect(po?.secondaries[0].id).toBe("SO-1")
+    expect(po?.secondaries[0].status).toBe("resolved")
+    expect(po?.secondaries[0].validationProof).toBe("bash build.sh exit 0")
+    expect(po?.secondaries[1].id).toBe("SO-2")
+    expect(po?.secondaries[1].status).toBe("exploring")
+    expect(po?.secondaries[1].rationale).toBe("Improve concurrency")
+  })
 })

@@ -176,6 +176,86 @@ export function extractObjectivesFromMessages(
     }
   }
 
+  // 3. Fallback: Parse from compaction checkpoint message if po is still undefined
+  if (!po) {
+    for (const msg of messages) {
+      const text =
+        msg.type === "compaction" && typeof msg.summary === "string"
+          ? msg.summary
+          : typeof msg.content === "string" && msg.content.includes("<conversation-checkpoint>")
+            ? msg.content
+            : ""
+      if (!text) continue
+
+      let poTitle = ""
+      let dod = "Verified"
+      const poMatch = text.match(/\[PO\]\s+([^\n\[]+)/i)
+      if (poMatch) {
+        poTitle = poMatch[1].trim()
+      } else {
+        const objMatch = text.match(/## Objective\s*\n+-\s*([^\n]+)/i)
+        if (objMatch) poTitle = objMatch[1].trim()
+      }
+
+      const dodMatch = text.match(/Definition of Done:\s*([^\n]+)/i)
+      if (dodMatch) dod = dodMatch[1].trim()
+
+      if (poTitle) {
+        const secondaries: SecondaryObjectiveView[] = []
+        const soRegex = /-\s*\[(SO-\d+)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/gi
+        let match: RegExpExecArray | null
+        while ((match = soRegex.exec(text)) !== null) {
+          const id = match[1].toUpperCase()
+          const rawStatus = match[2].toLowerCase()
+          const title = match[3].trim()
+          const extra = match[4] || ""
+
+          let rationale = "Preserved from session checkpoint"
+          let blocker: string | undefined
+          let proof: string | undefined
+
+          const rMatch = extra.match(/Rationale:\s*([^;]+)/i)
+          if (rMatch) rationale = rMatch[1].trim()
+
+          const bMatch = extra.match(/Blocker:\s*([^;]+)/i)
+          if (bMatch) blocker = bMatch[1].trim()
+
+          const pMatch = extra.match(/(?:Proof|Validation Proof):\s*([^;]+)/i)
+          if (pMatch) proof = pMatch[1].trim()
+
+          const validStatuses: ObjectiveStatus[] = [
+            "pending",
+            "exploring",
+            "blocked",
+            "resolved",
+            "discarded",
+            "cancelled",
+          ]
+          const status: ObjectiveStatus = validStatuses.includes(rawStatus as any)
+            ? (rawStatus as ObjectiveStatus)
+            : "pending"
+
+          secondaries.push({
+            id,
+            title,
+            status,
+            rationale,
+            blocker,
+            validationProof: proof,
+          })
+        }
+
+        po = {
+          title: poTitle,
+          status: "exploring",
+          definitionOfDone: dod,
+          secondaries,
+        }
+        break
+      }
+    }
+  }
+
   return po
 }
 

@@ -8,6 +8,9 @@ import {
   getObjectives,
   clearSessionObjectives,
   MAX_CONSECUTIVE_READS,
+  postCompactionSessions,
+  formatCompactionObjectivesInput,
+  reconstructObjectivesFromMessages,
 } from "../hierarchical-objectives.ts"
 
 let testCounter = 0
@@ -141,6 +144,28 @@ describe("hierarchical-objectives plugin", () => {
       expect(tool.name).toBe("objective_manage")
       expect(tool.description).toContain("Protocolo de Objetivos (Objectives Protocol)")
       expect(typeof tool.execute).toBe("function")
+    })
+
+    test("registers objective_manage with all actions and statuses in JSON schema enum", async () => {
+      const { getRegisteredTool } = await setupPluginInstance()
+      const tool = getRegisteredTool()
+      expect(tool.input).toBeDefined()
+
+      const { Schema } = await import("effect")
+      const doc = Schema.toJsonSchemaDocument(tool.input) as any
+      const actionEnum = doc.schema.properties.action.enum
+      expect(actionEnum).toContain("set_primary")
+      expect(actionEnum).toContain("add_secondary")
+      expect(actionEnum).toContain("update_secondary")
+      expect(actionEnum).toContain("list")
+
+      const statusEnum = doc.schema.properties.status.anyOf[0].enum
+      expect(statusEnum).toContain("pending")
+      expect(statusEnum).toContain("exploring")
+      expect(statusEnum).toContain("blocked")
+      expect(statusEnum).toContain("resolved")
+      expect(statusEnum).toContain("discarded")
+      expect(statusEnum).toContain("cancelled")
     })
 
     test("executes objective_manage tool to create and update objectives", async () => {
@@ -320,6 +345,99 @@ describe("hierarchical-objectives plugin", () => {
       expect(po?.secondaries[0].status).toBe("pending")
       expect(po?.secondaries[1].title).toBe("Legacy task 2")
       expect(po?.secondaries[1].status).toBe("resolved")
+    })
+
+    test("delivers full objective tree as input and mandatory instruction upon post-compaction session resumption", async () => {
+      const { sessionHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("post-compaction-resumption")
+      setPrimaryObjective(sid, "System Architecture Upgrade", "Deploy to production without downtime")
+      addSecondaryObjective(sid, "Migrate DB driver", "Support connection pooling")
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "resolved",
+        validationProof: "Pool test completed with 100 concurrent workers",
+      })
+      addSecondaryObjective(sid, "Update API endpoints", "Use connection pool from driver")
+
+      // 1. Compaction hook fires
+      const compactionEvent = { sessionID: sid, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["compaction"] ?? []) {
+        await h(compactionEvent)
+      }
+
+      expect(compactionEvent.system.length).toBe(1)
+      expect(compactionEvent.system[0].text).toContain("Insumo de Compactación")
+      expect(compactionEvent.system[0].text).toContain("System Architecture Upgrade")
+      expect(compactionEvent.system[0].text).toContain("Pool test completed with 100 concurrent workers")
+
+      // 2. Next session starts / context hook fires
+      const contextEvent = { sessionID: sid, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(contextEvent)
+      }
+
+      const postCompactionText = contextEvent.system.map((s) => s.text).join("\n")
+      expect(postCompactionText).toContain("Reanudación Post-Compactación")
+      expect(postCompactionText).toContain("System Architecture Upgrade")
+      expect(postCompactionText).toContain("Migrate DB driver")
+      expect(postCompactionText).toContain("Update API endpoints")
+      expect(postCompactionText).toContain("SO-2")
+      expect(postCompactionText).toContain("INSTRUCCIONES OBLIGATORIAS DE REANUDACIÓN")
+      expect(postCompactionText).toContain("Continúa actualizando continuamente este árbol de objetivos mediante `objective_manage`")
+      expect(postCompactionText).toContain("NO reinicies investigaciones, análisis o tareas ya marcadas como [RESOLVED]")
+    })
+
+    test("reconstructs objectives from session message tool calls or compaction checkpoint when in-memory state is missing", async () => {
+      const { sessionHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("checkpoint-reconstruction")
+
+      // Ensure no in-memory state exists
+      clearSessionObjectives(sid)
+
+      const checkpointMessage = {
+        role: "user",
+        content: [
+          "<conversation-checkpoint>",
+          "<summary>",
+          "## Protocolo de Objetivos - Resumen de Objetivos (Insumo de Compactación)",
+          "[PO] Fork Synchronization Protocol [EXPLORING]",
+          "Definition of Done: Clean merge with upstream without regressions",
+          "",
+          "### Completed Objectives",
+          "- [SO-1] [RESOLVED] Fetch upstream branches (Proof: git fetch origin dev returned exit 0)",
+          "",
+          "### Active / Exploring Objectives",
+          "- [SO-2] [EXPLORING] Resolve conflicts in package.json (Rationale: Required for lockfile integrity)",
+          "</summary>",
+          "</conversation-checkpoint>",
+        ].join("\n"),
+      }
+
+      const event = {
+        sessionID: sid,
+        system: [] as { type: string; text: string }[],
+        messages: [checkpointMessage],
+      }
+
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event)
+      }
+
+      // Check that objectives were reconstructed into memory
+      const po = getObjectives(sid)
+      expect(po).toBeDefined()
+      expect(po?.title).toBe("Fork Synchronization Protocol")
+      expect(po?.definitionOfDone).toBe("Clean merge with upstream without regressions")
+      expect(po?.secondaries.length).toBe(2)
+      expect(po?.secondaries[0].id).toBe("SO-1")
+      expect(po?.secondaries[0].status).toBe("resolved")
+      expect(po?.secondaries[1].id).toBe("SO-2")
+      expect(po?.secondaries[1].status).toBe("exploring")
+
+      // Verify that post-compaction prompt was injected
+      const text = event.system.map((s) => s.text).join("\n")
+      expect(text).toContain("Reanudación Post-Compactación")
+      expect(text).toContain("Fork Synchronization Protocol")
+      expect(text).toContain("Resolve conflicts in package.json")
     })
   })
 })

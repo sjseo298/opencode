@@ -306,6 +306,17 @@ describe("subagent-mandatory-instruction plugin", () => {
   })
 
   describe("protocol content validation", () => {
+    test("orchestrator guide contains concurrency rule of strictly 1 subagent at a time", async () => {
+      const hooks = await createHooks({})
+
+      const output = { description: "Subagent", parameters: {} }
+      await hooks["tool.definition"]({ toolID: "subagent" }, output)
+
+      expect(output.description).toContain("Strictly 1 Subagent At A Time")
+      expect(output.description).toContain("Delegate to only ONE subagent at a time")
+      expect(output.description).toContain("Never launch multiple subagents in parallel or concurrently")
+    })
+
     test("orchestrator guide contains example prompt", async () => {
       const hooks = await createHooks({})
 

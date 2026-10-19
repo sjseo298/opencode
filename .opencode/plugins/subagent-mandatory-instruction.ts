@@ -10,7 +10,12 @@ type Options = {
 // Injected into Subagent tool description to guide the orchestrating agent
 // ─────────────────────────────────────────────────────────────────────────────
 
-const defaultOrchestratorGuide = `## Structured Prompt Format (Required)
+const defaultOrchestratorGuide = `## Subagent Delegation & Concurrency Policy: Strictly 1 Subagent At A Time
+- You can leverage subagents to offload focused, deep investigations or isolated subtasks to preserve your context window.
+- CRITICAL CONCURRENCY RULE: Delegate to only ONE subagent at a time. Never launch multiple subagents in parallel or concurrently.
+- Wait for the active subagent to conclude, review its evidence and output, and integrate it into your active objective before delegating any subsequent task.
+
+## Structured Prompt Format (Required)
 
 When delegating to a subagent, your prompt MUST include these three sections:
 

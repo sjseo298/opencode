@@ -2,7 +2,8 @@ import { Plugin } from "@opencode/plugin"
 
 const MAX_TODOS = 30
 const dirtySessions = new Set<string>()
-const postCompactionSessions = new Set<string>()
+const postCompactionSessions: Set<string> =
+  ((globalThis as any).__OPENCODE_POST_COMPACTION_SESSIONS__ ??= new Set<string>())
 const readonlyTools = new Set([
   "read",
   "list",
@@ -137,7 +138,7 @@ export default Plugin.define({
       if (postCompaction) {
         reminders.push(
           po
-            ? "This is immediately after compaction: resume unfinished objectives first."
+            ? "This is immediately after compaction: resume unfinished objectives first. The full Objective Tree is provided as active input. Continue updating it via `objective_manage` as you work."
             : "This is immediately after compaction: resume unfinished todos first.",
         )
       }

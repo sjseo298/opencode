@@ -34,10 +34,15 @@ export interface PrimaryObjective {
 // In-memory objective state per session (attached to globalThis for TUI sidebar access)
 declare global {
   var __OPENCODE_OBJECTIVES__: Map<string, PrimaryObjective> | undefined
+  var __OPENCODE_POST_COMPACTION_SESSIONS__: Set<string> | undefined
 }
 export const sessionObjectives: Map<string, PrimaryObjective> =
   globalThis.__OPENCODE_OBJECTIVES__ ?? new Map<string, PrimaryObjective>()
 globalThis.__OPENCODE_OBJECTIVES__ = sessionObjectives
+
+export const postCompactionSessions: Set<string> =
+  globalThis.__OPENCODE_POST_COMPACTION_SESSIONS__ ?? new Set<string>()
+globalThis.__OPENCODE_POST_COMPACTION_SESSIONS__ = postCompactionSessions
 
 // Inspection tracking for anti-loop protocol per session
 export const consecutiveReadCounts = new Map<string, number>()
@@ -206,25 +211,230 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
   return lines.join("\n")
 }
 
+export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
+  const completed = po.secondaries.filter((s) => s.status === "resolved")
+  const active = po.secondaries.filter((s) => s.status === "exploring")
+  const blocked = po.secondaries.filter((s) => s.status === "blocked")
+  const pending = po.secondaries.filter((s) => s.status === "pending")
+
+  const lines: string[] = [
+    "## Protocolo de Objetivos - Mandatory Objective Snapshot (Compacted History) (Insumo de Compactación)",
+    "CRITICAL INSTRUCTION FOR COMPACTION SUMMARY:",
+    "You MUST preserve this active Objective Tree in the generated summary under ## Objective and ## Work State so that the next session can resume without loss of context.",
+    "- In '## Objective' and '## Requirements', summarize the Primary Objective and Definition of Done.",
+    "- Under '## Work State > ### Completed', preserve all completed secondary objectives with their IDs and validation proofs.",
+    "- Under '## Work State > ### Active', preserve all active or exploring secondary objectives with their IDs and rationales.",
+    "- Under '## Work State > ### Blocked', preserve all blocked secondary objectives with their IDs, blockers, and rationales.",
+    "- In '## Next Move', state the immediate active or pending secondary objective to be resumed.",
+    "",
+    `[PO] ${po.title} [${po.status.toUpperCase()}]`,
+    `Definition of Done: ${po.definitionOfDone || "Verified"}`,
+    "",
+    "### Completed Objectives",
+    ...(completed.length > 0
+      ? completed.map((s) => `- [${s.id}] [RESOLVED] ${s.title}${s.validationProof ? ` (Proof: ${s.validationProof})` : ""}`)
+      : ["- (none)"]),
+    "",
+    "### Active / Exploring Objectives",
+    ...(active.length > 0
+      ? active.map((s) => `- [${s.id}] [EXPLORING] ${s.title} (Rationale: ${s.rationale})`)
+      : ["- (none)"]),
+    "",
+    "### Blocked Objectives",
+    ...(blocked.length > 0
+      ? blocked.map((s) => `- [${s.id}] [BLOCKED] ${s.title} (Blocker: ${s.blocker || "Unspecified"}; Rationale: ${s.rationale})`)
+      : ["- (none)"]),
+    "",
+    "### Pending Objectives",
+    ...(pending.length > 0
+      ? pending.map((s) => `- [${s.id}] [PENDING] ${s.title} (Rationale: ${s.rationale})`)
+      : ["- (none)"]),
+    "",
+    renderObjectiveTree(po),
+  ]
+  return lines.join("\n")
+}
+
+export function reconstructObjectivesFromMessages(
+  sessionID: string,
+  messages?: readonly any[],
+): PrimaryObjective | undefined {
+  if (!Array.isArray(messages) || messages.length === 0) return undefined
+
+  let po: PrimaryObjective | undefined = undefined
+
+  // 1. Scan assistant tool calls if present
+  for (const msg of messages) {
+    if (msg.role !== "assistant" && msg.type !== "assistant") continue
+    const parts = Array.isArray(msg.content) ? msg.content : []
+    for (const part of parts) {
+      if (part.type !== "tool") continue
+      const name = (part.name || part.tool || "").toLowerCase()
+      if (name !== "objective_manage") continue
+      let input = part.state && "input" in part.state ? part.state.input : part.input
+      if (typeof input === "string") {
+        try {
+          input = JSON.parse(input)
+        } catch {
+          continue
+        }
+      }
+      if (!input || typeof input !== "object") continue
+
+      const action = String(input.action || "").toLowerCase()
+      if (action === "set_primary" || action === "init" || action === "set_objectives") {
+        if (input.title && input.definitionOfDone) {
+          po = setPrimaryObjective(sessionID, input.title, input.definitionOfDone)
+          if (Array.isArray(input.secondaries)) {
+            for (const s of input.secondaries) {
+              if (s?.title) {
+                const so = addSecondaryObjective(sessionID, s.title, s.rationale || "Planned subtask")
+                if (s.status && s.status !== "pending") {
+                  updateSecondaryObjective(sessionID, so.id, {
+                    status: s.status,
+                    blocker: s.blocker,
+                    validationProof: s.validationProof,
+                  })
+                }
+              }
+            }
+          }
+        }
+      } else if (action === "add_secondary" || action === "add_secondaries") {
+        const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+          ? input.secondaries
+          : (input.title ? [{ title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+        for (const item of items) {
+          if (item?.title && item?.rationale) {
+            const so = addSecondaryObjective(sessionID, item.title, item.rationale)
+            if (item.status && item.status !== "pending") {
+              updateSecondaryObjective(sessionID, so.id, {
+                status: item.status,
+                blocker: item.blocker,
+                validationProof: item.validationProof,
+              })
+            }
+          }
+        }
+      } else if (action === "update_secondary" || action === "update_secondaries") {
+        const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+          ? input.secondaries
+          : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+        for (const item of items) {
+          if (item?.id) {
+            updateSecondaryObjective(sessionID, item.id, {
+              status: item.status,
+              title: item.title,
+              rationale: item.rationale,
+              blocker: item.blocker,
+              validationProof: item.validationProof,
+            })
+          }
+        }
+      }
+    }
+  }
+
+  if (po) return po
+
+  // 2. Scan checkpoint/compaction messages
+  for (const msg of messages) {
+    const text =
+      typeof msg?.content === "string"
+        ? msg.content
+        : Array.isArray(msg?.content)
+          ? msg.content.map((c: any) => c.text || "").join("\n")
+          : typeof msg?.summary === "string"
+            ? msg.summary
+            : ""
+    if (!text || (!text.includes("<conversation-checkpoint>") && !text.includes("## Objective") && !text.includes("[PO]"))) {
+      continue
+    }
+
+    let poTitle = ""
+    let dod = "Complete all tasks and verify requirements."
+    const poMatch = text.match(/\[PO\]\s+([^\n\[]+)/i)
+    if (poMatch) {
+      poTitle = poMatch[1].trim()
+    } else {
+      const objMatch = text.match(/## Objective\s*\n+-\s*([^\n]+)/i)
+      if (objMatch) {
+        poTitle = objMatch[1].trim()
+      }
+    }
+
+    const dodMatch = text.match(/Definition of Done:\s*([^\n]+)/i)
+    if (dodMatch) {
+      dod = dodMatch[1].trim()
+    }
+
+    if (poTitle) {
+      po = setPrimaryObjective(sessionID, poTitle, dod)
+
+      const soRegex = /-\s*\[(SO-\d+)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/gi
+      let match: RegExpExecArray | null
+      while ((match = soRegex.exec(text)) !== null) {
+        const id = match[1].toUpperCase()
+        const rawStatus = match[2].toLowerCase()
+        const title = match[3].trim()
+        const extra = match[4] || ""
+
+        let rationale = "Preserved from session checkpoint"
+        let blocker: string | undefined
+        let proof: string | undefined
+
+        const rMatch = extra.match(/Rationale:\s*([^;]+)/i)
+        if (rMatch) rationale = rMatch[1].trim()
+
+        const bMatch = extra.match(/Blocker:\s*([^;]+)/i)
+        if (bMatch) blocker = bMatch[1].trim()
+
+        const pMatch = extra.match(/(?:Proof|Validation Proof):\s*([^;]+)/i)
+        if (pMatch) proof = pMatch[1].trim()
+
+        const validStatuses: SecondaryObjectiveStatus[] = [
+          "pending", "exploring", "blocked", "resolved", "discarded", "cancelled",
+        ]
+        const status: SecondaryObjectiveStatus = validStatuses.includes(rawStatus as any)
+          ? (rawStatus as SecondaryObjectiveStatus)
+          : "pending"
+
+        const so = addSecondaryObjective(sessionID, title, rationale)
+        updateSecondaryObjective(sessionID, so.id, {
+          status,
+          blocker,
+          validationProof: proof,
+        })
+      }
+
+      if (po.secondaries.length > 0) {
+        return po
+      }
+    }
+  }
+
+  return po
+}
+
 // Tool Input Schema using Effect Schema
-const ObjectiveActionSchema = Schema.Literal(
-  "set_primary",
-  "init",
-  "set_objectives",
-  "add_secondary",
-  "add_secondaries",
-  "update_secondary",
-  "update_secondaries",
-  "list",
-)
-const SecondaryStatusSchema = Schema.Literal(
-  "pending",
-  "exploring",
-  "blocked",
-  "resolved",
-  "discarded",
-  "cancelled",
-)
+const ObjectiveActionSchema = Schema.Union([
+  Schema.Literal("set_primary"),
+  Schema.Literal("init"),
+  Schema.Literal("set_objectives"),
+  Schema.Literal("add_secondary"),
+  Schema.Literal("add_secondaries"),
+  Schema.Literal("update_secondary"),
+  Schema.Literal("update_secondaries"),
+  Schema.Literal("list"),
+])
+const SecondaryStatusSchema = Schema.Union([
+  Schema.Literal("pending"),
+  Schema.Literal("exploring"),
+  Schema.Literal("blocked"),
+  Schema.Literal("resolved"),
+  Schema.Literal("discarded"),
+  Schema.Literal("cancelled"),
+])
 
 export const SecondaryInputItemSchema = Schema.Struct({
   id: Schema.optional(
@@ -508,6 +718,9 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
       if (!sessionID) return
 
       let po = sessionObjectives.get(sessionID)
+      if (!po && Array.isArray(event.messages)) {
+        po = reconstructObjectivesFromMessages(sessionID, event.messages)
+      }
 
       // Backward compatibility: If no objective tree exists, check if legacy todos exist
       if (!po) {
@@ -532,17 +745,10 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
 
       if (!po) return
 
-      const tree = renderObjectiveTree(po)
+      postCompactionSessions.add(sessionID)
       event.system.push({
         type: "text",
-        text: [
-          "## Mandatory Objective Snapshot (Compacted History)",
-          "You MUST preserve this Objective Tree across compaction.",
-          "Do NOT restart completed objectives or re-investigate resolved findings.",
-          "Keep your next action strictly aligned with active exploring or pending Secondary Objectives.",
-          "",
-          tree,
-        ].join("\n"),
+        text: formatCompactionObjectivesInput(po),
       })
     })
 
@@ -552,6 +758,9 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
       if (!sessionID) return
 
       let po = sessionObjectives.get(sessionID)
+      if (!po && Array.isArray(event.messages)) {
+        po = reconstructObjectivesFromMessages(sessionID, event.messages)
+      }
 
       // Backward compatibility check
       if (!po) {
@@ -583,24 +792,60 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
         antiLoopWarnings.delete(sessionID)
       }
 
+      const isPostCompaction =
+        postCompactionSessions.has(sessionID) ||
+        (Array.isArray(event.messages) &&
+          event.messages.some((m: any) => {
+            const content =
+              typeof m?.content === "string"
+                ? m.content
+                : Array.isArray(m?.content)
+                  ? m.content.map((c: any) => c.text || "").join(" ")
+                  : ""
+            return content.includes("<conversation-checkpoint>")
+          }))
+
       if (po) {
         const tree = renderObjectiveTree(po)
         const activeSO = po.secondaries.find((s) => s.status === "exploring" || s.status === "pending")
 
-        reminders.push(
-          [
-            "## Protocolo de Objetivos (Objectives Protocol) - Objective Alignment",
-            "This session is governed by the Protocolo de Objetivos (Objectives Protocol).",
-            "Every step you take must serve an active objective in the tree below.",
-            "NEVER declare an objective resolved based on deduction or reasoning alone.",
-            "Run actual commands and verify output before concluding any step ('Done means Done').",
-            activeSO
-              ? `🎯 **Current Target:** Work on ${activeSO.id}: "${activeSO.title}". Focus your immediate tool call on advancing this objective.`
-              : "All current secondary objectives are resolved or discarded. If the Primary Objective is satisfied, conclude with evidence. Otherwise, define the next SO.",
-            "",
-            tree,
-          ].join("\n"),
-        )
+        if (isPostCompaction) {
+          reminders.push(
+            [
+              "## 🔄 Protocolo de Objetivos: Reanudación Post-Compactación",
+              "El contexto de la conversación previa ha sido compactado. Se te entregan los objetivos vigentes como insumo de trabajo obligatorio para continuar la sesión:",
+              "",
+              tree,
+              "",
+              activeSO
+                ? `🎯 **Objetivo Activo Inmediato:** ${activeSO.id}: "${activeSO.title}". Tu próxima acción debe enfocarse estrictamente en avanzar este objetivo.`
+                : "Todos los objetivos secundarios actuales han sido resueltos. Si el Objetivo Primario está cumplido con evidencia, concluye; de lo contrario, define el siguiente SO.",
+              "",
+              "**INSTRUCCIONES OBLIGATORIAS DE REANUDACIÓN:**",
+              "1. NO reinicies investigaciones, análisis o tareas ya marcadas como [RESOLVED].",
+              "2. Continúa actualizando continuamente este árbol de objetivos mediante `objective_manage` (`set_primary`, `add_secondary`, `update_secondary`) a medida que avances.",
+              "3. Si descubres nuevas subtareas o dependencias, regístralas de inmediato con `action: 'add_secondary'`.",
+              "4. Si encuentras un bloqueo o error, márcalo con `action: 'update_secondary'`, `status: 'blocked'`, `blocker: '...'`.",
+              "5. Antes de declarar cualquier objetivo completado, ejecuta las validaciones reales y adjunta la evidencia (`validationProof`). 'Done means Done'.",
+            ].join("\n"),
+          )
+          postCompactionSessions.delete(sessionID)
+        } else {
+          reminders.push(
+            [
+              "## Protocolo de Objetivos (Objectives Protocol) - Objective Alignment",
+              "This session is governed by the Protocolo de Objetivos (Objectives Protocol).",
+              "Every step you take must serve an active objective in the tree below.",
+              "NEVER declare an objective resolved based on deduction or reasoning alone.",
+              "Run actual commands and verify output before concluding any step ('Done means Done').",
+              activeSO
+                ? `🎯 **Current Target:** Work on ${activeSO.id}: "${activeSO.title}". Focus your immediate tool call on advancing this objective.`
+                : "All current secondary objectives are resolved or discarded. If the Primary Objective is satisfied, conclude with evidence. Otherwise, define the next SO.",
+              "",
+              tree,
+            ].join("\n"),
+          )
+        }
       } else {
         reminders.push(
           [
@@ -612,6 +857,7 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
             "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan immediately.",
             "4. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
             "5. When new blockers or sub-tasks arise, call `objective_manage` (`action: 'add_secondary'`) to register them dynamically.",
+            "6. Subagent Delegation: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics for a single secondary objective. CRITICAL RULE: Run strictly ONE subagent at a time. Never spawn multiple subagents in parallel or concurrently.",
           ].join("\n"),
         )
       }

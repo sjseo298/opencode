@@ -289,9 +289,12 @@ export interface PrimaryObjective {
    * Injects the active **Protocolo de Objetivos** instruction into the agent's system prompt on every turn.
    * If no Primary Objective exists, instructs the agent to establish the PO and initial SOs with `objective_manage`.
    * If objectives exist, renders the formatted tree, active target (`🎯 Current Target: SO-N`), and enforces the *"Done means Done"* validation requirement.
+   * **Post-Compaction Resumption Delivery**: When a session resumes after context compaction (detected via `postCompactionSessions` or `<conversation-checkpoint>`), it delivers the complete objective tree as explicit working input under `## 🔄 Protocolo de Objetivos: Reanudación Post-Compactación`, designating the immediate active target, forbidding re-execution of resolved items, and strictly mandating continuous updating via `objective_manage`.
+   * **Resilience & Memory Recovery**: If in-memory state is absent (e.g. across process restarts or reloaded archived sessions), `reconstructObjectivesFromMessages` automatically parses earlier `objective_manage` tool calls or compaction `<conversation-checkpoint>` summaries to restore the complete objective hierarchy.
 2. **`ctx.session.hook("compaction")`**:
-   * Formats a complete snapshot (`## Active Objective Snapshot`) containing the PO, status, Definition of Done, and all SOs (with rationales, blockers, and validation proof).
-   * Injected into the compaction context so the entire objective tree survives context summarization without amnesia.
+   * Formats a complete structured snapshot (`## Protocolo de Objetivos - Mandatory Objective Snapshot (Compacted History) (Insumo de Compactación)`) containing the PO, status, Definition of Done, and all SOs grouped into Completed, Active, Blocked, and Pending categories with explicit rationales, blockers, and validation proofs.
+   * Delivered directly as input to the compaction summarization model so that the summary strictly preserves the objective hierarchy under `## Objective` and `## Work State` (`### Completed`, `### Active`, `### Blocked`).
+   * Sets the `postCompactionSessions` marker so the resuming session immediately receives the active tree.
 3. **Continuous Reconciliation (`compaction-todo.ts`)**:
    * Tracks modifying/action tools (`write`, `edit`, `bash`, `apply_diff`, etc.). When modifying tools execute without updating objectives, the session is marked dirty.
    * Prompts the agent before concluding: *"⚠️ Objective Reconciliation Required: You have performed code modifications or tool executions. Call `objective_manage` to keep your objective tree synchronized with your latest progress, attach validation proof for completed work, or register newly discovered blockers before finishing your turn."*
@@ -302,6 +305,7 @@ export interface PrimaryObjective {
    * Registered in `packages/tui/src/plugin/builtins.ts`.
    * Displays the Primary Objective and Definition of Done at the top of the right sidebar.
    * Renders color-coded status badges for each Secondary Objective (`[EXPLORING]`, `[BLOCKED]`, `[RESOLVED]`, `[PENDING]`), rationale, blocker alerts, and validation evidence live as tool calls occur (`part.state.input`).
+   * Seamlessly restores objectives from compaction checkpoint summaries if in-memory state was cleared.
 
 ### 11.3 Tool Interface: `objective_manage`
 
@@ -382,6 +386,15 @@ Returns the complete formatted text tree of objectives.
 | **Reasoning Loops** | Frequent re-reading of tasks | Hard anti-loop checks & Value-First test |
 | **TUI Representation** | Generic flat list | Hierarchical right sidebar widget with status badges |
 
+### 11.5 Subagent Delegation & Concurrency Policy
+
+When resolving complex tasks, an agent may leverage the `subagent` tool to offload isolated subtasks, deep diagnostic runs, or extensive file searches to prevent saturating the primary session context.
+
+**Mandatory Rules:**
+1. **Strictly 1 Subagent At A Time**: Never spawn multiple subagents in parallel or launch concurrent agent bursts. Delegation must always be sequential.
+2. **Synchronous Resolution & Evidence Integration**: Wait for the active subagent to conclude, review its evidence and output, and integrate its findings into the active Secondary Objective via `objective_manage` before delegating any subsequent task.
+3. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
+
 ---
 
 ## 12. Quick Reference & Anti-Pattern Matrix
@@ -396,3 +409,4 @@ Returns the complete formatted text tree of objectives.
 | Thinking or writing internal logs in Spanish while user speaks Spanish | Think and log internally in English; deliver final response in user's language. |
 | Re-investigating an approach discarded 5 turns ago | Check the Options Matrix first; do not retry `DISCARDED` options without new data. |
 | Finishing a turn with modified files without updating objectives | Call `objective_manage` to synchronize the tree before ending the turn. |
+| Spawning multiple subagents in parallel | Run strictly 1 subagent at a time; wait for completion before delegating another. |
