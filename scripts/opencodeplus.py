@@ -981,9 +981,8 @@ def build_provider_config(models: dict, server: str) -> dict:
 
     return {
         provider_key: {
-            "api": "openai",
+            "npm": "@ai-sdk/openai-compatible",
             "name": provider_name,
-            "env": [],
             "options": {
                 "baseURL": models[list(models.keys())[0]]["options"]["baseURL"]
                 if models
