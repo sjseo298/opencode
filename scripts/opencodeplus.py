@@ -669,19 +669,6 @@ def extract_llamacpp_models(data: dict) -> dict:
             or parse_positive_int((item.get("limit") or {}).get("output") if isinstance(item.get("limit"), dict) else None)
         )
 
-        # Fallback to preset/local/runtime only when endpoint values are unavailable.
-        if ctx_size <= 0:
-            ctx_size = parse_positive_int(preset.get("ctx-size"))
-        if ctx_size <= 0:
-            ctx_size = infer_context_from_model_path(model_id)
-        if ctx_size <= 0:
-            ctx_size = runtime_ctx
-        if ctx_size <= 32768 and ("qwen" in model_id.lower() or "splash" in model_id.lower()):
-            ctx_size = 262144
-        if output_limit <= 0:
-            output_limit = parse_positive_int(preset.get("n-predict"))
-        if output_limit <= 0:
-            output_limit = DEFAULT_OUTPUT_LIMIT
         capabilities = item.get("capabilities", [])
         caps = [str(cap).strip().lower() for cap in capabilities] if isinstance(capabilities, list) else []
 
@@ -690,11 +677,36 @@ def extract_llamacpp_models(data: dict) -> dict:
             or ("reasoning_effort" in caps)
             or ("reasoning" in caps)
             or ("reasoning-budget" in preset)
+            or (preset.get("reasoning-effort-supported") == "true")
         )
         reasoning_levels = normalize_reasoning_levels(item.get("reasoning_effort_levels"))
         if has_reasoning and not reasoning_levels:
             reasoning_levels = ["low", "medium", "xhigh"]
         reasoning_default = resolve_reasoning_default(reasoning_levels, item.get("reasoning_effort_default")) if reasoning_levels else ""
+
+        is_qwen = "qwen" in model_id.lower() or "splash" in model_id.lower() or "esca" in model_id.lower()
+        is_qwen3_modern = is_qwen and any(k in model_id.lower() for k in ["3.8", "3.6", "3.5", "qwen3"])
+
+        # Fallback to preset/local/runtime only when endpoint values are unavailable.
+        if ctx_size <= 0:
+            ctx_size = parse_positive_int(preset.get("ctx-size"))
+        if ctx_size <= 0:
+            ctx_size = infer_context_from_model_path(model_id)
+        if ctx_size <= 0:
+            ctx_size = runtime_ctx
+        if ctx_size <= 32768 and is_qwen:
+            ctx_size = 262144
+
+        # Modelos Qwen modernos (3.8, 3.6, 3.5, etc.) soportan hasta 131072 tokens con razonamiento y 65536 estándar.
+        if output_limit <= 4096:
+            if is_qwen3_modern:
+                output_limit = 131072 if has_reasoning else 65536
+            elif is_qwen:
+                output_limit = 32768
+            elif output_limit <= 0:
+                output_limit = parse_positive_int(preset.get("n-predict")) or DEFAULT_OUTPUT_LIMIT
+        if output_limit <= 0:
+            output_limit = DEFAULT_OUTPUT_LIMIT
         has_agent = preset.get("agent") == "1"
         has_flash_attn = preset.get("flash-attn") == "true"
         has_kv_unified = preset.get("kv-unified") == "1"
