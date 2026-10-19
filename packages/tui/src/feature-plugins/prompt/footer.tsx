@@ -5,6 +5,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { TextAttributes } from "@opentui/core"
 import { useInteractivity } from "../../context/interactivity"
 import { stringWidth } from "../../util/string-width"
+import { Locale } from "../../util/locale"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -37,13 +38,25 @@ export function PromptFooter(props: {
     if (!props.sessionID) return []
     const session = props.context.data.session.get(props.sessionID)
     if (!session) return []
+    const models = props.context.data.location.model.list(session.location)
     const usage = contextUsage(
       props.context.data.session.message.list(props.sessionID),
-      props.context.data.location.model.list(session.location),
+      models,
       session.revert?.messageID,
     )
     const cost = props.context.data.session.cost(props.sessionID)
+    const selected = props.context.ui?.model?.current?.()
+    const sessionModel = session.model
+    const activeModel =
+      (selected ? models?.find((m) => m.providerID === selected.providerID && m.id === selected.modelID) : undefined) ??
+      (sessionModel ? models?.find((m) => m.providerID === sessionModel.providerID && m.id === sessionModel.id) : undefined) ??
+      (usage?.modelProviderID && usage?.modelID
+        ? models?.find((m) => m.providerID === usage.modelProviderID && m.id === usage.modelID)
+        : undefined)
+    const contextLimit = activeModel?.limit.context ?? usage?.contextLimit
+    const max = contextLimit ? `max ${Locale.number(contextLimit)}` : undefined
     return [
+      max,
       usage ? formatContextUsage(usage.tokens, usage.percent) : undefined,
       cost > 0 ? money.format(cost) : undefined,
     ].filter((item): item is string => Boolean(item))
@@ -146,7 +159,7 @@ export default Plugin.define({
 function promptFooterLayout(input: { width: number; usage: string[]; shortcuts: string[] }) {
   const usage = input.usage.join(" · ")
   const shortcuts = input.shortcuts.join(" · ")
-  const available = Math.max(0, input.width - Math.min(28, Math.floor(input.width / 2)))
+  const available = Math.max(0, input.width - Math.min(20, Math.floor(input.width / 3)))
   if (usage && shortcuts && stringWidth(`${usage} · ${shortcuts}`) <= available) {
     return { usage: true, shortcuts: true }
   }

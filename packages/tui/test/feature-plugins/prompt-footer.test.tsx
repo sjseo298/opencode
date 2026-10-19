@@ -125,7 +125,7 @@ test("prompt footer can hide details", async () => {
 
   try {
     await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("1.0K (10%) · $1.00")
+    expect(app.captureCharFrame()).toContain("max 10.0K · 1.0K (10%) · $1.00")
     expect(app.captureCharFrame()).toContain("ctrl+p commands")
 
     setShowDetails(false)
@@ -138,6 +138,60 @@ test("prompt footer can hide details", async () => {
     setSessionID(undefined)
     await app.renderOnce()
     expect(app.captureCharFrame()).not.toContain("shift+tab agents")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("prompt footer renders max context limit when model is selected even without messages", async () => {
+  const color = RGBA.fromInts(200, 200, 200)
+  const context = {
+    location: { directory: "/workspace" },
+    theme: {
+      text: {
+        base: color,
+        muted: color,
+      },
+    },
+    keymap: {
+      shortcuts: (id: string) => (id === "command.palette.show" ? ["ctrl+p"] : []),
+    },
+    ui: {
+      model: {
+        current: () => ({ providerID: "llamacpp", modelID: "ThinkingCap-Qwen3.8-27B" }),
+      },
+    },
+    data: {
+      session: {
+        family: () => ["session"],
+        status: () => "idle",
+        get: () => ({ id: "session", location: { directory: "/workspace" } }),
+        cost: () => 0,
+        message: { list: () => [] },
+      },
+      shell: { list: () => [] },
+      location: {
+        model: { list: () => [{ providerID: "llamacpp", id: "ThinkingCap-Qwen3.8-27B", limit: { context: 262144 } }] },
+      },
+    },
+  } as unknown as Context
+
+  const app = await testRender(
+    () => (
+      <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
+        <PromptFooter context={context} sessionID="session" mode="normal" showDetails={true} />
+      </box>
+    ),
+    {
+      width: 80,
+      height: 1,
+    },
+  )
+
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("max 262.1K")
+    expect(app.captureCharFrame()).toContain("ctrl+p commands")
   } finally {
     app.renderer.destroy()
   }
