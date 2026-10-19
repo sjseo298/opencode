@@ -1,4 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 
 type Options = {
   orchestratorGuide?: string
@@ -7,7 +7,7 @@ type Options = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ORCHESTRATOR GUIDE
-// Injected into Task tool description to guide the orchestrating agent
+// Injected into Subagent tool description to guide the orchestrating agent
 // ─────────────────────────────────────────────────────────────────────────────
 
 const defaultOrchestratorGuide = `## Structured Prompt Format (Required)
@@ -37,7 +37,7 @@ Define WHAT must be returned:
 \`\`\`
 ## SCOPE
 - Location: local
-- Files: packages/opencode/src/tool/*.ts
+- Files: packages/core/src/tool/*.ts
 - Constraints: read-only
 
 ## OBJECTIVE
@@ -187,10 +187,6 @@ If all validations pass:
 4. Match the specified detail level
 5. Respect all restrictions`
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PLUGIN IMPLEMENTATION
-// ─────────────────────────────────────────────────────────────────────────────
-
 function normalizeString(input: unknown, fallback: string) {
   if (typeof input !== "string") return fallback
   const text = input.trim()
@@ -198,45 +194,42 @@ function normalizeString(input: unknown, fallback: string) {
   return text
 }
 
-const SubagentMandatoryInstructionPlugin: Plugin = async ({ client }, options?: Record<string, unknown>) => {
-  const opts = options as Options | undefined
-  const orchestratorGuide = normalizeString(opts?.orchestratorGuide, defaultOrchestratorGuide)
-  const subagentProtocol = normalizeString(opts?.subagentProtocol, defaultSubagentProtocol)
-  const sessionParentCache = new Map<string, boolean>()
+export default Plugin.define({
+  id: "subagent-mandatory-instruction",
+  async setup(ctx) {
+    const opts = ctx.options as Options | undefined
+    const orchestratorGuide = normalizeString(opts?.orchestratorGuide, defaultOrchestratorGuide)
+    const subagentProtocol = normalizeString(opts?.subagentProtocol, defaultSubagentProtocol)
+    const sessionParentCache = new Map<string, boolean>()
 
-  async function isSubagentSession(sessionID: string) {
-    const cached = sessionParentCache.get(sessionID)
-    if (cached !== undefined) return cached
-    const session = await client.session.get({ path: { id: sessionID } }).catch(() => undefined)
-    const hasParent = typeof session?.data?.parentID === "string" && session.data.parentID.length > 0
-    sessionParentCache.set(sessionID, hasParent)
-    return hasParent
-  }
+    async function isSubagentSession(sessionID: string) {
+      const cached = sessionParentCache.get(sessionID)
+      if (cached !== undefined) return cached
+      const session = await ctx.session.get({ sessionID }).catch(() => undefined)
+      const hasParent = typeof session?.parentID === "string" && session.parentID.length > 0
+      sessionParentCache.set(sessionID, hasParent)
+      return hasParent
+    }
 
-  return {
-    // Inject structured prompt guide into Task tool description for orchestrators
-    async "tool.definition"(input, output) {
-      if (input.toolID !== "task") return
-      // Append the guide without duplicating
-      if (output.description.includes("## Structured Prompt Format")) return
-      output.description = [output.description, orchestratorGuide].join("\n\n")
-    },
+    // Inject structured prompt guide into subagent tool description for orchestrators
+    await ctx.tool.transform((editor) => {
+      editor.update("subagent", (tool) => {
+        if (tool.description && !tool.description.includes("## Structured Prompt Format")) {
+          tool.description = [tool.description, orchestratorGuide].join("\n\n")
+        }
+      })
+    })
 
     // Inject validation protocol into subagent system prompt
-    async "experimental.chat.system.transform"(input, output) {
-      if (!input.sessionID) return
-      if (!(await isSubagentSession(input.sessionID))) return
-      // Avoid duplicate injection
-      if (output.system.some((item) => item.includes("SUBAGENT EXECUTION PROTOCOL"))) return
-      // Prepend to first system message to maintain single system message
-      // (required for models with strict Jinja templates like LlamaCPP)
-      if (output.system.length > 0) {
-        output.system[0] = subagentProtocol + "\n\n" + output.system[0]
+    await ctx.session.hook("context", async (event) => {
+      if (!event.sessionID) return
+      if (!(await isSubagentSession(event.sessionID))) return
+      if (event.system.some((item) => (item.text ?? "").includes("SUBAGENT EXECUTION PROTOCOL"))) return
+      if (event.system.length > 0) {
+        event.system[0] = { ...event.system[0], text: subagentProtocol + "\n\n" + event.system[0].text }
       } else {
-        output.system.push(subagentProtocol)
+        event.system.push({ type: "text", text: subagentProtocol })
       }
-    },
-  }
-}
-
-export default SubagentMandatoryInstructionPlugin
+    })
+  },
+})

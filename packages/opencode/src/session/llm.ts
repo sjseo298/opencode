@@ -215,6 +215,7 @@ const live: Layer.Layer<
       const telemetryTracer = tracer
         ? new Proxy(tracer, {
             get(target, prop, receiver) {
+              // oxlint-disable-next-line no-restricted-globals -- Proxy forwarding requires receiver-aware property access.
               if (prop !== "startSpan") return Reflect.get(target, prop, receiver)
               return (...args: Parameters<typeof target.startSpan>) => {
                 const span = target.startSpan(...args)

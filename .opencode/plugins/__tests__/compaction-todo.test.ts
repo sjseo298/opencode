@@ -18,14 +18,64 @@ async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) 
   
   const { default: plugin } = await import("../compaction-todo.ts")
   
-  const mockClient = {
+  const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+  const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+
+  const mockCtx = {
+    options: {},
     session: {
       todo: async ({ sessionID }: { sessionID: string }) => {
         return todosBySession[sessionID] ?? []
       },
+      hook: async (name: string, handler: any) => {
+        sessionHooks[name] = sessionHooks[name] ?? []
+        sessionHooks[name].push(handler)
+      },
+    },
+    tool: {
+      hook: async (name: string, handler: any) => {
+        toolHooks[name] = toolHooks[name] ?? []
+        toolHooks[name].push(handler)
+      },
     },
   }
-  return plugin({ client: mockClient } as any)
+
+  await plugin.setup(mockCtx as any)
+
+  return {
+    "experimental.session.compacting": async (input: { sessionID: string }, output: { context: string[] }) => {
+      const event = { sessionID: input.sessionID, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["compaction"] ?? []) {
+        await h(event)
+      }
+      for (const part of event.system) {
+        output.context.push(part.text)
+      }
+    },
+    "experimental.compaction.autocontinue": async (input: { sessionID: string }, output: { enabled?: boolean }) => {
+      const event = { sessionID: input.sessionID, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["compaction"] ?? []) {
+        await h(event)
+      }
+      const todos = todosBySession[input.sessionID]
+      const hasOpen = Array.isArray(todos) && todos.some((t: any) => t.status !== "completed")
+      if (hasOpen) output.enabled = true
+    },
+    "experimental.chat.system.transform": async (input: { sessionID: string }, output: { system: string[] }) => {
+      const event = { sessionID: input.sessionID, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event)
+      }
+      for (const part of event.system) {
+        output.system.push(part.text)
+      }
+    },
+    "tool.execute.after": async (input: { tool: string; sessionID: string }) => {
+      for (const h of toolHooks["execute.after"] ?? []) {
+        await h({ tool: input.tool, sessionID: input.sessionID })
+      }
+    },
+  }
 }
 
 // Sample todos for testing
@@ -102,23 +152,33 @@ describe("compaction-todo plugin", () => {
     })
 
     test("handles todos fetch error gracefully", async () => {
-      const mockClient = {
-        session: {
-          todo: async () => {
-            throw new Error("Network error")
-          },
-        },
-      }
       // Import fresh plugin
       const modulePath = require.resolve("../compaction-todo.ts")
       delete require.cache[modulePath]
       const { default: plugin } = await import("../compaction-todo.ts")
-      const hooks = await plugin({ client: mockClient } as any)
 
-      const output = { context: [] as string[], prompt: undefined }
-      await hooks["experimental.session.compacting"]({ sessionID: uniqueSessionID("error") }, output)
+      const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+      const mockCtx = {
+        options: {},
+        session: {
+          todo: async () => {
+            throw new Error("Network error")
+          },
+          hook: async (name: string, handler: any) => {
+            sessionHooks[name] = sessionHooks[name] ?? []
+            sessionHooks[name].push(handler)
+          },
+        },
+        tool: { hook: async () => {} },
+      }
+      await plugin.setup(mockCtx as any)
 
-      expect(output.context.length).toBe(0)
+      const event = { sessionID: uniqueSessionID("error"), system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["compaction"] ?? []) {
+        await h(event)
+      }
+
+      expect(event.system.length).toBe(0)
     })
   })
 

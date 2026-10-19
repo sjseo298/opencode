@@ -3,8 +3,65 @@ import plugin from "../loop-guard.ts"
 
 // Helper to create mock hooks with specific options
 async function createHooks(options: Record<string, unknown> = {}) {
-  const mockClient = {}
-  return plugin({ client: mockClient } as any, options)
+  const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+  const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+
+  const mockCtx = {
+    options,
+    session: {
+      hook: async (name: string, handler: any) => {
+        sessionHooks[name] = sessionHooks[name] ?? []
+        sessionHooks[name].push(handler)
+      },
+    },
+    tool: {
+      hook: async (name: string, handler: any) => {
+        toolHooks[name] = toolHooks[name] ?? []
+        toolHooks[name].push(handler)
+      },
+    },
+  }
+
+  await plugin.setup(mockCtx as any)
+
+  return {
+    "chat.message": async (input: { sessionID: string }) => {
+      for (const h of sessionHooks["prompt"] ?? []) {
+        await h({ sessionID: input.sessionID })
+      }
+    },
+    "tool.execute.before": async (input: { sessionID: string; tool: string; callID: string }, output: { args: any }) => {
+      for (const h of toolHooks["execute.before"] ?? []) {
+        await h({
+          sessionID: input.sessionID,
+          tool: input.tool,
+          id: input.callID,
+          input: output.args,
+        })
+      }
+    },
+    "tool.execute.after": async (input: { sessionID: string; tool: string; callID: string; args: any }, output: any) => {
+      for (const h of toolHooks["execute.after"] ?? []) {
+        await h({
+          sessionID: input.sessionID,
+          tool: input.tool,
+          id: input.callID,
+          input: input.args,
+          status: "completed",
+          result: output,
+        })
+      }
+    },
+    "experimental.chat.system.transform": async (input: { sessionID: string }, output: { system: string[] }) => {
+      const event = { sessionID: input.sessionID, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event)
+      }
+      for (const part of event.system) {
+        output.system.push(part.text)
+      }
+    },
+  }
 }
 
 type SimulatedToolCall = {

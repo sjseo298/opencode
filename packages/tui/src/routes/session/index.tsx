@@ -12,7 +12,6 @@ import {
   Switch,
   type Accessor,
 } from "solid-js"
-import { reconcile } from "solid-js/store"
 import path from "node:path"
 import { EOL, tmpdir } from "node:os"
 import { mkdir, writeFile } from "node:fs/promises"

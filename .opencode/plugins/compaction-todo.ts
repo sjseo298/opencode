@@ -1,4 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 
 const MAX_TODOS = 30
 const dirtySessions = new Set<string>()
@@ -13,7 +13,6 @@ const readonlyTools = new Set([
   "list_mcp_resources",
   "list_mcp_resource_templates",
   "read_mcp_resource",
-  "todowrite",
   "question",
 ])
 
@@ -43,54 +42,50 @@ function openTodosText(todos: unknown[]) {
   }
 }
 
-const CompactionTodoPlugin: Plugin = async ({ client }) => {
-  return {
-    async "experimental.session.compacting"(input, output) {
-      const todos = await client.session.todo({ sessionID: input.sessionID }).catch(() => [])
+export default Plugin.define({
+  id: "compaction-todo",
+  async setup(ctx) {
+    await ctx.session.hook("compaction", async (event) => {
+      const todos = await (ctx.session as any).todo?.({ sessionID: event.sessionID }).catch(() => [])
       if (!Array.isArray(todos) || todos.length === 0) return
       const summary = openTodosText(todos)
       if (!summary) return
-      output.context.push(summary.block)
-    },
-    async "experimental.compaction.autocontinue"(input, output) {
-      const todos = await client.session.todo({ sessionID: input.sessionID }).catch(() => [])
-      if (!Array.isArray(todos)) return
-      if (!openTodosText(todos)) return
-      postCompactionSessions.add(input.sessionID)
-      output.enabled = true
-    },
-    async "experimental.chat.system.transform"(input, output) {
-      if (!input.sessionID) return
-      const todos = await client.session.todo({ sessionID: input.sessionID }).catch(() => [])
+      event.system.push({ type: "text", text: summary.block })
+      postCompactionSessions.add(event.sessionID)
+    })
+
+    await ctx.session.hook("context", async (event) => {
+      if (!event.sessionID) return
+      const todos = await (ctx.session as any).todo?.({ sessionID: event.sessionID }).catch(() => [])
       if (!Array.isArray(todos)) return
       const summary = openTodosText(todos)
       if (!summary) return
 
-      const postCompaction = postCompactionSessions.has(input.sessionID)
-      const dirty = dirtySessions.has(input.sessionID)
+      const postCompaction = postCompactionSessions.has(event.sessionID)
+      const dirty = dirtySessions.has(event.sessionID)
       if (!postCompaction && !dirty) return
 
-      output.system.push(
-        [
+      event.system.push({
+        type: "text",
+        text: [
           "Open todos remain in this session.",
-          "Before ending your turn, reconcile progress against todos and update them with todowrite when statuses changed.",
+          "Before ending your turn, reconcile progress against todos.",
           "Do not leave stale in_progress or pending items if you already completed their work.",
           postCompaction ? "This is immediately after compaction: resume unfinished todos first." : "",
         ]
           .filter(Boolean)
           .join(" "),
-      )
-      postCompactionSessions.delete(input.sessionID)
-    },
-    async "tool.execute.after"(input) {
-      if (input.tool === "todowrite") {
-        dirtySessions.delete(input.sessionID)
+      })
+      postCompactionSessions.delete(event.sessionID)
+    })
+
+    await ctx.tool.hook("execute.after", (event) => {
+      if (event.tool === "todowrite") {
+        dirtySessions.delete(event.sessionID)
         return
       }
-      if (readonlyTools.has(input.tool)) return
-      dirtySessions.add(input.sessionID)
-    },
-  }
-}
-
-export default CompactionTodoPlugin
+      if (readonlyTools.has(event.tool)) return
+      dirtySessions.add(event.sessionID)
+    })
+  },
+})

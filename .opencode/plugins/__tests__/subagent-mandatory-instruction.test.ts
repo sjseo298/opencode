@@ -5,10 +5,11 @@ import plugin from "../subagent-mandatory-instruction.ts"
 function createMockClient(sessions: Record<string, { parentID?: string }>) {
   return {
     session: {
-      get: async ({ path }: { path: { id: string } }) => {
-        const session = sessions[path.id]
+      get: async (input: any) => {
+        const id = input.sessionID ?? input.path?.id
+        const session = sessions[id]
         if (!session) throw new Error("Session not found")
-        return { data: session }
+        return { data: session, ...session }
       },
     },
   }
@@ -20,41 +21,90 @@ async function createHooks(
   options: Record<string, unknown> = {},
 ) {
   const mockClient = createMockClient(sessions)
-  return plugin({ client: mockClient } as any, options)
+  const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+  const toolTransforms: ((editor: any) => Promise<void> | void)[] = []
+
+  const mockCtx = {
+    options,
+    session: {
+      ...mockClient.session,
+      hook: async (name: string, handler: any) => {
+        sessionHooks[name] = sessionHooks[name] ?? []
+        sessionHooks[name].push(handler)
+      },
+    },
+    tool: {
+      transform: async (handler: any) => {
+        toolTransforms.push(handler)
+      },
+    },
+  }
+
+  await plugin.setup(mockCtx as any)
+
+  return {
+    "tool.definition": async (input: { toolID: string }, output: { description: string }) => {
+      const editor = {
+        update: (toolId: string, fn: (tool: any) => void) => {
+          if (toolId === input.toolID) {
+            const tool = { description: output.description }
+            fn(tool)
+            output.description = tool.description
+          }
+        },
+      }
+      for (const t of toolTransforms) {
+        await t(editor)
+      }
+    },
+    "experimental.chat.system.transform": async (
+      input: { sessionID?: string },
+      output: { system: string[] },
+    ) => {
+      const event = {
+        sessionID: input.sessionID,
+        system: output.system.map((text) => ({ type: "text", text })),
+      }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event)
+      }
+      output.system = event.system.map((s) => s.text)
+    },
+  }
 }
 
 describe("subagent-mandatory-instruction plugin", () => {
-  describe("tool.definition hook", () => {
-    test("injects structured prompt guide into task tool description", async () => {
+  describe("tool.transform", () => {
+    test("injects structured prompt guide into subagent tool description", async () => {
       const hooks = await createHooks({})
 
       const output = {
-        description: "Original task tool description",
+        description: "Original subagent tool description",
         parameters: {},
       }
 
-      await hooks["tool.definition"]({ toolID: "task" }, output)
+      await hooks["tool.definition"]({ toolID: "subagent" }, output)
 
       expect(output.description).toContain("## Structured Prompt Format")
       expect(output.description).toContain("### SCOPE")
       expect(output.description).toContain("### OBJECTIVE")
       expect(output.description).toContain("### OUTPUT")
-      expect(output.description).toContain("Original task tool description")
+      expect(output.description).toContain("Original subagent tool description")
     })
 
     test("does NOT modify other tools", async () => {
       const hooks = await createHooks({})
 
       const readOutput = { description: "Read tool description", parameters: {} }
-      const bashOutput = { description: "Bash tool description", parameters: {} }
+      const shellOutput = { description: "Shell tool description", parameters: {} }
       const writeOutput = { description: "Write tool description", parameters: {} }
 
       await hooks["tool.definition"]({ toolID: "read" }, readOutput)
-      await hooks["tool.definition"]({ toolID: "bash" }, bashOutput)
+      await hooks["tool.definition"]({ toolID: "shell" }, shellOutput)
       await hooks["tool.definition"]({ toolID: "write" }, writeOutput)
 
       expect(readOutput.description).toBe("Read tool description")
-      expect(bashOutput.description).toBe("Bash tool description")
+      expect(shellOutput.description).toBe("Shell tool description")
       expect(writeOutput.description).toBe("Write tool description")
     })
 
@@ -62,14 +112,14 @@ describe("subagent-mandatory-instruction plugin", () => {
       const hooks = await createHooks({})
 
       const output = {
-        description: "Task tool with ## Structured Prompt Format already",
+        description: "Subagent tool with ## Structured Prompt Format already",
         parameters: {},
       }
 
-      await hooks["tool.definition"]({ toolID: "task" }, output)
+      await hooks["tool.definition"]({ toolID: "subagent" }, output)
 
       // Should not modify since marker already exists
-      expect(output.description).toBe("Task tool with ## Structured Prompt Format already")
+      expect(output.description).toBe("Subagent tool with ## Structured Prompt Format already")
     })
   })
 
@@ -145,26 +195,41 @@ describe("subagent-mandatory-instruction plugin", () => {
 
     test("caches session parent status", async () => {
       let callCount = 0
-      const mockClient = {
+      const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+      const mockCtx = {
+        options: {},
         session: {
-          get: async ({ path }: { path: { id: string } }) => {
+          get: async (input: any) => {
             callCount++
-            if (path.id === "child-session") {
-              return { data: { parentID: "parent-session" } }
+            const id = input.sessionID ?? input.path?.id
+            if (id === "child-session") {
+              return { parentID: "parent-session" }
             }
-            return { data: {} }
+            return {}
+          },
+          hook: async (name: string, handler: any) => {
+            sessionHooks[name] = sessionHooks[name] ?? []
+            sessionHooks[name].push(handler)
           },
         },
+        tool: { transform: async () => {} },
       }
 
-      const hooks = await plugin({ client: mockClient } as any, {})
+      await plugin.setup(mockCtx as any)
+
+      const triggerContext = async () => {
+        const event = { sessionID: "child-session", system: [] as { type: string; text: string }[] }
+        for (const h of sessionHooks["context"] ?? []) {
+          await h(event)
+        }
+      }
 
       // First call - should fetch
-      await hooks["experimental.chat.system.transform"]({ sessionID: "child-session" }, { system: [] })
+      await triggerContext()
       expect(callCount).toBe(1)
 
       // Second call - should use cache
-      await hooks["experimental.chat.system.transform"]({ sessionID: "child-session" }, { system: [] })
+      await triggerContext()
       expect(callCount).toBe(1) // No additional fetch
     })
   })
@@ -178,8 +243,8 @@ describe("subagent-mandatory-instruction plugin", () => {
         },
       )
 
-      const output = { description: "Task tool", parameters: {} }
-      await hooks["tool.definition"]({ toolID: "task" }, output)
+      const output = { description: "Subagent tool", parameters: {} }
+      await hooks["tool.definition"]({ toolID: "subagent" }, output)
 
       expect(output.description).toContain("CUSTOM GUIDE FOR ORCHESTRATOR")
       expect(output.description).not.toContain("## Structured Prompt Format")
@@ -230,9 +295,9 @@ describe("subagent-mandatory-instruction plugin", () => {
         },
       )
 
-      const taskOutput = { description: "Task", parameters: {} }
-      await hooks["tool.definition"]({ toolID: "task" }, taskOutput)
-      expect(taskOutput.description).toContain("## Structured Prompt Format")
+      const subagentOutput = { description: "Subagent", parameters: {} }
+      await hooks["tool.definition"]({ toolID: "subagent" }, subagentOutput)
+      expect(subagentOutput.description).toContain("## Structured Prompt Format")
 
       const systemOutput = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]({ sessionID: "child-session" }, systemOutput)
@@ -244,8 +309,8 @@ describe("subagent-mandatory-instruction plugin", () => {
     test("orchestrator guide contains example prompt", async () => {
       const hooks = await createHooks({})
 
-      const output = { description: "Task", parameters: {} }
-      await hooks["tool.definition"]({ toolID: "task" }, output)
+      const output = { description: "Subagent", parameters: {} }
+      await hooks["tool.definition"]({ toolID: "subagent" }, output)
 
       expect(output.description).toContain("### Example Prompt")
       expect(output.description).toContain("Location: local")

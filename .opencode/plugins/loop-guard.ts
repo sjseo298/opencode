@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto"
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 
 type LoopGuardOptions = {
   mode?: "warn_only"
   doom_loop_threshold?: number
   warning_before_doom_loop?: number
   windowMs?: number
-  /** @deprecated Use ignoreResults: true instead. When true, requires identical results to detect loop. */
-  requireNoProgress?: boolean
   /** When true, detect loops based only on identical arguments, ignoring results. */
   ignoreResults?: boolean
   cooldownMs?: number
@@ -49,15 +47,14 @@ type SessionState = {
 
 const defaultOptions: Required<LoopGuardOptions> = {
   mode: "warn_only",
-  doom_loop_threshold: 3,
+  doom_loop_threshold: 4,
   warning_before_doom_loop: 1,
   windowMs: 30_000,
-  requireNoProgress: false,
   ignoreResults: true,
   cooldownMs: 60_000,
   maxSessionStates: 200,
   maxAttemptsPerSession: 60,
-  ignoreTools: ["todowrite"],
+  ignoreTools: [],
   volatileKeys: ["timestamp", "time", "nonce", "requestId", "requestID", "createdAt", "updatedAt"],
 }
 
@@ -75,9 +72,6 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
   const maxSessionStates = readPositiveInt(options?.maxSessionStates, defaultOptions.maxSessionStates)
   const maxAttemptsPerSession = readPositiveInt(options?.maxAttemptsPerSession, defaultOptions.maxAttemptsPerSession)
   const mode = options?.mode === "warn_only" ? options.mode : defaultOptions.mode
-  const requireNoProgress = typeof options?.requireNoProgress === "boolean"
-    ? options.requireNoProgress
-    : defaultOptions.requireNoProgress
   const ignoreResults = typeof options?.ignoreResults === "boolean"
     ? options.ignoreResults
     : defaultOptions.ignoreResults
@@ -92,7 +86,6 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
     doom_loop_threshold: doomLoopThreshold,
     warning_before_doom_loop: warningBeforeDoomLoop,
     windowMs,
-    requireNoProgress,
     ignoreResults,
     cooldownMs,
     maxSessionStates,
@@ -102,29 +95,24 @@ function normalizeOptions(options: LoopGuardOptions | undefined): Required<LoopG
   }
 }
 
-function warningThreshold(settings: Required<LoopGuardOptions>) {
-  if (settings.warning_before_doom_loop === 0) return undefined
-  return Math.max(1, settings.doom_loop_threshold - settings.warning_before_doom_loop)
+function readPositiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return fallback
+  return value
 }
 
-function readPositiveInt(value: unknown, fallback: number) {
-  if (typeof value !== "number") return fallback
-  if (!Number.isFinite(value)) return fallback
-  const rounded = Math.floor(value)
-  if (rounded <= 0) return fallback
-  return rounded
+function readNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return fallback
+  return value
 }
 
-function readNonNegativeInt(value: unknown, fallback: number) {
-  if (typeof value !== "number") return fallback
-  if (!Number.isFinite(value)) return fallback
-  const rounded = Math.floor(value)
-  if (rounded < 0) return fallback
-  return rounded
+function warningThreshold(settings: Required<LoopGuardOptions>): number | undefined {
+  const threshold = settings.doom_loop_threshold - settings.warning_before_doom_loop
+  if (threshold <= 0) return undefined
+  return threshold
 }
 
-function hash(value: unknown) {
-  return createHash("sha256").update(stableStringify(value)).digest("hex")
+function hash(value: unknown): string {
+  return createHash("sha256").update(stableStringify(value)).digest("hex").slice(0, 16)
 }
 
 function stableStringify(value: unknown): string {
@@ -212,7 +200,7 @@ function finalizeTurn(state: SessionState, now: number, settings: Required<LoopG
   const threshold = warningThreshold(settings)
   if (threshold === undefined) return
   if (tail.length < threshold) return
-  if (!settings.ignoreResults && settings.requireNoProgress && !hasNoProgress(tail)) return
+  if (!settings.ignoreResults && !hasNoProgress(tail)) return
   if (settings.mode !== "warn_only") return
 
   state.pendingGuard = {
@@ -222,17 +210,19 @@ function finalizeTurn(state: SessionState, now: number, settings: Required<LoopG
   state.cooldownUntil = now + settings.cooldownMs
 }
 
-const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
-  const settings = normalizeOptions(options as LoopGuardOptions | undefined)
-  const volatileKeys = new Set(settings.volatileKeys)
-  const states = new Map<string, SessionState>()
+export default Plugin.define({
+  id: "loop-guard",
+  async setup(ctx) {
+    const settings = normalizeOptions(ctx.options as LoopGuardOptions | undefined)
+    const volatileKeys = new Set(settings.volatileKeys)
+    const states = new Map<string, SessionState>()
 
     const ensureState = (sessionID: string): SessionState => {
-    const existing = states.get(sessionID)
-    if (existing) {
-      existing.lastTouched = Date.now()
-      return existing
-    }
+      const existing = states.get(sessionID)
+      if (existing) {
+        existing.lastTouched = Date.now()
+        return existing
+      }
       const next: SessionState = {
         pending: new Map(),
         attempts: [],
@@ -240,17 +230,16 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
         cooldownUntil: 0,
         lastTouched: Date.now(),
       }
-    states.set(sessionID, next)
-    if (states.size <= settings.maxSessionStates) return next
-    const oldest = Array.from(states.entries()).toSorted((a, b) => a[1].lastTouched - b[1].lastTouched)[0]
-    if (!oldest) return next
-    states.delete(oldest[0])
-    return next
-  }
+      states.set(sessionID, next)
+      if (states.size <= settings.maxSessionStates) return next
+      const oldest = Array.from(states.entries()).toSorted((a, b) => a[1].lastTouched - b[1].lastTouched)[0]
+      if (!oldest) return next
+      states.delete(oldest[0])
+      return next
+    }
 
-  return {
-    "chat.message": async (input) => {
-      const state = states.get(input.sessionID)
+    await ctx.session.hook("prompt", (event) => {
+      const state = states.get(event.sessionID)
       if (!state) return
       state.pendingGuard = undefined
       state.cooldownUntil = 0
@@ -258,40 +247,44 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
       state.turnCalls = []
       state.pending.clear()
       state.lastTouched = Date.now()
-    },
-    "tool.execute.before": async (input, output) => {
-      if (settings.ignoreTools.includes(input.tool)) return
-      const state = ensureState(input.sessionID)
+    })
+
+    await ctx.tool.hook("execute.before", (event) => {
+      if (settings.ignoreTools.includes(event.tool)) return
+      const state = ensureState(event.sessionID)
       const now = Date.now()
       pruneSession(state, now, settings)
-      const normalized = normalizeValue(output.args, volatileKeys)
+      const normalized = normalizeValue(event.input, volatileKeys)
       const argsHash = hash(normalized)
-      const signature = `${input.tool}:${argsHash}`
-      state.pending.set(input.callID, {
+      const signature = `${event.tool}:${argsHash}`
+      state.pending.set(event.id, {
         ts: now,
-        tool: input.tool,
+        tool: event.tool,
         signature,
       })
-    },
-    "tool.execute.after": async (input, output) => {
-      if (settings.ignoreTools.includes(input.tool)) return
-      const state = ensureState(input.sessionID)
+    })
+
+    await ctx.tool.hook("execute.after", (event) => {
+      if (settings.ignoreTools.includes(event.tool)) return
+      const state = ensureState(event.sessionID)
       const now = Date.now()
-      const pending = state.pending.get(input.callID)
-      const fallbackSignature = `${input.tool}:${hash(normalizeValue(input.args, volatileKeys))}`
+      const pending = state.pending.get(event.id)
+      const fallbackSignature = `${event.tool}:${hash(normalizeValue(event.input, volatileKeys))}`
       const signature = pending?.signature ?? fallbackSignature
       const ts = pending?.ts ?? now
-      state.pending.delete(input.callID)
-      const outcomeHash = buildOutcomeHash(output, volatileKeys)
+      state.pending.delete(event.id)
+      const outcome = event.status === "completed" ? event.result : event.error
+      const outcomeHash = buildOutcomeHash(outcome, volatileKeys)
       state.turnCalls.push({
         ts,
         signature,
         outcomeHash,
       })
       state.lastTouched = now
-    },
-    "experimental.chat.system.transform": async (input, output) => {
-      const sessionID = input.sessionID
+    })
+
+    await ctx.session.hook("context", (event) => {
+      const sessionID = event.sessionID
       if (!sessionID) return
       const state = states.get(sessionID)
       if (!state) return
@@ -302,11 +295,9 @@ const LoopGuardPlugin = (async (_input, options?: Record<string, unknown>) => {
         state.pendingGuard = undefined
         return
       }
-      output.system.push(state.pendingGuard.text)
+      event.system.push({ type: "text", text: state.pendingGuard.text })
       state.pendingGuard = undefined
       state.lastTouched = Date.now()
-    },
-  }
-}) satisfies Plugin
-
-export default LoopGuardPlugin
+    })
+  },
+})
