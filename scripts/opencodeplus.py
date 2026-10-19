@@ -651,7 +651,7 @@ def extract_llamacpp_models(data: dict) -> dict:
 
         preset_text = item.get("status", {}).get("preset", "")
         preset = parse_llamacpp_preset(preset_text)
-        author = extract_author_from_path(preset_text) or infer_author_from_model_id(model_id)
+        author = item.get("author") or item.get("provider") or extract_author_from_path(preset_text) or infer_author_from_model_id(model_id)
 
         # Prefer per-model limits reported by the endpoint.
         ctx_size = (
@@ -731,8 +731,8 @@ def extract_llamacpp_models(data: dict) -> dict:
         if has_video_output:
             output_modalities.append("video")
 
-        display_name = model_id
-        if author:
+        display_name = item.get("display_name") or item.get("name") or model_id
+        if not (item.get("display_name") or item.get("name")) and author:
             display_name = f"{author}/{model_id.split('/')[-1]}"
         prefix = capability_prefix(
             "L",
