@@ -449,4 +449,83 @@ describe("compaction-todo plugin", () => {
       expect(output.context[0]).toContain("(missing content)")
     })
   })
+
+  describe("hierarchical objectives continuous tracking", () => {
+    test("clears dirty flag after objective_manage", async () => {
+      const sessionID = uniqueSessionID("dirty-objective-manage")
+      const hooks = await createFreshHooks({
+        [sessionID]: sampleOpenTodos,
+      })
+
+      // Make dirty with edit
+      await hooks["tool.execute.after"](
+        { tool: "edit", sessionID, callID: "call-1", args: {} },
+        { title: "", output: "", metadata: {} },
+      )
+
+      // Clear with objective_manage
+      await hooks["tool.execute.after"](
+        { tool: "objective_manage", sessionID, callID: "call-2", args: {} },
+        { title: "", output: "", metadata: {} },
+      )
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID }, output)
+      expect(output.system.length).toBe(0)
+    })
+
+    test("injects continuous objective reminder when sessionObjectives exist in globalThis", async () => {
+      const sessionID = uniqueSessionID("objectives-continuous")
+      const globalObjectives = ((globalThis as any).__OPENCODE_OBJECTIVES__ ??= new Map())
+      globalObjectives.set(sessionID, {
+        title: "Main Migration Task",
+        status: "exploring",
+        definitionOfDone: "Zero test failures",
+        secondaries: [
+          { id: "SO-1", title: "Migrate auth schema", status: "pending", rationale: "Required for auth" },
+        ],
+      })
+
+      const hooks = await createFreshHooks()
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID }, output)
+
+      expect(output.system.length).toBe(1)
+      expect(output.system[0]).toContain("Open objectives remain in this session")
+      expect(output.system[0]).toContain("Continuously keep the objective tree updated")
+      expect(output.system[0]).toContain("objective_manage")
+
+      // Clean up
+      globalObjectives.delete(sessionID)
+    })
+
+    test("snapshots hierarchical objectives into compaction context", async () => {
+      const sessionID = uniqueSessionID("objectives-compaction")
+      const globalObjectives = ((globalThis as any).__OPENCODE_OBJECTIVES__ ??= new Map())
+      globalObjectives.set(sessionID, {
+        title: "Database Refactor",
+        status: "exploring",
+        definitionOfDone: "All integration tests pass",
+        secondaries: [
+          { id: "SO-1", title: "Apply SQL constraints", status: "pending", rationale: "Prevent orphan records" },
+        ],
+      })
+
+      const hooks = await createFreshHooks()
+
+      const output = { context: [] as string[], prompt: undefined }
+      await hooks["experimental.session.compacting"]({ sessionID }, output)
+
+      expect(output.context.length).toBe(1)
+      expect(output.context[0]).toContain("## Active Objective Snapshot")
+      expect(output.context[0]).toContain("[PO] Database Refactor")
+      expect(output.context[0]).toContain("SO-1")
+      expect(output.context[0]).toContain("Apply SQL constraints")
+
+      // Clean up
+      globalObjectives.delete(sessionID)
+    })
+  })
 })
+

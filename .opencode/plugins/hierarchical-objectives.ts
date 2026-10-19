@@ -339,7 +339,7 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
           name: "objective_manage",
           options: { codemode: false },
           description:
-            "Manage the hierarchical objective tree: define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call.",
+            "Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call.",
           input: ObjectiveInputSchema,
           output: ObjectiveOutputSchema,
           execute: async (input: any, toolCtx: any) => {
@@ -589,10 +589,11 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
 
         reminders.push(
           [
-            "## Mandatory Agent Objective Alignment",
+            "## Protocolo de Objetivos (Objectives Protocol) - Objective Alignment",
+            "This session is governed by the Protocolo de Objetivos (Objectives Protocol).",
             "Every step you take must serve an active objective in the tree below.",
             "NEVER declare an objective resolved based on deduction or reasoning alone.",
-            "Run actual commands and verify output before concluding any step.",
+            "Run actual commands and verify output before concluding any step ('Done means Done').",
             activeSO
               ? `🎯 **Current Target:** Work on ${activeSO.id}: "${activeSO.title}". Focus your immediate tool call on advancing this objective.`
               : "All current secondary objectives are resolved or discarded. If the Primary Objective is satisfied, conclude with evidence. Otherwise, define the next SO.",
@@ -603,12 +604,14 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
       } else {
         reminders.push(
           [
-            "## Methodological Instruction: Establish Objectives",
-            "Before commencing deep investigation or modifications, identify and define:",
-            "1. The **Primary Objective** and its concrete **Definition of Done**.",
-            "2. The initial **Secondary Objectives (SO-N)** with the **Rationale** of why each is needed.",
-            "Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan in a single call.",
-            "You can also use `add_secondary` later as new sub-tasks or blockers are identified.",
+            "## Protocolo de Objetivos (Objectives Protocol)",
+            "You are equipped with the **Protocolo de Objetivos** (also referred to as 'Objectives Protocol' or 'Hierarchical Objectives Protocol').",
+            "When the user instructs you to follow, execute, or apply the 'protocolo de objetivos', 'protocolo de objetivos jerárquicos', 'objectives protocol' (or 'protocolo de investigacion'), you MUST strictly follow this exact framework:",
+            "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
+            "2. Decompose the task into **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
+            "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan immediately.",
+            "4. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
+            "5. When new blockers or sub-tasks arise, call `objective_manage` (`action: 'add_secondary'`) to register them dynamically.",
           ].join("\n"),
         )
       }

@@ -24,5 +24,10 @@ export function render(prompt: string, tools: string[]) {
       "- Use the edit tool for targeted changes to existing text files. It replaces the exact text in `oldString` with `newString`, and the values must differ. By default, `oldString` must occur exactly once. If it occurs multiple times, include more surrounding context to make it unique or set `replaceAll` to true to replace every occurrence.",
     )
   }
+  if (tools.includes("objective_manage")) {
+    instructions.push(
+      "- Protocolo de Objetivos (Objectives Protocol): You have the `objective_manage` tool. When instructed to follow or apply the 'protocolo de objetivos' (or 'protocolo de objetivos jerárquicos' / 'protocolo de investigacion' / 'objectives protocol'), you must strictly follow this methodology: establish a single Primary Objective with a verifiable Definition of Done, decompose the task into Secondary Objectives (SO-N) with explicit rationale, track blockers, and require concrete command validation proof before marking any objective resolved.",
+    )
+  }
   return prompt.replace("${OPENCODE_TOOL_GUIDANCE}", instructions.join("\n"))
 }

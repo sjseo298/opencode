@@ -1,5 +1,6 @@
-# Mandatory Agent Behavioral Methodology & Objective Architecture
+# Mandatory Agent Behavioral Methodology: Protocolo de Objetivos (Objectives Protocol)
 
+> **Official Designation:** Protocolo de Objetivos (Objectives Protocol)  
 > **Target Platform:** OpenCode (Core System Prompt & Mandatory Plugin Specification)  
 > **Status:** Mandatory Normative Specification  
 > **Supersedes:** Flat TODO tracking lists, speculative debugging, unverified resolutions  
@@ -8,7 +9,7 @@
 
 ## Executive Summary & Philosophy
 
-This methodology establishes a rigorous, scientific standard of behavior for AI agents operating within OpenCode. It replaces unstructured intuition, passive reasoning loops, and fragile flat "TODO" lists with a **hierarchical, evidence-based objective framework**.
+This methodology establishes a rigorous, scientific standard of behavior for AI agents operating within OpenCode, formally designated as the **Protocolo de Objetivos** (Objectives Protocol / Hierarchical Objectives Protocol). It replaces unstructured intuition, passive reasoning loops, and fragile flat "TODO" lists with a **hierarchical, evidence-based objective framework**.
 
 The core tenets are:
 1. **Never Assume Without Proof**: Deduction produces hypotheses, not conclusions. An objective is only done when verified by actual runtime evidence.
@@ -19,7 +20,23 @@ The core tenets are:
 
 ---
 
-## 1. Primary & Secondary Objective Architecture (Evolution of TODOs)
+## 1. Protocolo de Objetivos: Formal Name & User Triggers
+
+When the user instructs the agent using any variation of:
+* *"sigue el protocolo de objetivos"* / *"aplica el protocolo de objetivos"*
+* *"protocolo de objetivos"* / *"protocolo de objetivos jerárquicos"*
+* *"objectives protocol"* / *"hierarchical objectives protocol"*
+* *(historical alias)* *"protocolo de investigacion"* / *"investigation protocol"*
+
+The agent **MUST immediately recognize** this as an explicit directive to execute this methodology in its entirety:
+1. Initialize the hierarchy via `objective_manage` (`action: 'set_primary'`, with `definitionOfDone` and initial `secondaries`).
+2. Strictly decompose every active line of inquiry into Secondary Objectives (`SO-N`) with explicit rationale.
+3. Obey the "Done means Done" rule: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
+4. Isolate blockers, untangle cascading errors, and maintain continuous alignment with the objective tree.
+
+---
+
+## 2. Primary & Secondary Objective Architecture (Evolution of TODOs)
 
 OpenCode's standard flat `todo` mechanism (`[pending]`, `[in_progress]`, `[completed]`) lacks causal awareness, leading agents to treat superficial symptom fixes as progress while losing sight of the user's real goal.
 
@@ -61,11 +78,11 @@ Every objective (PO and SO-N) must transition through rigorous states:
 
 ---
 
-## 2. Validation-Before-Conclusion Protocol ("Definition of Done")
+## 3. Validation-Before-Conclusion Protocol ("Definition of Done")
 
 > **ABSOLUTE RULE: NEVER declare a root cause identified, a bug fixed, or an objective completed based on reasoning or deduction alone. Every conclusion MUST be validated by running actual tests, executing the code, or observing live system output.**
 
-### 2.1 The Rules of Validation
+### 3.1 The Rules of Validation
 
 1. **Deduction is Hypothesis, Not Conclusion**:
    When static code inspection, architecture review, or stack traces point to a cause, it is strictly a **candidate hypothesis**. It MUST be labeled as such (`"Hypothesis: ..."` or `"Candidate cause: ..."`) until verified by a test or execution.
@@ -91,7 +108,7 @@ Every objective (PO and SO-N) must transition through rigorous states:
 
 ---
 
-## 3. Pre-Investigation Planning Pause
+## 4. Pre-Investigation Planning Pause
 
 Before executing any non-trivial task (requiring multiple sequential steps, debugging, or architectural modification), the agent **MUST** pause and present a structured plan to the user.
 
@@ -110,7 +127,7 @@ After presenting the plan, the agent must stop its turn and await user confirmat
 
 ---
 
-## 4. Cascading Error Analysis Protocol
+## 5. Cascading Error Analysis Protocol
 
 When a test run or system execution produces multiple related errors, the agent **MUST** analyze them as a single causal chain rather than treating them as separate, isolated bugs.
 
@@ -121,24 +138,24 @@ When a test run or system execution produces multiple related errors, the agent 
        └──────────────── Must be solved FIRST ─────────────────────┘
 ```
 
-### 4.1 Error Classification
+### 5.1 Error Classification
 
 1. **Originating Error**: The initial failure point in the core execution flow, business logic, or protocol.
 2. **Masking Error**: A subsequent failure triggered when the system attempted to recover, log, retry, roll back, or serialize the original error.
 3. **Observation Blocker**: A failure that prevents the system, test runner, or agent from seeing the true error (e.g., swallowed exceptions, truncated logs, database connection timeouts during error logging, crash in the test reporter).
 
-### 4.2 Mandatory Execution Order
+### 5.2 Mandatory Execution Order
 
 * **Clear Observation Blockers First**: If the test runner crashes, if logs are truncated, or if error details are obscured by a secondary exception, the agent **MUST** resolve the observation blocker before diagnosing the business logic.
 * **Re-run After Every Blocker Fix**: Never assume the original error remains unchanged after removing a masking error. Re-execute to expose the true root symptom cleanly.
 
 ---
 
-## 5. Multi-Option Exploration Protocol
+## 6. Multi-Option Exploration Protocol
 
 When a problem has multiple viable solutions, architectural approaches, or potential root causes, the agent must avoid cognitive loops and redundant exploration by tracking options in an **Options Matrix**.
 
-### 5.1 Matrix Schema
+### 6.1 Matrix Schema
 
 ```markdown
 ## Options Matrix
@@ -150,7 +167,7 @@ When a problem has multiple viable solutions, architectural approaches, or poten
 | Opt-3 | Implement disk-backed context offloading | PENDING | Untested; higher latency tradeoff |
 ```
 
-### 5.2 Transition Protocol
+### 6.2 Transition Protocol
 
 1. Before exploring any option, consult the matrix. If marked `DISCARDED`, do not re-investigate it.
 2. Mark the active option as `EXPLORING`.
@@ -159,12 +176,12 @@ When a problem has multiple viable solutions, architectural approaches, or poten
 
 ---
 
-## 6. Immediate Finding Checkpoint Protocol (F-NNN)
+## 7. Immediate Finding Checkpoint Protocol (F-NNN)
 
 > **MANDATORY FOR EVERY FINDING:**
 > To eliminate reasoning amnesia across long contexts or tool calls, the agent must record every discrete finding immediately into the active exploration file or session memory.
 
-### 6.1 Finding Decision Tree
+### 7.1 Finding Decision Tree
 
 Before recording any finding, evaluate:
 1. **Is this exact conclusion/datum already recorded?**
@@ -174,7 +191,7 @@ Before recording any finding, evaluate:
 3. **Is this finding genuinely new?**
    * **YES** $\rightarrow$ Create a new sequential `F-NNN` entry.
 
-### 6.2 Strict Finding Structure
+### 7.2 Strict Finding Structure
 
 Every finding entry must adhere to the 4-part schema:
 
@@ -188,7 +205,7 @@ Every finding entry must adhere to the 4-part schema:
 
 ---
 
-## 7. Value-First Action Protocol
+## 8. Value-First Action Protocol
 
 > **BEFORE EVERY ACTION, ASK:**  
 > *"Does what I am about to do actually add value given what is already established?"*
@@ -204,7 +221,7 @@ Every finding entry must adhere to the 4-part schema:
 
 ---
 
-## 8. Memory Management, Freshness & Staleness
+## 9. Memory Management, Freshness & Staleness
 
 1. **Session Exploration Storage**:
    Exploration records and objective states reside in `.opencode/memoria/` or the project's designated tracking directory.
@@ -213,7 +230,7 @@ Every finding entry must adhere to the 4-part schema:
 
 ---
 
-## 9. Language Policy
+## 10. Language Policy
 
 * **User Interaction**:
   The user may communicate in any language (defaulting to Spanish or the user's chosen language). The agent's **final answers, summaries, questions, and reports** delivered to the user must be in the **user's language**.
@@ -224,54 +241,74 @@ Every finding entry must adhere to the 4-part schema:
 
 ---
 
-## 10. OpenCode Mandatory Plugin Specification
+## 11. OpenCode Plugin Architecture & Tool Specification
 
-This section defines the architecture for implementing this methodology as a native OpenCode plugin (e.g., `.opencode/plugins/hierarchical-objectives.ts`), designed to replace and elevate OpenCode's default TODO behavior.
+The Protocolo de Objetivos is implemented as an integrated subsystem within OpenCode via native plugins, UI extensions, and core guidance:
+1. **Hierarchical Engine Plugin**: `.opencode/plugins/hierarchical-objectives.ts`
+2. **Continuous Reconciliation Plugin**: `.opencode/plugins/compaction-todo.ts`
+3. **Core Tool Guidance**: `packages/core/src/session/system-prompt.ts`
+4. **TUI Sidebar Display**: `packages/tui/src/feature-plugins/sidebar/objectives.tsx`
 
-### 10.1 Plugin Architecture & Event Hooks
-
-The plugin hooks into OpenCode's session lifecycle:
+### 11.1 Data Models
 
 ```typescript
-import { Plugin } from "@opencode/plugin"
+export type SecondaryObjectiveStatus =
+  | "pending"
+  | "exploring"
+  | "blocked"
+  | "resolved"
+  | "discarded"
+  | "cancelled"
 
-interface SecondaryObjective {
-  id: string            // e.g. "SO-1"
+export type PrimaryObjectiveStatus = "pending" | "exploring" | "resolved"
+
+export interface SecondaryObjective {
+  id: string                   // "SO-1", "SO-2", etc.
   title: string
-  status: "pending" | "exploring" | "blocked" | "resolved" | "discarded"
-  rationale: string     // Why this is required for PO
-  validationEvidence?: string
+  status: SecondaryObjectiveStatus
+  rationale: string           // Mandatory: why this SO is necessary to advance or unblock the PO
+  blocker?: string            // Concrete symptom, obstacle, or root cause if blocked
+  validationProof?: string    // Concrete test/command output proof. Mandatory when status='resolved'
+  createdAt: number
+  updatedAt: number
 }
 
-interface PrimaryObjective {
+export interface PrimaryObjective {
   title: string
-  status: "pending" | "exploring" | "resolved"
+  status: PrimaryObjectiveStatus
+  definitionOfDone: string    // Verifiable acceptance criteria
   secondaries: SecondaryObjective[]
+  createdAt: number
+  updatedAt: number
 }
 ```
 
-### 10.2 Lifecycle Hooks & Enforcement Points
+### 11.2 Lifecycle Hooks & Enforcement Points
 
-1. **`session.hook("context")`**:
-   Injects the **Active Objective Tree** into the system context on every turn. Unlike flat todos, it presents:
-   * Current Primary Objective.
-   * Active Secondary Objectives and their blockers.
-   * Prohibited anti-patterns (e.g., claiming resolution without `validationEvidence`).
-2. **`session.hook("compaction")`**:
-   During OpenCode context compaction:
-   * Preserves the Primary Objective and all active/pending Secondary Objectives verbatim.
-   * Preserves all `F-NNN` findings that directly support active objectives.
-   * Prunes obsolete discursive text while retaining the causal chain.
-3. **`tool.execute.before`**:
-   * Evaluates the **Value-First Rule**: Detects redundant consecutive reads of the same file without intermediate writes, emitting an anti-loop warning if detected.
-4. **`tool.execute.after`**:
-   * Enforces the **Validation Rule**: If an agent attempts to declare an objective complete, the plugin validates whether a command execution tool (bash, test runner, curl) was invoked and produced successful exit codes.
+1. **`ctx.session.hook("context")`**:
+   * Injects the active **Protocolo de Objetivos** instruction into the agent's system prompt on every turn.
+   * If no Primary Objective exists, instructs the agent to establish the PO and initial SOs with `objective_manage`.
+   * If objectives exist, renders the formatted tree, active target (`🎯 Current Target: SO-N`), and enforces the *"Done means Done"* validation requirement.
+2. **`ctx.session.hook("compaction")`**:
+   * Formats a complete snapshot (`## Active Objective Snapshot`) containing the PO, status, Definition of Done, and all SOs (with rationales, blockers, and validation proof).
+   * Injected into the compaction context so the entire objective tree survives context summarization without amnesia.
+3. **Continuous Reconciliation (`compaction-todo.ts`)**:
+   * Tracks modifying/action tools (`write`, `edit`, `bash`, `apply_diff`, etc.). When modifying tools execute without updating objectives, the session is marked dirty.
+   * Prompts the agent before concluding: *"⚠️ Objective Reconciliation Required: You have performed code modifications or tool executions. Call `objective_manage` to keep your objective tree synchronized with your latest progress, attach validation proof for completed work, or register newly discovered blockers before finishing your turn."*
+   * Calling `objective_manage` clears the dirty state.
+4. **Anti-Loop Protocol (`ctx.tool.hook("execute.before")`)**:
+   * Detects 5 consecutive read-only operations (`read`, `list`, `glob`, `grep`, `webfetch`, etc.) without action, injecting an urgent anti-loop warning to force concrete synthesis and execution.
+5. **Right Sidebar TUI Component (`SidebarObjectives`)**:
+   * Registered in `packages/tui/src/plugin/builtins.ts`.
+   * Displays the Primary Objective and Definition of Done at the top of the right sidebar.
+   * Renders color-coded status badges for each Secondary Objective (`[EXPLORING]`, `[BLOCKED]`, `[RESOLVED]`, `[PENDING]`), rationale, blocker alerts, and validation evidence live as tool calls occur (`part.state.input`).
 
-### 10.3 Tool Interface: `objective_manage`
+### 11.3 Tool Interface: `objective_manage`
 
-The plugin exposes the `objective_manage` tool to establish and manage the hierarchy:
+The plugin registers `objective_manage` into OpenCode's tool registry.
 
-1. **Establishing Primary Objective with Initial Secondaries in a Single Call**:
+#### Action 1: `set_primary` (Aliases: `init`, `set_objectives`)
+Establishes the Primary Objective and optionally registers initial secondaries in a single call:
 ```json
 {
   "action": "set_primary",
@@ -290,7 +327,8 @@ The plugin exposes the `objective_manage` tool to establish and manage the hiera
 }
 ```
 
-2. **Adding Secondary Objectives Dynamically**:
+#### Action 2: `add_secondary` (Alias: `add_secondaries`)
+Adds one or more Secondary Objectives dynamically:
 ```json
 {
   "action": "add_secondary",
@@ -298,8 +336,19 @@ The plugin exposes the `objective_manage` tool to establish and manage the hiera
   "rationale": "Unblock foreign key violation observed during migration step."
 }
 ```
+Or in batch:
+```json
+{
+  "action": "add_secondary",
+  "secondaries": [
+    { "title": "Add index on user_id", "rationale": "Speed up join query in auth path" },
+    { "title": "Update seed fixtures", "rationale": "Supply mock data for integration suite" }
+  ]
+}
+```
 
-3. **Updating Secondary Objective with Mandatory Proof ("Done means Done")**:
+#### Action 3: `update_secondary` (Alias: `update_secondaries`)
+Updates status, blocker, or validation proof. **Crucial Rule: If `status: "resolved"`, `validationProof` is mandatory!**
 ```json
 {
   "action": "update_secondary",
@@ -308,21 +357,34 @@ The plugin exposes the `objective_manage` tool to establish and manage the hiera
   "validationProof": "Executed 'bun test test/migration.test.ts' -> 18 passing, 0 failing. Exit code 0."
 }
 ```
+If blocked:
+```json
+{
+  "action": "update_secondary",
+  "id": "SO-2",
+  "status": "blocked",
+  "blocker": "Missing binary dependency libssl3 on host runner."
+}
+```
 
-### 10.4 Comparison: Standard TODO vs. Hierarchical Objectives
+#### Action 4: `list` (Aliases: `get_tree`, `show`)
+Returns the complete formatted text tree of objectives.
 
-| Feature | Standard OpenCode TODO | Hierarchical Objective Plugin |
+### 11.4 Comparison: Standard TODO vs. Protocolo de Objetivos
+
+| Feature | Standard OpenCode TODO | Protocolo de Objetivos |
 |---|---|---|
 | **Structure** | Flat list of strings | Nested tree: PO $\rightarrow$ SO-N $\rightarrow$ Findings |
 | **Causal Link** | None (independent items) | Explicit Dependency Rationale required |
-| **Completion Criteria** | Agent self-declares "completed" | Requires verified execution proof (F-NNN) |
+| **Completion Criteria** | Agent self-declares "completed" | Requires verified execution proof (`validationProof`) |
 | **Error Handling** | New todo appended | Cascading classification (Originating vs Masking) |
 | **Compaction Survival** | Truncated sample of open lines | Full objective state + critical evidence preserved |
 | **Reasoning Loops** | Frequent re-reading of tasks | Hard anti-loop checks & Value-First test |
+| **TUI Representation** | Generic flat list | Hierarchical right sidebar widget with status badges |
 
 ---
 
-## 11. Quick Reference & Anti-Pattern Matrix
+## 12. Quick Reference & Anti-Pattern Matrix
 
 | Anti-Pattern (PROHIBITED) | Mandatory Required Behavior |
 |---|---|
@@ -333,3 +395,4 @@ The plugin exposes the `objective_manage` tool to establish and manage the hiera
 | Using "should work", "ought to work", "logically fixed" | Replace with "Hypothesis tested; verified with command X; output confirms Y." |
 | Thinking or writing internal logs in Spanish while user speaks Spanish | Think and log internally in English; deliver final response in user's language. |
 | Re-investigating an approach discarded 5 turns ago | Check the Options Matrix first; do not retry `DISCARDED` options without new data. |
+| Finishing a turn with modified files without updating objectives | Call `objective_manage` to synchronize the tree before ending the turn. |

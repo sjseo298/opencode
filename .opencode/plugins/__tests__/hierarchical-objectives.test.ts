@@ -139,6 +139,7 @@ describe("hierarchical-objectives plugin", () => {
       const tool = getRegisteredTool()
       expect(tool).not.toBeNull()
       expect(tool.name).toBe("objective_manage")
+      expect(tool.description).toContain("Protocolo de Objetivos (Objectives Protocol)")
       expect(typeof tool.execute).toBe("function")
     })
 
@@ -250,9 +251,26 @@ describe("hierarchical-objectives plugin", () => {
 
       expect(event.system.length).toBeGreaterThan(0)
       const text = event.system[0].text
-      expect(text).toContain("Mandatory Agent Objective Alignment")
+      expect(text).toContain("Protocolo de Objetivos (Objectives Protocol)")
       expect(text).toContain("Current Target")
       expect(text).toContain("SO-1")
+    })
+
+    test("context hook injects Protocolo de Objetivos instructions when no PO exists yet", async () => {
+      const { sessionHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("context-initial")
+
+      const event = { sessionID: sid, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event)
+      }
+
+      expect(event.system.length).toBeGreaterThan(0)
+      const text = event.system[0].text
+      expect(text).toContain("Protocolo de Objetivos (Objectives Protocol)")
+      expect(text).toContain("protocolo de objetivos")
+      expect(text).toContain("protocolo de investigacion")
+      expect(text).toContain("objective_manage")
     })
 
     test("anti-loop protocol warns after multiple consecutive read-only operations", async () => {
