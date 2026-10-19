@@ -104,13 +104,13 @@ export default Plugin.define({
     const providersList =
       Array.isArray(ctx.options?.providers)
         ? (ctx.options.providers as string[])
-        : (process.env.OPENCODE_LLAMACPP_CONTEXT_PROVIDERS ?? "llamacpp")
+        : (process.env.OPENCODE_LLAMACPP_CONTEXT_PROVIDERS ?? "llamacpp,mlx,splash,esca,lmstudio")
             .split(",")
             .map((item) => item.trim())
             .filter(Boolean)
     const targetProviders = new Set(providersList)
 
-    const ttlMs = typeof ctx.options?.ttl_ms === "number" ? ctx.options.ttl_ms : 15_000
+    const ttlMs = typeof ctx.options?.ttl_ms === "number" ? ctx.options.ttl_ms : 3_000
     const timeoutMs = typeof ctx.options?.timeout_ms === "number" ? ctx.options.timeout_ms : 3_000
     const autoApply = typeof ctx.options?.auto_apply === "boolean" ? ctx.options.auto_apply : true
 
@@ -118,36 +118,81 @@ export default Plugin.define({
     const cache = new Map<string, CacheEntry>()
     const providerBaseUrls = new Map<string, string>()
 
+    // Seed provider base URLs from OPENCODE_CONFIG_CONTENT if available
+    try {
+      const configStr = process.env.OPENCODE_CONFIG_CONTENT
+      if (configStr) {
+        const parsed = JSON.parse(configStr)
+        if (parsed?.providers && typeof parsed.providers === "object") {
+          for (const [pId, pCfg] of Object.entries(parsed.providers) as [string, any][]) {
+            const bUrl = pCfg?.settings?.baseURL ?? pCfg?.options?.baseURL
+            if (typeof bUrl === "string") {
+              providerBaseUrls.set(pId, bUrl)
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore parse errors from env config
+    }
+
     await ctx.model.transform((editor) => {
       for (const providerID of targetProviders) {
         const record = editor.provider.get(providerID)
-        const baseURL = record?.provider.settings?.baseURL ?? (record?.provider as any)?.options?.baseURL
+        const baseURL =
+          record?.provider.settings?.baseURL ??
+          (record?.provider as any)?.options?.baseURL ??
+          (record as any)?.settings?.baseURL
         if (typeof baseURL === "string") {
           providerBaseUrls.set(providerID, baseURL)
         }
       }
 
       for (const [key, nCtx] of dynamicContexts) {
-        const [providerID, modelID] = key.split("/")
+        const firstSlash = key.indexOf("/")
+        if (firstSlash === -1) continue
+        const providerID = key.slice(0, firstSlash)
+        const modelID = key.slice(firstSlash + 1)
         if (!providerID || !modelID) continue
+
         const model = editor.get(providerID, modelID)
         if (model) {
           editor.update(providerID, modelID, (draft) => {
             draft.limit.context = nCtx
           })
         }
+        if (typeof editor.list === "function") {
+          for (const m of editor.list(providerID)) {
+            if (m.id === modelID || m.id.endsWith(modelID) || modelID.endsWith(m.id)) {
+              editor.update(providerID, m.id, (draft) => {
+                draft.limit.context = nCtx
+              })
+            }
+          }
+        }
       }
     })
 
     async function checkModelContext(input: {
-      providerID: string
-      modelID: string
+      providerID?: string
+      modelID?: string
       baseURL?: string
       force?: boolean
       sessionID?: string
     }): Promise<{ updated: boolean; nCtx?: number; previous?: number; error?: boolean }> {
-      if (!targetProviders.has(input.providerID)) return { updated: false }
-      const key = `${input.providerID}/${input.modelID}`
+      let pID = input.providerID
+      let mID = input.modelID
+
+      if ((!pID || !mID) && input.sessionID) {
+        const session = await ctx.session.get({ sessionID: input.sessionID }).catch(() => undefined)
+        if (session?.model) {
+          pID = session.model.providerID
+          mID = session.model.id
+        }
+      }
+
+      if (!pID || !mID || !targetProviders.has(pID)) return { updated: false }
+      const key = `${pID}/${mID}`
       const now = Date.now()
       const cached = cache.get(key)
       if (!input.force && cached && now - cached.checkedAt < ttlMs) {
@@ -156,8 +201,9 @@ export default Plugin.define({
 
       const baseURL =
         input.baseURL ??
-        providerBaseUrls.get(input.providerID) ??
-        (input.providerID === "lmstudio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080")
+        providerBaseUrls.get(pID) ??
+        process.env.OPENCODE_LLAMACPP_BASE_URL ??
+        (pID === "lmstudio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080")
 
       const detected = await fetchContextLimit(baseURL, timeoutMs)
       cache.set(key, { checkedAt: now, nCtx: detected })
@@ -180,6 +226,7 @@ export default Plugin.define({
       return { updated: false, nCtx: detected, previous }
     }
 
+    // Check upon user prompt
     await ctx.session.hook("prompt", async (event) => {
       const session = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined)
       if (!session?.model) return
@@ -190,6 +237,7 @@ export default Plugin.define({
       })
     })
 
+    // Check before model request
     await ctx.session.hook("model.request", async (req) => {
       if (req.baseURL) {
         providerBaseUrls.set(req.model.providerID, req.baseURL)
@@ -201,6 +249,28 @@ export default Plugin.define({
         sessionID: req.sessionID,
       })
     })
+
+    // Check on multi-step generate / context assembly
+    await ctx.session.hook("generate", async (event) => {
+      if (event.sessionID) {
+        await checkModelContext({ sessionID: event.sessionID })
+      }
+    })
+
+    await ctx.session.hook("context", async (event) => {
+      if (event.sessionID) {
+        await checkModelContext({ sessionID: event.sessionID })
+      }
+    })
+
+    // Check after each tool call as the agent works through tasks
+    if (typeof ctx.tool?.hook === "function") {
+      await ctx.tool.hook("execute.after", async (event) => {
+        if (event.sessionID) {
+          await checkModelContext({ sessionID: event.sessionID })
+        }
+      })
+    }
 
     const handleRefresh = async (invocation: { sessionID: string }) => {
       const session = await ctx.session.get({ sessionID: invocation.sessionID }).catch(() => undefined)

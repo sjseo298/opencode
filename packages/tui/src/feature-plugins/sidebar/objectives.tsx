@@ -55,21 +55,48 @@ export function extractObjectivesFromMessages(
     for (const part of msg.content) {
       if (part.type !== "tool") continue
 
-      const toolName = (part.tool || part.name || "").toLowerCase()
+      const toolName = (part.name || part.tool || "").toLowerCase()
+      let rawInput = (part.state && "input" in part.state ? part.state.input : part.input) as any
+      if (typeof rawInput === "string") {
+        try {
+          rawInput = JSON.parse(rawInput)
+        } catch {
+          rawInput = undefined
+        }
+      }
+      const input = rawInput
+      if (!input) continue
 
       if (toolName === "objective_manage") {
-        const input = part.input as any
-        if (!input) continue
+        const action = String(input.action || "").toLowerCase()
 
-        if (input.action === "set_primary") {
+        if (action === "set_primary" || action === "init" || action === "set_objectives") {
           const prevSecondaries: SecondaryObjectiveView[] = (po as any)?.secondaries ?? []
+          const initialSecondaries: SecondaryObjectiveView[] = []
+
+          if (Array.isArray(input.secondaries) && input.secondaries.length > 0) {
+            for (let i = 0; i < input.secondaries.length; i++) {
+              const item = input.secondaries[i]
+              const sTitle = item?.title?.trim()
+              if (!sTitle) continue
+              initialSecondaries.push({
+                id: item?.id || `SO-${i + 1}`,
+                title: sTitle,
+                status: item?.status || "pending",
+                rationale: item?.rationale || "Planned subtask for primary objective",
+                blocker: item?.blocker,
+                validationProof: item?.validationProof,
+              })
+            }
+          }
+
           po = {
             title: input.title || "Primary Task",
             status: "exploring",
             definitionOfDone: input.definitionOfDone || "",
-            secondaries: prevSecondaries,
+            secondaries: initialSecondaries.length > 0 ? initialSecondaries : prevSecondaries,
           }
-        } else if (input.action === "add_secondary") {
+        } else if (action === "add_secondary" || action === "add_secondaries") {
           if (!po) {
             po = {
               title: "Primary Objective",
@@ -78,30 +105,45 @@ export function extractObjectivesFromMessages(
               secondaries: [],
             }
           }
-          const nextId = `SO-${po.secondaries.length + 1}`
-          po.secondaries.push({
-            id: nextId,
-            title: input.title || "Subtask",
-            status: "pending",
-            rationale: input.rationale || "",
-          })
-        } else if (input.action === "update_secondary") {
-          if (po && input.id) {
-            const target = po.secondaries.find(
-              (s) => s.id.toLowerCase() === String(input.id).toLowerCase(),
-            )
-            if (target) {
-              if (input.status) target.status = input.status
-              if (input.title) target.title = input.title
-              if (input.rationale) target.rationale = input.rationale
-              if (input.blocker !== undefined) target.blocker = input.blocker
-              if (input.validationProof !== undefined) target.validationProof = input.validationProof
+          const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+            ? input.secondaries
+            : (input.title ? [{ title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+          for (const item of items) {
+            const sTitle = item?.title?.trim()
+            if (!sTitle) continue
+            const nextId = item?.id || `SO-${po.secondaries.length + 1}`
+            po.secondaries.push({
+              id: nextId,
+              title: sTitle,
+              status: item?.status || "pending",
+              rationale: item?.rationale || "",
+              blocker: item?.blocker,
+              validationProof: item?.validationProof,
+            })
+          }
+        } else if (action === "update_secondary" || action === "update_secondaries") {
+          if (po) {
+            const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+              ? input.secondaries
+              : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+            for (const item of items) {
+              const targetId = String(item?.id || "").toLowerCase()
+              if (!targetId) continue
+              const target = po.secondaries.find((s) => s.id.toLowerCase() === targetId)
+              if (target) {
+                if (item.status) target.status = item.status
+                if (item.title) target.title = item.title
+                if (item.rationale) target.rationale = item.rationale
+                if (item.blocker !== undefined) target.blocker = item.blocker
+                if (item.validationProof !== undefined) target.validationProof = item.validationProof
+              }
             }
           }
         }
       } else if (toolName === "todowrite") {
         // Compatibility with legacy todowrite tool calls
-        const input = part.input as any
         const todos = Array.isArray(input?.todos) ? input.todos : []
         if (todos.length > 0) {
           if (!po) {

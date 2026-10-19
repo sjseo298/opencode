@@ -162,7 +162,7 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
                 "     // ── END FORK ──\n"
                 "     deben preservarse intactos y adaptarse a las variables actualizadas de upstream.\n"
                 "   - PRESERVACIÓN DE OBJETIVOS JERÁRQUICOS Y PLUGINS EMBEBIDOS:\n"
-                "     * En `packages/cli/script/embed-plugins.ts`, NUNCA elimines `hierarchical-objectives`, `loop-guard`, `compaction-todo`, `subagent-mandatory-instruction`, ni la detección de `export default Plugin.define(...)`.\n"
+                "     * En `packages/cli/script/embed-plugins.ts`, NUNCA elimines `hierarchical-objectives`, `llamacpp-context`, `loop-guard`, `compaction-todo`, `subagent-mandatory-instruction`, ni la detección de `export default Plugin.define(...)`.\n"
                 "     * En `packages/tui/src/plugin/builtins.ts`, NUNCA elimines `SidebarObjectives` ni su ubicación en `builtins`.\n"
                 "     * En la TUI (footer de status bar y sidebar), preserva el cálculo de contexto dinámico y la barra lateral de objetivos.\n"
                 "5. Si la resolución es imposible sin romper el contrato del código, responde exactamente: <UNRESOLVABLE>"

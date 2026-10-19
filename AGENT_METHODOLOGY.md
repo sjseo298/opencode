@@ -267,7 +267,49 @@ interface PrimaryObjective {
 4. **`tool.execute.after`**:
    * Enforces the **Validation Rule**: If an agent attempts to declare an objective complete, the plugin validates whether a command execution tool (bash, test runner, curl) was invoked and produced successful exit codes.
 
-### 10.3 Comparison: Standard TODO vs. Hierarchical Objectives
+### 10.3 Tool Interface: `objective_manage`
+
+The plugin exposes the `objective_manage` tool to establish and manage the hierarchy:
+
+1. **Establishing Primary Objective with Initial Secondaries in a Single Call**:
+```json
+{
+  "action": "set_primary",
+  "title": "Migrate Database Schema and Refactor Query Layer",
+  "definitionOfDone": "All migrations execute cleanly and regression tests pass with 0 errors.",
+  "secondaries": [
+    {
+      "title": "Inspect database migration scripts for PostgreSQL compatibility",
+      "rationale": "Identify breaking SQL dialect constructs before running migration."
+    },
+    {
+      "title": "Execute migration on local staging container",
+      "rationale": "Validate schema creation before adapting client queries."
+    }
+  ]
+}
+```
+
+2. **Adding Secondary Objectives Dynamically**:
+```json
+{
+  "action": "add_secondary",
+  "title": "Patch foreign key constraint in users table",
+  "rationale": "Unblock foreign key violation observed during migration step."
+}
+```
+
+3. **Updating Secondary Objective with Mandatory Proof ("Done means Done")**:
+```json
+{
+  "action": "update_secondary",
+  "id": "SO-1",
+  "status": "resolved",
+  "validationProof": "Executed 'bun test test/migration.test.ts' -> 18 passing, 0 failing. Exit code 0."
+}
+```
+
+### 10.4 Comparison: Standard TODO vs. Hierarchical Objectives
 
 | Feature | Standard OpenCode TODO | Hierarchical Objective Plugin |
 |---|---|---|

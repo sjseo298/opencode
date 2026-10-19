@@ -26,6 +26,7 @@ const EMBEDDED_PLUGINS = [
   "hierarchical-objectives",
   "compaction-todo",
   "subagent-mandatory-instruction",
+  "llamacpp-context",
 ]
 
 type PluginExport = {

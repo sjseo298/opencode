@@ -207,4 +207,51 @@ describe("SidebarObjectives TUI component", () => {
       app.renderer.destroy()
     }
   })
+
+  test("extracts objectives from part.state.input with initial secondaries array", () => {
+    const sid = "test-session-state-input"
+    const messages = [
+      {
+        id: "m1",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            id: "call_1",
+            name: "objective_manage",
+            state: {
+              status: "completed",
+              input: {
+                action: "set_primary",
+                title: "Full App Redesign",
+                definitionOfDone: "Zero CSS regressions and high lighthouse score",
+                secondaries: [
+                  {
+                    title: "Audit color tokens",
+                    rationale: "Required for theme alignment",
+                  },
+                  {
+                    title: "Implement responsive grid",
+                    rationale: "Support mobile devices",
+                    status: "exploring",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.title).toBe("Full App Redesign")
+    expect(po?.definitionOfDone).toBe("Zero CSS regressions and high lighthouse score")
+    expect(po?.secondaries.length).toBe(2)
+    expect(po?.secondaries[0].id).toBe("SO-1")
+    expect(po?.secondaries[0].title).toBe("Audit color tokens")
+    expect(po?.secondaries[0].status).toBe("pending")
+    expect(po?.secondaries[1].id).toBe("SO-2")
+    expect(po?.secondaries[1].status).toBe("exploring")
+  })
 })

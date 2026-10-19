@@ -183,6 +183,40 @@ describe("hierarchical-objectives plugin", () => {
       )
       expect(r4.output.success).toBe(true)
       expect(r4.output.tree).toContain("✅ *Validation Proof:*")
+
+      // 5. set_primary with initial secondaries in single call
+      const sidBatch = uniqueSessionID("tool-batch")
+      const r5 = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Batch Objective Setup",
+          definitionOfDone: "All batch tasks completed",
+          secondaries: [
+            { title: "First batch item", rationale: "Rationale 1" },
+            { title: "Second batch item", rationale: "Rationale 2", status: "exploring" },
+          ],
+        },
+        { sessionID: sidBatch },
+      )
+      expect(r5.output.success).toBe(true)
+      expect(r5.output.tree).toContain("First batch item")
+      expect(r5.output.tree).toContain("Second batch item")
+      expect(r5.output.tree).toContain("[EXPLORING]")
+
+      // 6. batch add_secondaries
+      const r6 = await tool.execute(
+        {
+          action: "add_secondaries",
+          secondaries: [
+            { title: "Third item", rationale: "Rationale 3" },
+            { title: "Fourth item", rationale: "Rationale 4" },
+          ],
+        },
+        { sessionID: sidBatch },
+      )
+      expect(r6.output.success).toBe(true)
+      expect(r6.output.tree).toContain("Third item")
+      expect(r6.output.tree).toContain("Fourth item")
     })
 
     test("compaction hook preserves full objective snapshot", async () => {

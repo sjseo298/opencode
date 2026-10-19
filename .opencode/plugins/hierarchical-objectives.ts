@@ -207,7 +207,16 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
 }
 
 // Tool Input Schema using Effect Schema
-const ObjectiveActionSchema = Schema.Literal("set_primary", "add_secondary", "update_secondary", "list")
+const ObjectiveActionSchema = Schema.Literal(
+  "set_primary",
+  "init",
+  "set_objectives",
+  "add_secondary",
+  "add_secondaries",
+  "update_secondary",
+  "update_secondaries",
+  "list",
+)
 const SecondaryStatusSchema = Schema.Literal(
   "pending",
   "exploring",
@@ -217,15 +226,101 @@ const SecondaryStatusSchema = Schema.Literal(
   "cancelled",
 )
 
+export const SecondaryInputItemSchema = Schema.Struct({
+  id: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Identifier if updating existing SO (e.g. 'SO-1')" })),
+  ),
+  title: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Title of the secondary objective / subtask" })),
+  ),
+  rationale: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Why this SO is necessary to advance or unblock the PO" })),
+  ),
+  status: Schema.optional(
+    SecondaryStatusSchema.pipe(
+      Schema.annotate({
+        description: "Status: 'pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled'",
+      }),
+    ),
+  ),
+  blocker: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Concrete blocker, error symptom, or obstacle if blocked" })),
+  ),
+  validationProof: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Concrete test/command output proof. Mandatory when status='resolved'" })),
+  ),
+})
+
 export const ObjectiveInputSchema = Schema.Struct({
-  action: ObjectiveActionSchema,
-  title: Schema.optional(Schema.String),
-  definitionOfDone: Schema.optional(Schema.String),
-  id: Schema.optional(Schema.String),
-  status: Schema.optional(SecondaryStatusSchema),
-  rationale: Schema.optional(Schema.String),
-  blocker: Schema.optional(Schema.String),
-  validationProof: Schema.optional(Schema.String),
+  action: ObjectiveActionSchema.pipe(
+    Schema.annotate({
+      description:
+        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'add_secondary' (add one or multiple secondaries), 'update_secondary' (update status/rationale/proof of SOs), or 'list'.",
+    }),
+  ),
+  title: Schema.optional(
+    Schema.String.pipe(
+      Schema.annotate({
+        description:
+          "Title of the Primary Objective (when action='set_primary') or single Secondary Objective (when action='add_secondary')",
+      }),
+    ),
+  ),
+  definitionOfDone: Schema.optional(
+    Schema.String.pipe(
+      Schema.annotate({
+        description:
+          "Verifiable Definition of Done / acceptance criteria for the Primary Objective (required for 'set_primary')",
+      }),
+    ),
+  ),
+  id: Schema.optional(
+    Schema.String.pipe(
+      Schema.annotate({
+        description:
+          "Identifier of the secondary objective to update, e.g. 'SO-1' (required for single 'update_secondary')",
+      }),
+    ),
+  ),
+  status: Schema.optional(
+    SecondaryStatusSchema.pipe(
+      Schema.annotate({
+        description:
+          "New status for secondary objective: 'pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled'",
+      }),
+    ),
+  ),
+  rationale: Schema.optional(
+    Schema.String.pipe(
+      Schema.annotate({
+        description:
+          "Mandatory rationale explaining why this secondary objective is necessary to unblock or complete the PO",
+      }),
+    ),
+  ),
+  blocker: Schema.optional(
+    Schema.String.pipe(
+      Schema.annotate({
+        description: "Concrete obstacle, symptom, or error message if status is 'blocked'",
+      }),
+    ),
+  ),
+  validationProof: Schema.optional(
+    Schema.String.pipe(
+      Schema.annotate({
+        description:
+          "Concrete verification proof (command run, test output, exit code). MANDATORY when status='resolved'",
+      }),
+    ),
+  ),
+  secondaries: Schema.optional(
+    Schema.Array(SecondaryInputItemSchema).pipe(
+      Schema.annotate({
+        description:
+          "List of secondary objectives. Use in 'set_primary' to establish the complete plan in a single call, or in 'add_secondary' to add multiple subtasks, or in 'update_secondary' to batch-update.",
+      }),
+    ),
+  ),
 })
 
 export const ObjectiveOutputSchema = Schema.Struct({
@@ -244,14 +339,14 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
           name: "objective_manage",
           options: { codemode: false },
           description:
-            "Manage the hierarchical objective tree: define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving.",
+            "Manage the hierarchical objective tree: define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call.",
           input: ObjectiveInputSchema,
           output: ObjectiveOutputSchema,
           execute: async (input: any, toolCtx: any) => {
             const sessionID = (toolCtx as any)?.sessionID || "default-session"
-            const action = input.action
+            const rawAction = String(input.action || "").toLowerCase()
 
-            if (action === "set_primary") {
+            if (rawAction === "set_primary" || rawAction === "init" || rawAction === "set_objectives") {
               const title = input.title?.trim()
               const dod = input.definitionOfDone?.trim()
               if (!title || !dod) {
@@ -261,73 +356,132 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
                     message: "Both 'title' and 'definitionOfDone' are required for action 'set_primary'.",
                     tree: "",
                   },
-                  content: "Missing required parameters for set_primary.",
+                  content: "Missing required parameters for set_primary (title and definitionOfDone are mandatory).",
                 }
               }
               const po = setPrimaryObjective(sessionID, title, dod)
+
+              // If secondary objectives were supplied in the same call, register them immediately
+              if (Array.isArray(input.secondaries) && input.secondaries.length > 0) {
+                for (const item of input.secondaries) {
+                  const sTitle = item?.title?.trim()
+                  const sRationale = item?.rationale?.trim() || "Planned subtask for primary objective"
+                  if (sTitle) {
+                    const so = addSecondaryObjective(sessionID, sTitle, sRationale)
+                    if (item.status && item.status !== "pending") {
+                      updateSecondaryObjective(sessionID, so.id, {
+                        status: item.status,
+                        blocker: item.blocker,
+                        validationProof: item.validationProof,
+                      })
+                    }
+                  }
+                }
+              }
+
               const tree = renderObjectiveTree(po)
               return {
-                output: { success: true, message: `Primary Objective established.`, tree },
+                output: { success: true, message: `Primary Objective and secondaries established.`, tree },
                 content: tree,
               }
             }
 
-            if (action === "add_secondary") {
-              const title = input.title?.trim()
-              const rationale = input.rationale?.trim()
-              if (!title || !rationale) {
+            if (rawAction === "add_secondary" || rawAction === "add_secondaries") {
+              const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+                ? input.secondaries
+                : (input.title ? [{ title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+              if (items.length === 0) {
                 return {
                   output: {
                     success: false,
-                    message: "Both 'title' and 'rationale' are required for action 'add_secondary'.",
+                    message: "At least one secondary objective with 'title' and 'rationale' is required for action 'add_secondary'.",
                     tree: "",
                   },
-                  content: "Missing required parameters for add_secondary.",
+                  content: "Missing required parameters for add_secondary (title and rationale are required).",
                 }
               }
-              const so = addSecondaryObjective(sessionID, title, rationale)
+
+              const addedIds: string[] = []
+              for (const item of items) {
+                const sTitle = item?.title?.trim()
+                const sRationale = item?.rationale?.trim()
+                if (!sTitle || !sRationale) {
+                  return {
+                    output: {
+                      success: false,
+                      message: "Each secondary objective requires both 'title' and 'rationale'.",
+                      tree: "",
+                    },
+                    content: "Missing required title or rationale for a secondary objective.",
+                  }
+                }
+                const so = addSecondaryObjective(sessionID, sTitle, sRationale)
+                addedIds.push(so.id)
+                if (item.status && item.status !== "pending") {
+                  updateSecondaryObjective(sessionID, so.id, {
+                    status: item.status,
+                    blocker: item.blocker,
+                    validationProof: item.validationProof,
+                  })
+                }
+              }
+
               const po = sessionObjectives.get(sessionID)!
               const tree = renderObjectiveTree(po)
               return {
-                output: { success: true, message: `Added secondary objective ${so.id}.`, tree },
+                output: { success: true, message: `Added secondary objective(s): ${addedIds.join(", ")}.`, tree },
                 content: tree,
               }
             }
 
-            if (action === "update_secondary") {
-              const id = input.id?.trim()
-              if (!id) {
+            if (rawAction === "update_secondary" || rawAction === "update_secondaries") {
+              const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+                ? input.secondaries
+                : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+              if (items.length === 0) {
                 return {
                   output: {
                     success: false,
-                    message: "'id' is required for action 'update_secondary'.",
+                    message: "'id' (or 'secondaries' array with ids) is required for action 'update_secondary'.",
                     tree: "",
                   },
                   content: "Missing id for update_secondary.",
                 }
               }
-              const result = updateSecondaryObjective(sessionID, id, {
-                status: input.status,
-                title: input.title,
-                rationale: input.rationale,
-                blocker: input.blocker,
-                validationProof: input.validationProof,
-              })
 
-              const po = sessionObjectives.get(sessionID)
-              const tree = po ? renderObjectiveTree(po) : ""
-
-              if (!result.success) {
-                return {
-                  output: { success: false, message: result.error || "Update failed.", tree },
-                  content: `Error updating ${id}: ${result.error}`,
+              for (const item of items) {
+                const id = item?.id?.trim()
+                if (!id) {
+                  return {
+                    output: { success: false, message: "Missing 'id' in update item.", tree: "" },
+                    content: "Missing id in update item.",
+                  }
+                }
+                const result = updateSecondaryObjective(sessionID, id, {
+                  status: item.status,
+                  title: item.title,
+                  rationale: item.rationale,
+                  blocker: item.blocker,
+                  validationProof: item.validationProof,
+                })
+                if (!result.success) {
+                  const po = sessionObjectives.get(sessionID)
+                  const tree = po ? renderObjectiveTree(po) : ""
+                  return {
+                    output: { success: false, message: result.error || `Update failed for ${id}.`, tree },
+                    content: `Error updating ${id}: ${result.error}`,
+                  }
                 }
               }
 
+              const po = sessionObjectives.get(sessionID)
+              const tree = po ? renderObjectiveTree(po) : ""
               return {
                 output: {
                   success: true,
-                  message: `Secondary objective ${id} updated to status '${result.objective?.status}'.`,
+                  message: `Secondary objective(s) successfully updated.`,
                   tree,
                 },
                 content: tree,
@@ -453,7 +607,8 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
             "Before commencing deep investigation or modifications, identify and define:",
             "1. The **Primary Objective** and its concrete **Definition of Done**.",
             "2. The initial **Secondary Objectives (SO-N)** with the **Rationale** of why each is needed.",
-            "Use the `objective_manage` tool to register them.",
+            "Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan in a single call.",
+            "You can also use `add_secondary` later as new sub-tasks or blockers are identified.",
           ].join("\n"),
         )
       }
