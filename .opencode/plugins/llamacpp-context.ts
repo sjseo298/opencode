@@ -12,13 +12,13 @@ export type CacheEntry = {
   nCtx?: number
 }
 
-export function propsUrl(base: unknown): string | undefined {
+export function endpointUrl(base: unknown, endpoint: string): string | undefined {
   if (typeof base !== "string" || !base) return undefined
   try {
     const url = new URL(base)
     const parts = url.pathname.split("/").filter(Boolean)
     if (parts[parts.length - 1] === "v1") parts.pop()
-    parts.push("props")
+    parts.push(endpoint)
     url.pathname = `/${parts.join("/")}`
     return url.toString()
   } catch {
@@ -26,20 +26,71 @@ export function propsUrl(base: unknown): string | undefined {
   }
 }
 
-export async function fetchContextLimit(baseURL: string, timeoutMs = 15_000): Promise<number | undefined> {
-  const url = propsUrl(baseURL)
-  if (!url) return undefined
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
-    if (!res.ok) return undefined
-    const body = (await res.json()) as PropsResponse
-    const value = body.default_generation_settings?.n_ctx ?? body.n_ctx
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      return value
-    }
-  } catch {
-    return undefined
+export function propsUrl(base: unknown): string | undefined {
+  return endpointUrl(base, "props")
+}
+
+export function statusUrl(base: unknown): string | undefined {
+  return endpointUrl(base, "status")
+}
+
+export type StatusResponse = {
+  kv_ctx?: {
+    total_tokens?: unknown
   }
+  slots?: {
+    items?: Array<{
+      total_tokens?: unknown
+    }>
+  }
+  model?: {
+    context_effective?: unknown
+  }
+}
+
+export async function fetchContextLimit(baseURL: string, timeoutMs = 3_000): Promise<number | undefined> {
+  const pUrl = propsUrl(baseURL)
+  if (pUrl) {
+    try {
+      const res = await fetch(pUrl, { signal: AbortSignal.timeout(timeoutMs) })
+      if (res.ok) {
+        const body = (await res.json()) as PropsResponse
+        const value = body.default_generation_settings?.n_ctx ?? body.n_ctx
+        if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+          return value
+        }
+      }
+    } catch {
+      // Fallback to /status
+    }
+  }
+
+  const sUrl = statusUrl(baseURL)
+  if (sUrl) {
+    try {
+      const res = await fetch(sUrl, { signal: AbortSignal.timeout(timeoutMs) })
+      if (res.ok) {
+        const body = (await res.json()) as StatusResponse
+        const slotTokens = body.slots?.items?.[0]?.total_tokens
+        const kvTokens = body.kv_ctx?.total_tokens
+        const modelTokens = body.model?.context_effective
+        const value =
+          typeof slotTokens === "number" && Number.isFinite(slotTokens) && slotTokens > 0
+            ? slotTokens
+            : typeof kvTokens === "number" && Number.isFinite(kvTokens) && kvTokens > 0
+              ? kvTokens
+              : typeof modelTokens === "number" && Number.isFinite(modelTokens) && modelTokens > 0
+                ? modelTokens
+                : undefined
+        if (value !== undefined) {
+          return value
+        }
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   return undefined
 }
 
@@ -60,7 +111,7 @@ export default Plugin.define({
     const targetProviders = new Set(providersList)
 
     const ttlMs = typeof ctx.options?.ttl_ms === "number" ? ctx.options.ttl_ms : 15_000
-    const timeoutMs = typeof ctx.options?.timeout_ms === "number" ? ctx.options.timeout_ms : 15_000
+    const timeoutMs = typeof ctx.options?.timeout_ms === "number" ? ctx.options.timeout_ms : 3_000
     const autoApply = typeof ctx.options?.auto_apply === "boolean" ? ctx.options.auto_apply : true
 
     const dynamicContexts = new Map<string, number>()
@@ -70,7 +121,7 @@ export default Plugin.define({
     await ctx.model.transform((editor) => {
       for (const providerID of targetProviders) {
         const record = editor.provider.get(providerID)
-        const baseURL = record?.provider.settings?.baseURL
+        const baseURL = record?.provider.settings?.baseURL ?? (record?.provider as any)?.options?.baseURL
         if (typeof baseURL === "string") {
           providerBaseUrls.set(providerID, baseURL)
         }

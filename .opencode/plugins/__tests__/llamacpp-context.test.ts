@@ -57,6 +57,29 @@ describe("llamacpp-context", () => {
       expect(nCtx).toBe(32768)
     })
 
+    test("fetches context from /status when /props returns 404", async () => {
+      using server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url)
+          if (url.pathname === "/props") {
+            return new Response("not found", { status: 404 })
+          }
+          if (url.pathname === "/status") {
+            return Response.json({
+              slots: {
+                items: [{ total_tokens: 4096 }],
+              },
+            })
+          }
+          return new Response("not found", { status: 404 })
+        },
+      })
+
+      const nCtx = await fetchContextLimit(server.url.toString())
+      expect(nCtx).toBe(4096)
+    })
+
     test("returns undefined when server returns 404", async () => {
       using server = Bun.serve({
         port: 0,
