@@ -122,6 +122,7 @@ export function PromptFooter(props: {
         </Switch>
         <Show when={props.showDetails && layout().shortcuts}>
           <text
+            marginLeft={status().length > 0 ? 1 : 0}
             fg={interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled}
             attributes={interactive() ? 0 : TextAttributes.DIM}
             wrapMode="none"
