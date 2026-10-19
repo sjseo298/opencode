@@ -21,7 +21,12 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../../..")
 const PLUGINS_DIR = path.join(REPO_ROOT, ".opencode/plugins")
 
 // Plugins to embed (order matters for loading priority)
-const EMBEDDED_PLUGINS = ["loop-guard", "compaction-todo", "subagent-mandatory-instruction"]
+const EMBEDDED_PLUGINS = [
+  "loop-guard",
+  "hierarchical-objectives",
+  "compaction-todo",
+  "subagent-mandatory-instruction",
+]
 
 type PluginExport = {
   name: string
@@ -57,6 +62,11 @@ function findPluginExport(content: string): PluginExport | null {
     if (constPattern.test(content) && satisfiesPattern.test(content)) {
       return { name: exportName, isDefault: true }
     }
+  }
+
+  // Pattern 3: export default Plugin.define(...)
+  if (/export\s+default\s+Plugin\.define\s*\(/.test(content)) {
+    return { name: "default", isDefault: true }
   }
 
   return null

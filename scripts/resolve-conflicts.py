@@ -155,12 +155,16 @@ def resolve_conflict_with_llm(file_header: str, conflict_content: str, model_inf
                 "   - NO descartes ciegamente ni los cambios de upstream ni las personalizaciones del fork.\n"
                 "3. CONSERVACIÓN DE EXPORTS:\n"
                 "   - Si la sección en conflicto incluye exports (como export const, export function, export namespace), NUNCA los borres.\n"
-                "4. BLOQUES ESPECÍFICOS DEL FORK:\n"
+                "4. BLOQUES ESPECÍFICOS DEL FORK Y MODELO DE OBJETIVOS (MANDATORIO):\n"
                 "   - Los bloques marcados con:\n"
                 "     // ── FORK: [nombre] ──\n"
                 "     [código]\n"
                 "     // ── END FORK ──\n"
                 "     deben preservarse intactos y adaptarse a las variables actualizadas de upstream.\n"
+                "   - PRESERVACIÓN DE OBJETIVOS JERÁRQUICOS Y PLUGINS EMBEBIDOS:\n"
+                "     * En `packages/cli/script/embed-plugins.ts`, NUNCA elimines `hierarchical-objectives`, `loop-guard`, `compaction-todo`, `subagent-mandatory-instruction`, ni la detección de `export default Plugin.define(...)`.\n"
+                "     * En `packages/tui/src/plugin/builtins.ts`, NUNCA elimines `SidebarObjectives` ni su ubicación en `builtins`.\n"
+                "     * En la TUI (footer de status bar y sidebar), preserva el cálculo de contexto dinámico y la barra lateral de objetivos.\n"
                 "5. Si la resolución es imposible sin romper el contrato del código, responde exactamente: <UNRESOLVABLE>"
             ),
         },
@@ -380,6 +384,18 @@ def run_binary_build(repo_dir: Path) -> tuple[bool, str]:
         return False, tail
     return True, ""
 
+def run_plugin_tests(repo_dir: Path) -> tuple[bool, str]:
+    """Run bun test in .opencode/plugins/__tests__ to verify plugins and methodology."""
+    test_dir = repo_dir / ".opencode" / "plugins" / "__tests__"
+    if not test_dir.exists():
+        return True, ""
+    console.print("[dim]  Verificando pruebas de plugins embebidos (.opencode/plugins/__tests__)...[/dim]")
+    res = run_cmd(["bun", "test"], cwd=test_dir)
+    if res.returncode != 0:
+        err = (res.stderr or res.stdout).strip()
+        return False, f"Pruebas de plugins fallaron:\n{err}"
+    return True, ""
+
 def verify_resolution(
     repo_dir: Path,
     resolved_files: list[str],
@@ -394,6 +410,14 @@ def verify_resolution(
 
     console.print(Panel("Verificando compilación y tipos del proyecto", border_style="cyan"))
     affected_packages = get_affected_packages(resolved_files)
+
+    # 0. Plugin Unit Tests
+    p_ok, p_err = run_plugin_tests(repo_dir)
+    if not p_ok:
+        console.print(f"[yellow]⚠ Fallo en pruebas de plugins embebidos:[/]\n[dim]{p_err[:600]}[/dim]")
+        # We don't exit immediately; typecheck and repair may fix it
+    else:
+        console.print("[green]✓ Pruebas de plugins embebidos superadas exitosamente.[/]")
 
     # 1. Typecheck
     max_repair_attempts = 2
