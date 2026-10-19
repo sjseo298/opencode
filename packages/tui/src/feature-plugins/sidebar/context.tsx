@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createMemo, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { contextUsage } from "../../util/session"
 
 const money = new Intl.NumberFormat("en-US", {
@@ -9,13 +9,24 @@ const money = new Intl.NumberFormat("en-US", {
 
 export function SidebarContext(props: { context: Plugin.Context; sessionID: string }) {
   const theme = props.context.theme
+  const [dynamicRev, setDynamicRev] = createSignal(0)
+
+  onMount(() => {
+    const store = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__
+    if (store?.subscribe) {
+      const unsub = store.subscribe(() => setDynamicRev((r) => r + 1))
+      onCleanup(unsub)
+    }
+  })
+
   const msg = createMemo(() => props.context.data.session.message.list(props.sessionID))
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const cost = createMemo(() => props.context.data.session.cost(props.sessionID))
 
-  const state = createMemo(() =>
-    contextUsage(msg(), props.context.data.location.model.list(session()?.location), session()?.revert?.messageID),
-  )
+  const state = createMemo(() => {
+    dynamicRev()
+    return contextUsage(msg(), props.context.data.location.model.list(session()?.location), session()?.revert?.messageID)
+  })
 
   return (
     <Show when={state() || cost() > 0}>

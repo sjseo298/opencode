@@ -49,17 +49,39 @@ export function contextUsage(
   boundary?: string,
 ) {
   const last = lastAssistantWithUsage(messages, boundary)
-  if (!last) return
-  const tokens =
-    last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
+  const lastAssistant =
+    last ??
+    messages.findLast(
+      (m): m is Extract<SessionMessageInfo, { type: "assistant" }> =>
+        m.type === "assistant" && typeof m.model === "object" && m.model !== null,
+    )
+  const modelKey = lastAssistant ? `${lastAssistant.model.providerID}/${lastAssistant.model.id}` : undefined
+  const store = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__
+  const dynamicInfo = modelKey ? store?.get?.(modelKey) : undefined
+
+  let tokens = last
+    ? last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
+    : (dynamicInfo?.used ?? 0)
+
+  if (typeof dynamicInfo?.used === "number" && dynamicInfo.used > 0 && dynamicInfo.used > tokens) {
+    tokens = dynamicInfo.used
+  }
+
   if (tokens <= 0) return
-  const model = models?.find((model) => model.providerID === last.model.providerID && model.id === last.model.id)
+
+  const modelID = lastAssistant?.model.id
+  const modelProviderID = lastAssistant?.model.providerID
+  const model = models?.find((model) => model.providerID === modelProviderID && model.id === modelID)
+
+  const dynamicLimit = modelKey ? store?.getLimit?.(modelKey) : undefined
+  const contextLimit = typeof dynamicLimit === "number" && dynamicLimit > 0 ? dynamicLimit : model?.limit.context
+
   return {
     tokens,
-    modelID: last.model.id,
-    modelProviderID: last.model.providerID,
-    contextLimit: model?.limit.context,
-    percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : undefined,
+    modelID,
+    modelProviderID,
+    contextLimit,
+    percent: contextLimit ? Math.round((tokens / contextLimit) * 100) : undefined,
   }
 }
 

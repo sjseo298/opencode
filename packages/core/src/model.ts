@@ -197,7 +197,12 @@ const layer = Layer.effect(
               new Map(
                 Array.from(models, ([id, model]) => {
                   const reusable = merged.get(model)
-                  if (reusable && reusable.provider === provider) return [id, reusable.model]
+                  if (
+                    reusable &&
+                    reusable.provider === provider &&
+                    reusable.model.limit?.context === model.limit?.context
+                  )
+                    return [id, reusable.model]
                   const value = {
                     ...model,
                     ...(provider?.canonical === undefined ? {} : { canonical: provider.canonical }),

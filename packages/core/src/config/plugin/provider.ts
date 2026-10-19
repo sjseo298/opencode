@@ -130,7 +130,13 @@ export const Plugin = define({
             if (config.body !== undefined) model.body = Provider.mergeOverlay(model.body, config.body)
             if (config.capabilities !== undefined)
               model.capabilities = Model.mergeCapabilities(config.capabilities, model.capabilities)
-            if (config.limit !== undefined) model.limit = { ...model.limit, ...config.limit }
+            if (config.limit !== undefined) {
+              const dynamic = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__?.getLimit?.(`${providerID}/${id}`)
+              model.limit = { ...model.limit, ...config.limit }
+              if (typeof dynamic === "number" && dynamic > 0) {
+                model.limit.context = dynamic
+              }
+            }
             // Configured reasoning replaces the base variants; configured variants still overlay them below.
             if (config.capabilities?.reasoning !== undefined)
               model.variants = [
