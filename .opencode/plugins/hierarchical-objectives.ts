@@ -72,7 +72,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan immediately.",
   "4. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "5. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
-  "6. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. You MUST NOT leave objectives open, in-progress, or pending if their work has been done. Every objective addressed must have its final status (e.g. resolved with validationProof, cancelled, or discarded) registered.",
+  "6. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. You MUST NOT leave objectives open, in-progress, or pending if their work has been done. Once all secondary objectives and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
   "7. Subagent Delegation: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics for a single secondary objective. CRITICAL RULE: Run strictly ONE subagent at a time. Never spawn multiple subagents in parallel or concurrently.",
   "8. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items.",
 ].join("\n")
@@ -106,6 +106,42 @@ export function setPrimaryObjective(
   }
   sessionObjectives.set(sessionID, po)
   return po
+}
+
+export function updatePrimaryObjective(
+  sessionID: string,
+  updates: {
+    status?: PrimaryObjectiveStatus
+    title?: string
+    definitionOfDone?: string
+    validationProof?: string
+  },
+): { success: boolean; error?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+
+  if (updates.status === "resolved") {
+    const openSecondaries = po.secondaries.filter(
+      (s) => s.status !== "resolved" && s.status !== "discarded" && s.status !== "cancelled",
+    )
+    if (openSecondaries.length > 0) {
+      return {
+        success: false,
+        error: `Cannot resolve Primary Objective while there are still open secondary objectives: ${openSecondaries.map((s) => s.id).join(", ")}. Resolve or discard all secondary objectives first.`,
+      }
+    }
+  }
+
+  if (updates.status !== undefined) po.status = updates.status
+  if (updates.title !== undefined) po.title = updates.title.trim()
+  if (updates.definitionOfDone !== undefined) po.definitionOfDone = updates.definitionOfDone.trim()
+
+  const now = Date.now()
+  po.updatedAt = now
+
+  return { success: true, po }
 }
 
 export function addSecondaryObjective(
@@ -350,6 +386,19 @@ export function reconstructObjectivesFromMessages(
             })
           }
         }
+      } else if (action === "complete_primary" || action === "resolve_primary" || action === "close_primary") {
+        if (po) {
+          updatePrimaryObjective(sessionID, { status: "resolved", validationProof: input.validationProof })
+        }
+      } else if (action === "update_primary") {
+        if (po) {
+          updatePrimaryObjective(sessionID, {
+            status: input.status,
+            title: input.title,
+            definitionOfDone: input.definitionOfDone,
+            validationProof: input.validationProof,
+          })
+        }
       }
     }
   }
@@ -440,6 +489,10 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("set_primary"),
   Schema.Literal("init"),
   Schema.Literal("set_objectives"),
+  Schema.Literal("complete_primary"),
+  Schema.Literal("resolve_primary"),
+  Schema.Literal("close_primary"),
+  Schema.Literal("update_primary"),
   Schema.Literal("add_secondary"),
   Schema.Literal("add_secondaries"),
   Schema.Literal("update_secondary"),
@@ -615,6 +668,55 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
               }
             }
 
+            if (
+              rawAction === "complete_primary" ||
+              rawAction === "resolve_primary" ||
+              rawAction === "close_primary" ||
+              rawAction === "update_primary"
+            ) {
+              const po = sessionObjectives.get(sessionID)
+              if (!po) {
+                return {
+                  output: {
+                    success: false,
+                    message: "No active objective tree found. Call 'set_primary' first.",
+                    tree: "",
+                  },
+                  content: "No active objective tree found. Call 'set_primary' first.",
+                }
+              }
+
+              const targetStatus =
+                rawAction === "complete_primary" || rawAction === "resolve_primary" || rawAction === "close_primary"
+                  ? "resolved"
+                  : (input.status || "resolved")
+
+              const result = updatePrimaryObjective(sessionID, {
+                status: targetStatus,
+                title: input.title,
+                definitionOfDone: input.definitionOfDone,
+                validationProof: input.validationProof,
+              })
+
+              if (!result.success) {
+                const tree = renderObjectiveTree(po)
+                return {
+                  output: { success: false, message: result.error || "Failed to update Primary Objective.", tree },
+                  content: `Error updating Primary Objective: ${result.error}`,
+                }
+              }
+
+              const tree = renderObjectiveTree(po)
+              return {
+                output: {
+                  success: true,
+                  message: `Primary Objective successfully marked as ${po.status.toUpperCase()}.`,
+                  tree,
+                },
+                content: tree,
+              }
+            }
+
             if (rawAction === "add_secondary" || rawAction === "add_secondaries") {
               const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
                 ? input.secondaries
@@ -707,10 +809,22 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
 
               const po = sessionObjectives.get(sessionID)
               const tree = po ? renderObjectiveTree(po) : ""
+              const allResolvedOrDiscarded =
+                po &&
+                po.secondaries.length > 0 &&
+                po.secondaries.every(
+                  (s) => s.status === "resolved" || s.status === "discarded" || s.status === "cancelled",
+                )
+
+              const completionNotice =
+                allResolvedOrDiscarded && po.status !== "resolved"
+                  ? " All secondary objectives are resolved! Call objective_manage with action: 'complete_primary' to formally close the Primary Objective before presenting your final response."
+                  : ""
+
               return {
                 output: {
                   success: true,
-                  message: `Secondary objective(s) successfully updated.`,
+                  message: `Secondary objective(s) successfully updated.${completionNotice}`,
                   tree,
                 },
                 content: tree,

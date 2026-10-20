@@ -141,6 +141,20 @@ export function extractObjectivesFromMessages(
               }
             }
           }
+        } else if (
+          action === "complete_primary" ||
+          action === "resolve_primary" ||
+          action === "close_primary"
+        ) {
+          if (po) {
+            po.status = "resolved"
+          }
+        } else if (action === "update_primary") {
+          if (po) {
+            if (input.status) po.status = input.status
+            if (input.title) po.title = input.title
+            if (input.definitionOfDone) po.definitionOfDone = input.definitionOfDone
+          }
         }
       } else if (toolName === "todowrite") {
         // Compatibility with legacy todowrite tool calls
@@ -315,8 +329,14 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
             {/* Primary Objective Card */}
             <box paddingTop={0} paddingBottom={0}>
               <box flexDirection="row" gap={1}>
-                <text fg={theme.text.feedback.warning.base}>
-                  <b>[PO]</b>
+                <text
+                  fg={
+                    po().status === "resolved"
+                      ? theme.text.feedback.success.base
+                      : theme.text.feedback.warning.base
+                  }
+                >
+                  <b>{po().status === "resolved" ? "[PO ✓]" : "[PO]"}</b>
                 </text>
                 <text fg={theme.text.base} wrapMode="word">
                   <b>{po().title}</b>

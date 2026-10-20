@@ -13,6 +13,7 @@ test("renders Protocolo de Objetivos guidance when objective_manage is present",
   expect(prompt).toContain("protocolo de objetivos")
   expect(prompt).toContain("protocolo de investigacion")
   expect(prompt).toContain("Before delivering the final response to the user, your first action must be to update and reconcile all objectives")
+  expect(prompt).toContain("complete_primary")
   expect(prompt).toContain("Immediately after a compaction finishes, you must first review the preserved objective progress")
 })
 

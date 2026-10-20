@@ -338,7 +338,24 @@ Establishes the Primary Objective and optionally registers initial secondaries i
 }
 ```
 
-#### Action 2: `add_secondary` (Alias: `add_secondaries`)
+#### Action 2: `complete_primary` (Aliases: `resolve_primary`, `close_primary`, `update_primary`)
+Formally resolves and closes the Primary Objective once all secondary objectives are completed/discarded and the Definition of Done is verified with real evidence:
+```json
+{
+  "action": "complete_primary",
+  "validationProof": "All database migrations applied cleanly; test suite passed 100% with exit code 0."
+}
+```
+Or updating metadata/status specifically via `update_primary`:
+```json
+{
+  "action": "update_primary",
+  "status": "resolved",
+  "validationProof": "End-to-end integration test succeeded."
+}
+```
+
+#### Action 3: `add_secondary` (Alias: `add_secondaries`)
 Adds one or more Secondary Objectives dynamically:
 ```json
 {
@@ -358,7 +375,7 @@ Or in batch:
 }
 ```
 
-#### Action 3: `update_secondary` (Alias: `update_secondaries`)
+#### Action 4: `update_secondary` (Alias: `update_secondaries`)
 Updates status, blocker, or validation proof. **Crucial Rule: If `status: "resolved"`, `validationProof` is mandatory!**
 ```json
 {
@@ -378,7 +395,7 @@ If blocked:
 }
 ```
 
-#### Action 4: `list` (Aliases: `get_tree`, `show`)
+#### Action 5: `list` (Aliases: `get_tree`, `show`)
 Returns the complete formatted text tree of objectives.
 
 ### 11.4 Comparison: Standard TODO vs. Protocolo de Objetivos

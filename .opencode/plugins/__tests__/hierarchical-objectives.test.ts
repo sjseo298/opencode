@@ -155,6 +155,9 @@ describe("hierarchical-objectives plugin", () => {
       const doc = Schema.toJsonSchemaDocument(tool.input) as any
       const actionEnum = doc.schema.properties.action.enum
       expect(actionEnum).toContain("set_primary")
+      expect(actionEnum).toContain("complete_primary")
+      expect(actionEnum).toContain("resolve_primary")
+      expect(actionEnum).toContain("update_primary")
       expect(actionEnum).toContain("add_secondary")
       expect(actionEnum).toContain("update_secondary")
       expect(actionEnum).toContain("list")
@@ -209,6 +212,27 @@ describe("hierarchical-objectives plugin", () => {
       )
       expect(r4.output.success).toBe(true)
       expect(r4.output.tree).toContain("✅ *Validation Proof:*")
+      expect(r4.output.message).toContain("All secondary objectives are resolved")
+
+      // 4b. complete_primary formally marks PO resolved
+      const rComplete = await tool.execute(
+        { action: "complete_primary", validationProof: "Integration suite passed 100%" },
+        { sessionID: sid },
+      )
+      expect(rComplete.output.success).toBe(true)
+      expect(rComplete.output.tree).toContain("Primary Objective [RESOLVED]:")
+      expect(rComplete.output.message).toContain("RESOLVED")
+
+      // 4c. complete_primary fails if open secondaries exist
+      const sidOpen = uniqueSessionID("tool-open")
+      setPrimaryObjective(sidOpen, "Open Task", "DoD")
+      addSecondaryObjective(sidOpen, "Open Subtask", "Rationale")
+      const rFail = await tool.execute(
+        { action: "complete_primary" },
+        { sessionID: sidOpen },
+      )
+      expect(rFail.output.success).toBe(false)
+      expect(rFail.output.message).toContain("open secondary objectives")
 
       // 5. set_primary with initial secondaries in single call
       const sidBatch = uniqueSessionID("tool-batch")

@@ -287,4 +287,30 @@ describe("SidebarObjectives TUI component", () => {
     expect(po?.secondaries[1].status).toBe("exploring")
     expect(po?.secondaries[1].rationale).toBe("Improve concurrency")
   })
+
+  test("renders resolved badge [PO ✓] when Primary Objective is resolved", async () => {
+    const sid = "render-resolved-po"
+    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
+    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+      title: "Completed Project",
+      status: "resolved",
+      definitionOfDone: "All done",
+      secondaries: [],
+    })
+
+    const ctx = makeMockContext({ messages: [] })
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
+      width: 44,
+      height: 10,
+    })
+
+    try {
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("[PO ✓]")
+      expect(frame).toContain("Completed Project")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 })
