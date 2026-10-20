@@ -26,6 +26,7 @@ Session.vim
 a.out
 target
 .scripts
+/scripts/opencode
 .cache
 .direnv/
 

@@ -54,6 +54,16 @@ ensure_scripts_executable() {
     chmod +x "$script"
     echo "✅ opencodeplus executable."
   fi
+  local os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  local arch="$(uname -m)"
+  [[ "$arch" == "x86_64" ]] && arch="x64"
+  [[ "$arch" == "aarch64" ]] && arch="arm64"
+  local target_bin="$OPENCODE_DIR/dist/cli-${os}-${arch}/bin/opencode"
+  if [[ -f "$target_bin" ]]; then
+    ln -sf "$target_bin" "$REPO_ROOT/scripts/opencode"
+    chmod +x "$REPO_ROOT/scripts/opencode"
+    echo "✅ Linked opencode to $REPO_ROOT/scripts/opencode"
+  fi
 }
 
 # ── sync global plugins ───────────────────────────────────────────
@@ -315,6 +325,7 @@ if [[ "$skip_sync" == true ]]; then
   test_plugins
   typecheck_report
   configure_path
+  ensure_scripts_executable
   sync_global_plugins
 else
   if [[ -z "$SYNC_MODE" ]]; then
