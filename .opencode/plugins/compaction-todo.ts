@@ -42,6 +42,7 @@ function formatObjectivesSnapshot(po: any) {
     "Preserve these objectives across compaction.",
     "Do not change status unless directly supported by verified runtime evidence.",
     "Keep the next step strictly aligned with unfinished objectives.",
+    "CRITICAL MANDATORY INSTRUCTION FOR POST-COMPACTION RESUMPTION: Immediately after compaction finishes, the very first action the agent must perform is to review what has been accomplished so far in the objectives from this snapshot and call `objective_manage` to update and synchronize the active objectives before taking any other action.",
     ...lines,
   ].join("\n")
 }
@@ -139,7 +140,7 @@ export default Plugin.define({
       if (postCompaction) {
         reminders.push(
           po
-            ? "This is immediately after compaction: resume unfinished objectives first. The full Objective Tree is provided as active input. Continue updating it via `objective_manage` as you work."
+            ? "This is immediately after compaction: resume unfinished objectives first. The full Objective Tree is provided as active input. First review what has been accomplished so far and update objectives via `objective_manage` before proceeding."
             : "This is immediately after compaction: resume unfinished todos first.",
         )
       }

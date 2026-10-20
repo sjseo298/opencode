@@ -522,6 +522,8 @@ describe("compaction-todo plugin", () => {
       expect(output.context[0]).toContain("[PO] Database Refactor")
       expect(output.context[0]).toContain("SO-1")
       expect(output.context[0]).toContain("Apply SQL constraints")
+      expect(output.context[0]).toContain("CRITICAL MANDATORY INSTRUCTION FOR POST-COMPACTION RESUMPTION")
+      expect(output.context[0]).toContain("review what has been accomplished so far in the objectives")
 
       // Clean up
       globalObjectives.delete(sessionID)

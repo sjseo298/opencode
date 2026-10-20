@@ -72,8 +72,9 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan immediately.",
   "4. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "5. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
-  "6. Subagent Delegation: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics for a single secondary objective. CRITICAL RULE: Run strictly ONE subagent at a time. Never spawn multiple subagents in parallel or concurrently.",
-  "7. Post-Compaction Resumption: If the session has undergone compaction, the objective tree is preserved in the compaction checkpoint/summary. Do NOT re-investigate resolved items. Continue directly advancing active objectives and maintain the tree via `objective_manage`.",
+  "6. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. You MUST NOT leave objectives open, in-progress, or pending if their work has been done. Every objective addressed must have its final status (e.g. resolved with validationProof, cancelled, or discarded) registered.",
+  "7. Subagent Delegation: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics for a single secondary objective. CRITICAL RULE: Run strictly ONE subagent at a time. Never spawn multiple subagents in parallel or concurrently.",
+  "8. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items.",
 ].join("\n")
 
 export const MAX_CONSECUTIVE_READS = 5
@@ -241,6 +242,9 @@ export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
     "- Under '## Work State > ### Active', preserve all active or exploring secondary objectives with their IDs and rationales.",
     "- Under '## Work State > ### Blocked', preserve all blocked secondary objectives with their IDs, blockers, and rationales.",
     "- In '## Next Move', state the immediate active or pending secondary objective to be resumed.",
+    "",
+    "CRITICAL MANDATORY INSTRUCTION FOR POST-COMPACTION RESUMPTION:",
+    "Immediately after compaction finishes, when the session resumes, the VERY FIRST action the agent must perform is to read what has been accomplished so far in the objectives from this summary and call `objective_manage` to synchronize and update the active objectives before continuing execution.",
     "",
     `[PO] ${po.title} [${po.status.toUpperCase()}]`,
     `Definition of Done: ${po.definitionOfDone || "Verified"}`,
@@ -564,7 +568,7 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
           name: "objective_manage",
           options: { codemode: false },
           description:
-            "Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call.",
+            "Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call. Mandatory: call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
           input: ObjectiveInputSchema,
           output: ObjectiveOutputSchema,
           execute: async (input: any, toolCtx: any) => {

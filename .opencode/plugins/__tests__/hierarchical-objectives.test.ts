@@ -279,6 +279,11 @@ describe("hierarchical-objectives plugin", () => {
       expect(text).toContain("Protocolo de Objetivos (Objectives Protocol)")
       expect(text).toContain("objective_manage")
       expect(text).toContain("Secondary Objectives (SO-N)")
+      expect(text).toContain("Mandatory Objective Reconciliation Before Final Response")
+      expect(text).toContain("Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives")
+      expect(text).toContain("You MUST NOT leave objectives open, in-progress, or pending")
+      expect(text).toContain("Post-Compaction Resumption")
+      expect(text).toContain("Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives")
     })
 
     test("context hook maintains strict system prompt prefix invariance across turns and state transitions", async () => {
@@ -402,6 +407,8 @@ describe("hierarchical-objectives plugin", () => {
       expect(compactionEvent.system[0].text).toContain("Migrate DB driver")
       expect(compactionEvent.system[0].text).toContain("Update API endpoints")
       expect(compactionEvent.system[0].text).toContain("SO-2")
+      expect(compactionEvent.system[0].text).toContain("CRITICAL MANDATORY INSTRUCTION FOR POST-COMPACTION RESUMPTION")
+      expect(compactionEvent.system[0].text).toContain("Immediately after compaction finishes, when the session resumes, the VERY FIRST action the agent must perform is to read what has been accomplished so far in the objectives")
 
       // 2. Next session starts / context hook fires
       const contextEvent = { sessionID: sid, system: [] as { type: string; text: string }[] }
@@ -412,8 +419,9 @@ describe("hierarchical-objectives plugin", () => {
       const postCompactionText = contextEvent.system.map((s) => s.text).join("\n")
       expect(postCompactionText).toContain("Protocolo de Objetivos (Objectives Protocol)")
       expect(postCompactionText).toContain("Post-Compaction Resumption")
+      expect(postCompactionText).toContain("Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives")
       expect(postCompactionText).toContain("objective_manage")
-      expect(postCompactionText).toContain("Do NOT re-investigate resolved items")
+      expect(postCompactionText).toContain("Do not re-investigate resolved items")
     })
 
     test("reconstructs objectives from session message tool calls or compaction checkpoint when in-memory state is missing", async () => {

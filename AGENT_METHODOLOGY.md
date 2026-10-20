@@ -33,6 +33,8 @@ The agent **MUST immediately recognize** this as an explicit directive to execut
 2. Strictly decompose every active line of inquiry into Secondary Objectives (`SO-N`) with explicit rationale.
 3. Obey the "Done means Done" rule: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
 4. Isolate blockers, untangle cascading errors, and maintain continuous alignment with the objective tree.
+5. **Mandatory Pre-Delivery Reconciliation**: Before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed.
+6. **Mandatory Post-Compaction Review & Synchronization**: Immediately after context compaction finishes, when resuming the session, the agent MUST first review what has been accomplished in the objectives from the compaction summary (`## Objective` and `## Work State`) and immediately call `objective_manage` to sync and update the active objectives before taking any other action.
 
 ---
 
@@ -105,6 +107,8 @@ Every objective (PO and SO-N) must transition through rigorous states:
    * What specific validation is required.
    * Why the agent cannot run it autonomously.
    * The exact command or step the user should execute to confirm.
+6. **Mandatory Pre-Delivery Objective Reconciliation**:
+   Before delivering the final result or answer to the user, the agent's **FIRST action** must be calling `objective_manage` to reconcile and finalize the objective tree. The agent **MUST NOT leave objectives open, in-progress, or pending** if the work has been performed. Every addressed objective must have its definitive status (`resolved` with proof, `cancelled`, or `discarded`) recorded in the system.
 
 ---
 
@@ -286,15 +290,18 @@ export interface PrimaryObjective {
 ### 11.2 Lifecycle Hooks & Enforcement Points
 
 1. **`ctx.session.hook("context")`**:
-   * Injects the active **Protocolo de Objetivos** instruction into the agent's system prompt on every turn.
-   * If no Primary Objective exists, instructs the agent to establish the PO and initial SOs with `objective_manage`.
-   * If objectives exist, renders the formatted tree, active target (`🎯 Current Target: SO-N`), and enforces the *"Done means Done"* validation requirement.
-   * **Post-Compaction Resumption Delivery**: When a session resumes after context compaction (detected via `postCompactionSessions` or `<conversation-checkpoint>`), it delivers the complete objective tree as explicit working input under `## 🔄 Protocolo de Objetivos: Reanudación Post-Compactación`, designating the immediate active target, forbidding re-execution of resolved items, and strictly mandating continuous updating via `objective_manage`.
+   * Injects the static, invariant **Protocolo de Objetivos** instructions (`PROTOCOLO_OBJETIVOS_INSTRUCTIONS`) into the agent's system prompt on every turn, preserving strict KV cache prefix caching.
+   * Mandates:
+     - Initialization of PO and initial SOs with `objective_manage`.
+     - Decomposition into subtasks with explicit rationales and enforcement of *"Done means Done"*.
+     - **Pre-Delivery Reconciliation**: The agent's FIRST action before delivering the final answer to the user must be updating/reconciling all objectives via `objective_manage` (never leave completed work open).
+     - **Post-Compaction Review & Synchronization**: Immediately upon resuming after compaction, the agent must review objective progress from the summary and execute `objective_manage` to sync active objectives before proceeding.
+     - Strict subagent concurrency bound of 1.
    * **Resilience & Memory Recovery**: If in-memory state is absent (e.g. across process restarts or reloaded archived sessions), `reconstructObjectivesFromMessages` automatically parses earlier `objective_manage` tool calls or compaction `<conversation-checkpoint>` summaries to restore the complete objective hierarchy.
 2. **`ctx.session.hook("compaction")`**:
    * Formats a complete structured snapshot (`## Protocolo de Objetivos - Mandatory Objective Snapshot (Compacted History) (Insumo de Compactación)`) containing the PO, status, Definition of Done, and all SOs grouped into Completed, Active, Blocked, and Pending categories with explicit rationales, blockers, and validation proofs.
-   * Delivered directly as input to the compaction summarization model so that the summary strictly preserves the objective hierarchy under `## Objective` and `## Work State` (`### Completed`, `### Active`, `### Blocked`).
-   * Sets the `postCompactionSessions` marker so the resuming session immediately receives the active tree.
+   * Injects the mandatory instruction for the compaction model and the resumed session: immediately upon compaction completion, the agent MUST review the objective snapshot and call `objective_manage` to sync active objectives before proceeding.
+   * Sets the `postCompactionSessions` marker.
 3. **Continuous Reconciliation (`compaction-todo.ts`)**:
    * Tracks modifying/action tools (`write`, `edit`, `bash`, `apply_diff`, etc.). When modifying tools execute without updating objectives, the session is marked dirty.
    * Prompts the agent before concluding: *"⚠️ Objective Reconciliation Required: You have performed code modifications or tool executions. Call `objective_manage` to keep your objective tree synchronized with your latest progress, attach validation proof for completed work, or register newly discovered blockers before finishing your turn."*
