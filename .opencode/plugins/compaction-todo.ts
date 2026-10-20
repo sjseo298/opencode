@@ -94,6 +94,12 @@ export default Plugin.define({
     await ctx.session.hook("context", async (event) => {
       if (!event.sessionID) return
 
+      // If hierarchical objectives protocol is active in event.system, avoid injecting duplicate or fluctuating reminders
+      // to preserve strict prompt cache prefix invariance for llama.cpp / local LLMs.
+      if (event.system.some((part) => (part.text ?? "").includes("Protocolo de Objetivos (Objectives Protocol)"))) {
+        return
+      }
+
       const po = getObjectives(event.sessionID)
       const postCompaction = postCompactionSessions.has(event.sessionID)
       const dirty = dirtySessions.has(event.sessionID)
@@ -117,11 +123,6 @@ export default Plugin.define({
           "Continuously keep the objective tree updated: call `objective_manage` to record progress, hit blockers, or attach validation proof.",
           "Before ending your turn, reconcile progress against objectives. Do not leave stale in_progress or pending items if you already completed their work.",
         )
-        if (dirty) {
-          reminders.push(
-            "⚠️ You have performed code modifications or tool executions without updating objectives. Call `objective_manage` (`update_secondary` or `add_secondary`) before finishing your turn.",
-          )
-        }
       } else if (hasTodos) {
         reminders.push(
           "Open todos remain in this session.",

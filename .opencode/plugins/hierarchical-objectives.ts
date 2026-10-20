@@ -61,6 +61,21 @@ export const READONLY_TOOLS = new Set([
   "question",
 ])
 
+// Static normative instructions for Protocolo de Objetivos.
+// MUST BE 100% INVARIANT across all turns to preserve llama.cpp / LLM KV cache prefix caching.
+export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
+  "## Protocolo de Objetivos (Objectives Protocol)",
+  "You are equipped with the **Protocolo de Objetivos** (also referred to as 'Objectives Protocol' or 'Hierarchical Objectives Protocol').",
+  "When the user instructs you to follow, execute, or apply the 'protocolo de objetivos', 'protocolo de objetivos jerárquicos', 'objectives protocol' (or 'protocolo de investigacion'), you MUST strictly follow this exact framework:",
+  "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
+  "2. Decompose the task into **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
+  "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan immediately.",
+  "4. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
+  "5. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
+  "6. Subagent Delegation: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics for a single secondary objective. CRITICAL RULE: Run strictly ONE subagent at a time. Never spawn multiple subagents in parallel or concurrently.",
+  "7. Post-Compaction Resumption: If the session has undergone compaction, the objective tree is preserved in the compaction checkpoint/summary. Do NOT re-investigate resolved items. Continue directly advancing active objectives and maintain the tree via `objective_manage`.",
+].join("\n")
+
 export const MAX_CONSECUTIVE_READS = 5
 
 export function clearSessionObjectives(sessionID: string) {
@@ -783,89 +798,18 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
         }
       }
 
-      const reminders: string[] = []
-
-      // Anti-loop reminder if triggered
-      const warning = antiLoopWarnings.get(sessionID)
-      if (warning) {
-        reminders.push(warning)
-        antiLoopWarnings.delete(sessionID)
+      // PREFIX CACHE INVARIANCE:
+      // In local inference engines (llama.cpp, etc.), prefix caching (Longest Common Prefix)
+      // depends on the system prompt being 100% IDENTICAL across all turns.
+      // Dynamic objective trees, changing statuses, active target reminders, and oscillating
+      // dirty warnings must NEVER be injected into event.system!
+      // The static Protocolo de Objetivos framework is invariant across turns.
+      if (!event.system.some((part) => (part.text ?? "").includes("Protocolo de Objetivos (Objectives Protocol)"))) {
+        event.system.push({
+          type: "text",
+          text: PROTOCOLO_OBJETIVOS_INSTRUCTIONS,
+        })
       }
-
-      const isPostCompaction =
-        postCompactionSessions.has(sessionID) ||
-        (Array.isArray(event.messages) &&
-          event.messages.some((m: any) => {
-            const content =
-              typeof m?.content === "string"
-                ? m.content
-                : Array.isArray(m?.content)
-                  ? m.content.map((c: any) => c.text || "").join(" ")
-                  : ""
-            return content.includes("<conversation-checkpoint>")
-          }))
-
-      if (po) {
-        const tree = renderObjectiveTree(po)
-        const activeSO = po.secondaries.find((s) => s.status === "exploring" || s.status === "pending")
-
-        if (isPostCompaction) {
-          reminders.push(
-            [
-              "## 🔄 Protocolo de Objetivos: Reanudación Post-Compactación",
-              "El contexto de la conversación previa ha sido compactado. Se te entregan los objetivos vigentes como insumo de trabajo obligatorio para continuar la sesión:",
-              "",
-              tree,
-              "",
-              activeSO
-                ? `🎯 **Objetivo Activo Inmediato:** ${activeSO.id}: "${activeSO.title}". Tu próxima acción debe enfocarse estrictamente en avanzar este objetivo.`
-                : "Todos los objetivos secundarios actuales han sido resueltos. Si el Objetivo Primario está cumplido con evidencia, concluye; de lo contrario, define el siguiente SO.",
-              "",
-              "**INSTRUCCIONES OBLIGATORIAS DE REANUDACIÓN:**",
-              "1. NO reinicies investigaciones, análisis o tareas ya marcadas como [RESOLVED].",
-              "2. Continúa actualizando continuamente este árbol de objetivos mediante `objective_manage` (`set_primary`, `add_secondary`, `update_secondary`) a medida que avances.",
-              "3. Si descubres nuevas subtareas o dependencias, regístralas de inmediato con `action: 'add_secondary'`.",
-              "4. Si encuentras un bloqueo o error, márcalo con `action: 'update_secondary'`, `status: 'blocked'`, `blocker: '...'`.",
-              "5. Antes de declarar cualquier objetivo completado, ejecuta las validaciones reales y adjunta la evidencia (`validationProof`). 'Done means Done'.",
-            ].join("\n"),
-          )
-          postCompactionSessions.delete(sessionID)
-        } else {
-          reminders.push(
-            [
-              "## Protocolo de Objetivos (Objectives Protocol) - Objective Alignment",
-              "This session is governed by the Protocolo de Objetivos (Objectives Protocol).",
-              "Every step you take must serve an active objective in the tree below.",
-              "NEVER declare an objective resolved based on deduction or reasoning alone.",
-              "Run actual commands and verify output before concluding any step ('Done means Done').",
-              activeSO
-                ? `🎯 **Current Target:** Work on ${activeSO.id}: "${activeSO.title}". Focus your immediate tool call on advancing this objective.`
-                : "All current secondary objectives are resolved or discarded. If the Primary Objective is satisfied, conclude with evidence. Otherwise, define the next SO.",
-              "",
-              tree,
-            ].join("\n"),
-          )
-        }
-      } else {
-        reminders.push(
-          [
-            "## Protocolo de Objetivos (Objectives Protocol)",
-            "You are equipped with the **Protocolo de Objetivos** (also referred to as 'Objectives Protocol' or 'Hierarchical Objectives Protocol').",
-            "When the user instructs you to follow, execute, or apply the 'protocolo de objetivos', 'protocolo de objetivos jerárquicos', 'objectives protocol' (or 'protocolo de investigacion'), you MUST strictly follow this exact framework:",
-            "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
-            "2. Decompose the task into **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
-            "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete plan immediately.",
-            "4. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
-            "5. When new blockers or sub-tasks arise, call `objective_manage` (`action: 'add_secondary'`) to register them dynamically.",
-            "6. Subagent Delegation: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics for a single secondary objective. CRITICAL RULE: Run strictly ONE subagent at a time. Never spawn multiple subagents in parallel or concurrently.",
-          ].join("\n"),
-        )
-      }
-
-      event.system.push({
-        type: "text",
-        text: reminders.join("\n\n"),
-      })
     })
 
     // 4. Tool Execution Hooks: Anti-Loop & Evidence Capture
@@ -878,9 +822,8 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
         consecutiveReadCounts.set(sessionID, currentCount)
 
         if (currentCount >= MAX_CONSECUTIVE_READS) {
-          antiLoopWarnings.set(
-            sessionID,
-            `⚠️ **Anti-Loop Warning**: You have executed ${currentCount} consecutive inspection/read-only operations without taking action or updating objectives. Synthesize your findings and focus your next step on concrete validation or execution.`,
+          throw new Error(
+            `⚠️ Anti-Loop Warning: You have executed ${currentCount} consecutive inspection/read-only operations without taking action or updating objectives. Synthesize your findings and focus your next step on concrete validation or execution.`,
           )
         }
       } else {

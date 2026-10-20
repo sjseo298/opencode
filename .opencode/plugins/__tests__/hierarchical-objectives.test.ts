@@ -263,7 +263,7 @@ describe("hierarchical-objectives plugin", () => {
       expect(text).toContain("Critical Subtask")
     })
 
-    test("context hook injects active objective tree and current target", async () => {
+    test("context hook injects Protocolo de Objetivos instructions and maintains prefix invariance", async () => {
       const { sessionHooks } = await setupPluginInstance()
       const sid = uniqueSessionID("context-target")
       setPrimaryObjective(sid, "Feature Implementation", "Passes end-to-end suite")
@@ -277,8 +277,45 @@ describe("hierarchical-objectives plugin", () => {
       expect(event.system.length).toBeGreaterThan(0)
       const text = event.system[0].text
       expect(text).toContain("Protocolo de Objetivos (Objectives Protocol)")
-      expect(text).toContain("Current Target")
-      expect(text).toContain("SO-1")
+      expect(text).toContain("objective_manage")
+      expect(text).toContain("Secondary Objectives (SO-N)")
+    })
+
+    test("context hook maintains strict system prompt prefix invariance across turns and state transitions", async () => {
+      const { sessionHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("prefix-invariance")
+
+      // Turn 1: No PO registered yet
+      const event1 = { sessionID: sid, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event1)
+      }
+      expect(event1.system.length).toBeGreaterThan(0)
+      const text1 = event1.system[0].text
+      expect(text1).toContain("Protocolo de Objetivos (Objectives Protocol)")
+
+      // Turn 2: PO registered with secondaries
+      setPrimaryObjective(sid, "Invariance Task", "All tests pass")
+      const so1 = addSecondaryObjective(sid, "First subtask", "Needed for PO")
+      const event2 = { sessionID: sid, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event2)
+      }
+      const text2 = event2.system[0].text
+
+      // Turn 3: SO-1 status transitions to resolved with proof
+      so1.status = "resolved"
+      so1.validationProof = "Verified via bun test"
+      const event3 = { sessionID: sid, system: [] as { type: string; text: string }[] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event3)
+      }
+      const text3 = event3.system[0].text
+
+      // Strict prefix invariance: the system prompt must be 100% IDENTICAL across all turns
+      // to preserve the KV cache prefix in llama.cpp / local LLMs!
+      expect(text2).toBe(text1)
+      expect(text3).toBe(text1)
     })
 
     test("context hook injects Protocolo de Objetivos instructions when no PO exists yet", async () => {
@@ -298,27 +335,21 @@ describe("hierarchical-objectives plugin", () => {
       expect(text).toContain("objective_manage")
     })
 
-    test("anti-loop protocol warns after multiple consecutive read-only operations", async () => {
-      const { sessionHooks, toolHooks } = await setupPluginInstance()
+    test("anti-loop protocol rejects execution after consecutive read-only operations to protect prefix cache", async () => {
+      const { toolHooks } = await setupPluginInstance()
       const sid = uniqueSessionID("anti-loop")
       setPrimaryObjective(sid, "Codebase Audit", "Audit finished")
 
-      // Execute MAX_CONSECUTIVE_READS read tool calls
-      for (let i = 0; i < MAX_CONSECUTIVE_READS; i++) {
-        for (const h of toolHooks["execute.before"] ?? []) {
-          await h({ sessionID: sid, tool: "read" })
-        }
+      const hook = toolHooks["execute.before"]?.[0]
+      expect(hook).toBeDefined()
+
+      // Execute MAX_CONSECUTIVE_READS - 1 calls (should pass)
+      for (let i = 0; i < MAX_CONSECUTIVE_READS - 1; i++) {
+        await hook({ sessionID: sid, tool: "read" })
       }
 
-      // Check context hook to see anti-loop reminder
-      const event = { sessionID: sid, system: [] as { type: string; text: string }[] }
-      for (const h of sessionHooks["context"] ?? []) {
-        await h(event)
-      }
-
-      const text = event.system.map((s) => s.text).join("\n")
-      expect(text).toContain("Anti-Loop Warning")
-      expect(text).toContain("consecutive inspection/read-only operations")
+      // The MAX_CONSECUTIVE_READS-th call must reject to prevent loop without mutating event.system
+      expect(() => hook({ sessionID: sid, tool: "read" })).toThrow("Anti-Loop Warning")
     })
 
     test("legacy todowrite compatibility maps todos into secondary objectives", async () => {
@@ -347,7 +378,7 @@ describe("hierarchical-objectives plugin", () => {
       expect(po?.secondaries[1].status).toBe("resolved")
     })
 
-    test("delivers full objective tree as input and mandatory instruction upon post-compaction session resumption", async () => {
+    test("delivers full objective tree as input upon compaction and maintains invariant post-compaction instructions", async () => {
       const { sessionHooks } = await setupPluginInstance()
       const sid = uniqueSessionID("post-compaction-resumption")
       setPrimaryObjective(sid, "System Architecture Upgrade", "Deploy to production without downtime")
@@ -368,6 +399,9 @@ describe("hierarchical-objectives plugin", () => {
       expect(compactionEvent.system[0].text).toContain("Insumo de Compactación")
       expect(compactionEvent.system[0].text).toContain("System Architecture Upgrade")
       expect(compactionEvent.system[0].text).toContain("Pool test completed with 100 concurrent workers")
+      expect(compactionEvent.system[0].text).toContain("Migrate DB driver")
+      expect(compactionEvent.system[0].text).toContain("Update API endpoints")
+      expect(compactionEvent.system[0].text).toContain("SO-2")
 
       // 2. Next session starts / context hook fires
       const contextEvent = { sessionID: sid, system: [] as { type: string; text: string }[] }
@@ -376,14 +410,10 @@ describe("hierarchical-objectives plugin", () => {
       }
 
       const postCompactionText = contextEvent.system.map((s) => s.text).join("\n")
-      expect(postCompactionText).toContain("Reanudación Post-Compactación")
-      expect(postCompactionText).toContain("System Architecture Upgrade")
-      expect(postCompactionText).toContain("Migrate DB driver")
-      expect(postCompactionText).toContain("Update API endpoints")
-      expect(postCompactionText).toContain("SO-2")
-      expect(postCompactionText).toContain("INSTRUCCIONES OBLIGATORIAS DE REANUDACIÓN")
-      expect(postCompactionText).toContain("Continúa actualizando continuamente este árbol de objetivos mediante `objective_manage`")
-      expect(postCompactionText).toContain("NO reinicies investigaciones, análisis o tareas ya marcadas como [RESOLVED]")
+      expect(postCompactionText).toContain("Protocolo de Objetivos (Objectives Protocol)")
+      expect(postCompactionText).toContain("Post-Compaction Resumption")
+      expect(postCompactionText).toContain("objective_manage")
+      expect(postCompactionText).toContain("Do NOT re-investigate resolved items")
     })
 
     test("reconstructs objectives from session message tool calls or compaction checkpoint when in-memory state is missing", async () => {
@@ -433,11 +463,11 @@ describe("hierarchical-objectives plugin", () => {
       expect(po?.secondaries[1].id).toBe("SO-2")
       expect(po?.secondaries[1].status).toBe("exploring")
 
-      // Verify that post-compaction prompt was injected
+      // Verify that invariant methodology instructions are present
       const text = event.system.map((s) => s.text).join("\n")
-      expect(text).toContain("Reanudación Post-Compactación")
-      expect(text).toContain("Fork Synchronization Protocol")
-      expect(text).toContain("Resolve conflicts in package.json")
+      expect(text).toContain("Protocolo de Objetivos (Objectives Protocol)")
+      expect(text).toContain("Post-Compaction Resumption")
+      expect(text).toContain("objective_manage")
     })
   })
 })

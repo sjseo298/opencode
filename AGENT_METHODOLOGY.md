@@ -395,6 +395,30 @@ When resolving complex tasks, an agent may leverage the `subagent` tool to offlo
 2. **Synchronous Resolution & Evidence Integration**: Wait for the active subagent to conclude, review its evidence and output, and integrate its findings into the active Secondary Objective via `objective_manage` before delegating any subsequent task.
 3. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
 
+### 11.6 Prompt Caching, KV Cache Reuse & Prefix Invariance Architecture
+
+In local LLM inference engines (`llama.cpp`, vLLM, LM Studio) and frontier providers supporting prefix caching, prompt processing performance depends entirely on **Prefix Caching (Longest Common Prefix / LCP)**.
+
+#### The Cost of Cache Invalidation
+* When the prompt prefix matches previously cached tokens ($f_{\text{sim\_best}} = 1.000$), prompt evaluation takes **< 1 second** (e.g. 769 ms for 90,000+ tokens).
+* If a single token changes in the system prompt at the beginning of the prompt, the LCP match collapses ($f_{\text{sim\_best}} \approx 0.11$). The inference engine must evict gigabytes of KV cache and recompute all 96,000+ tokens from scratch, taking **14 to 15 minutes per turn**.
+
+#### Mandatory Rules for Prefix Invariance
+1. **System Prompt Immutability (`event.system`)**:
+   * The text in `event.system` must be **100% STATIC and IDEMPOTENT** across every single turn.
+   * **NEVER inject dynamic content into `event.system`**: this includes rendered objective trees with changing statuses, active target pointers (`🎯 Current Target: SO-N`), fluctuating "dirty" warnings, or turn-dependent reminders.
+   * The static system prompt must contain only the normative methodology rules, continuous update directives, subagent concurrency limits, and tool instructions.
+2. **Dynamic State Lives in UI & Append-Only History**:
+   * The live objective tree is rendered in real time in the **TUI right sidebar widget** (`SidebarObjectivesView`) and persisted in SQLite/in-memory maps. It updates with zero latency without consuming or mutating prompt tokens.
+   * The agent maintains objective awareness through its own `objective_manage` tool calls and tool responses stored in the immutable conversation history (`messages`).
+3. **Compaction Snapshots**:
+   * Objectives snapshots are injected into the compaction context via `ctx.session.hook("compaction")` during compaction summarization.
+   * The resulting compaction summary forms the initial historical message of the subsequent session, maintaining context without mutating the system prompt.
+4. **Anti-Loop Safety without Cache Busting**:
+   * Loop guards and anti-loop protocols must reject invalid or repetitive tool calls at `ctx.tool.hook("execute.before")` by throwing a tool error rather than mutating `event.system`. Rejections return as tool results at the conversation tail, leaving the entire prior KV cache intact.
+5. **Monotonic Append-Only Conversation History**:
+   * History (`messages[0..N]`) must never be edited, deleted, or reordered between intermediate steps. New tokens must only be appended at index $N+1$.
+
 ---
 
 ## 12. Quick Reference & Anti-Pattern Matrix
@@ -410,3 +434,4 @@ When resolving complex tasks, an agent may leverage the `subagent` tool to offlo
 | Re-investigating an approach discarded 5 turns ago | Check the Options Matrix first; do not retry `DISCARDED` options without new data. |
 | Finishing a turn with modified files without updating objectives | Call `objective_manage` to synchronize the tree before ending the turn. |
 | Spawning multiple subagents in parallel | Run strictly 1 subagent at a time; wait for completion before delegating another. |
+| Mutating `event.system` with dynamic trees, targets, or dirty warnings | Keep `event.system` 100% static across all turns to preserve llama.cpp KV cache. |
