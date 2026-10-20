@@ -20,21 +20,29 @@ The core tenets are:
 
 ---
 
-## 1. Protocolo de Objetivos: Formal Name & User Triggers
+## 1. Protocolo de Objetivos: Formal Name, Planning Triggers & Order of Operations
 
-When the user instructs the agent using any variation of:
-* *"sigue el protocolo de objetivos"* / *"aplica el protocolo de objetivos"*
-* *"protocolo de objetivos"* / *"protocolo de objetivos jerárquicos"*
-* *"objectives protocol"* / *"hierarchical objectives protocol"*
-* *(historical alias)* *"protocolo de investigacion"* / *"investigation protocol"*
+### 1.1 Activation Triggers
 
-The agent **MUST immediately recognize** this as an explicit directive to execute this methodology in its entirety:
-1. Initialize the hierarchy via `objective_manage` (`action: 'set_primary'`, with `definitionOfDone` and initial `secondaries`).
-2. Strictly decompose every active line of inquiry into Secondary Objectives (`SO-N`) with explicit rationale.
-3. Obey the "Done means Done" rule: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
-4. Isolate blockers, untangle cascading errors, and maintain continuous alignment with the objective tree.
-5. **Mandatory Pre-Delivery Reconciliation**: Before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed.
-6. **Mandatory Post-Compaction Review & Synchronization**: Immediately after context compaction finishes, when resuming the session, the agent MUST first review what has been accomplished in the objectives from the compaction summary (`## Objective` and `## Work State`) and immediately call `objective_manage` to sync and update the active objectives before taking any other action.
+The Protocolo de Objetivos is triggered under two conditions:
+1. **Mandatory Planning Trigger (Autonomous)**: Whenever a task requires planning (multi-step operations, non-trivial analysis, debugging, refactoring, architectural changes, or feature implementations)—**solely because it requires planning**—the agent MUST adopt and apply the Protocolo de Objetivos automatically, without waiting for the user to name it.
+2. **Explicit User Triggers**: When the user instructs the agent using any variation of:
+   * *"sigue el protocolo de objetivos"* / *"aplica el protocolo de objetivos"*
+   * *"protocolo de objetivos"* / *"protocolo de objetivos jerárquicos"*
+   * *"objectives protocol"* / *"hierarchical objectives protocol"*
+   * *(historical alias)* *"protocolo de investigacion"* / *"investigation protocol"*
+
+### 1.2 Strict Order of Operations: Plan First, Execute Second
+
+> **CRITICAL RULE**: The objective plan MUST be constructed FIRST before executing any implementation, modifying files, or running mutating actions. Never execute first and document objectives after the fact.
+
+1. **Construct Plan First**: Call `objective_manage` (`action: 'set_primary'`, with `title`, `definitionOfDone`, and initial `secondaries`) to establish the Primary Objective and initial roadmap before executing mutating tasks.
+2. **Execute In Order**: Execute secondary objectives step-by-step according to the plan.
+3. **Dynamic Secondary Objective Discovery**: As you investigate, debug, or execute a secondary objective, if you uncover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, **add them smoothly to the plan** via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically and seamlessly as new realities are discovered.
+4. **Obey "Done means Done"**: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
+5. **Isolate Blockers & Untangle Errors**: Untangle cascading errors and maintain continuous alignment with the objective tree.
+6. **Mandatory Pre-Delivery Reconciliation**: Before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed. Close the Primary Objective using `action: 'complete_primary'` once all subtasks and the Definition of Done are verified.
+7. **Mandatory Post-Compaction Review & Synchronization**: Immediately after context compaction finishes, when resuming the session, the agent MUST first review what has been accomplished in the objectives from the compaction summary (`## Objective` and `## Work State`) and immediately call `objective_manage` to sync and update the active objectives before taking any other action.
 
 ---
 

@@ -2,6 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "provider": {
     "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
       "name": "LlamaCPP",
       "options": {
         "baseURL": "http://Mac-Studio-de-Juan.local:9999/v1"
@@ -624,7 +625,7 @@
         },
         "gguf/lmstudio-community/Qwen3-8B-Q6_K.gguf": {
           "id": "gguf/lmstudio-community/Qwen3-8B-Q6_K.gguf",
-          "name": "[T]L: [gguf] lmstudio-community/Qwen3-8B-Q6_K.gguf",
+          "name": "[VT]L: [gguf] lmstudio-community/Qwen3-8B-Q6_K.gguf",
           "author": "lmstudio-community",
           "tool_call": true,
           "reasoning": false,
@@ -633,6 +634,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -921,7 +923,7 @@
         },
         "gguf/unsloth/Qwen-AgentWorld-35B-A3B-UD-Q4_K_XL.gguf": {
           "id": "gguf/unsloth/Qwen-AgentWorld-35B-A3B-UD-Q4_K_XL.gguf",
-          "name": "[T]L: [gguf] unsloth/Qwen-AgentWorld-35B-A3B-UD-Q4_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen-AgentWorld-35B-A3B-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
           "reasoning": false,
@@ -930,6 +932,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -943,7 +946,7 @@
         },
         "gguf/unsloth/Qwen-AgentWorld-35B-A3B-UD-Q5_K_XL.gguf": {
           "id": "gguf/unsloth/Qwen-AgentWorld-35B-A3B-UD-Q5_K_XL.gguf",
-          "name": "[T]L: [gguf] unsloth/Qwen-AgentWorld-35B-A3B-UD-Q5_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen-AgentWorld-35B-A3B-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
           "reasoning": false,
@@ -952,6 +955,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -965,7 +969,7 @@
         },
         "gguf/unsloth/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf": {
           "id": "gguf/unsloth/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
-          "name": "[T]L: [gguf] unsloth/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
           "author": "unsloth",
           "tool_call": true,
           "reasoning": false,
@@ -974,6 +978,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -987,7 +992,7 @@
         },
         "gguf/unsloth/Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL.gguf": {
           "id": "gguf/unsloth/Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL.gguf",
-          "name": "[T]L: [gguf] unsloth/Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
           "reasoning": false,
@@ -996,6 +1001,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1009,7 +1015,7 @@
         },
         "gguf/unsloth/Qwen3-Coder-Next-UD-IQ2_M.gguf": {
           "id": "gguf/unsloth/Qwen3-Coder-Next-UD-IQ2_M.gguf",
-          "name": "[T]L: [gguf] unsloth/Qwen3-Coder-Next-UD-IQ2_M.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3-Coder-Next-UD-IQ2_M.gguf",
           "author": "unsloth",
           "tool_call": true,
           "reasoning": false,
@@ -1018,6 +1024,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1481,8 +1488,7 @@
             "output": 131072
           }
         }
-      },
-      "npm": "@ai-sdk/openai-compatible"
+      }
     }
   }
 }
