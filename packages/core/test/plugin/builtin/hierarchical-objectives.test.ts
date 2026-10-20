@@ -8,9 +8,6 @@ import {
   getObjectives,
   clearSessionObjectives,
   MAX_CONSECUTIVE_READS,
-  postCompactionSessions,
-  formatCompactionObjectivesInput,
-  reconstructObjectivesFromMessages,
 } from "../../../src/plugin/builtin/hierarchical-objectives.js"
 
 let testCounter = 0

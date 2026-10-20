@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from "bun:test"
+import { describe, test, expect } from "bun:test"
 import plugin from "../../../src/plugin/builtin/loop-guard.js"
 
 // Helper to create mock hooks with specific options
@@ -250,7 +250,7 @@ describe("loop-guard plugin", () => {
       }
 
       // Simulate new user message (resets state)
-      await hooks["chat.message"]({ sessionID }, { message: {} as any, parts: [] })
+      await hooks["chat.message"]({ sessionID })
 
       // Now make more calls - should not trigger because counter reset
       await simulateTurn(

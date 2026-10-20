@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from "bun:test"
+import { describe, test, expect } from "bun:test"
 
 // Note: Each test must use unique sessionIDs because the plugin uses
 // module-level Sets (dirtySessions, postCompactionSessions) that persist
@@ -52,7 +52,7 @@ async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) 
         output.context.push(part.text)
       }
     },
-    "experimental.compaction.autocontinue": async (input: { sessionID: string }, output: { enabled?: boolean }) => {
+    "experimental.compaction.autocontinue": async (input: { sessionID: string; [key: string]: any }, output: { enabled?: boolean }) => {
       const event = { sessionID: input.sessionID, system: [] as { type: string; text: string }[] }
       for (const h of sessionHooks["compaction"] ?? []) {
         await h(event)
@@ -61,7 +61,7 @@ async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) 
       const hasOpen = Array.isArray(todos) && todos.some((t: any) => t.status !== "completed")
       if (hasOpen) output.enabled = true
     },
-    "experimental.chat.system.transform": async (input: { sessionID: string }, output: { system: string[] }) => {
+    "experimental.chat.system.transform": async (input: { sessionID: string; [key: string]: any }, output: { system: string[] }) => {
       const event = { sessionID: input.sessionID, system: [] as { type: string; text: string }[] }
       for (const h of sessionHooks["context"] ?? []) {
         await h(event)
@@ -70,7 +70,7 @@ async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) 
         output.system.push(part.text)
       }
     },
-    "tool.execute.after": async (input: { tool: string; sessionID: string }) => {
+    "tool.execute.after": async (input: { tool: string; sessionID: string; [key: string]: any }, _output?: any) => {
       for (const h of toolHooks["execute.after"] ?? []) {
         await h({ tool: input.tool, sessionID: input.sessionID })
       }

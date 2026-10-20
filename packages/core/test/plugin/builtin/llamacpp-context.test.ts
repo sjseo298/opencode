@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test"
+import { describe, test, expect, afterEach } from "bun:test"
 import plugin, { propsUrl, fetchContextLimit } from "../../../src/plugin/builtin/llamacpp-context.js"
 
 describe("llamacpp-context", () => {
