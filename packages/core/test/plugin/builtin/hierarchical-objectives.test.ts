@@ -11,7 +11,7 @@ import {
   postCompactionSessions,
   formatCompactionObjectivesInput,
   reconstructObjectivesFromMessages,
-} from "../hierarchical-objectives.ts"
+} from "../../../src/plugin/builtin/hierarchical-objectives.js"
 
 let testCounter = 0
 function uniqueSessionID(prefix: string) {

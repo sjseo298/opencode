@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test"
-import plugin from "../loop-guard.ts"
+import plugin from "../../../src/plugin/builtin/loop-guard.js"
 
 // Helper to create mock hooks with specific options
 async function createHooks(options: Record<string, unknown> = {}) {

@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode/plugin"
+import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 
 type Options = {
   orchestratorGuide?: string
@@ -199,7 +199,7 @@ function normalizeString(input: unknown, fallback: string) {
   return text
 }
 
-export default Plugin.define({
+export const Plugin = OpenCodePlugin.define({
   id: "subagent-mandatory-instruction",
   async setup(ctx) {
     const opts = ctx.options as Options | undefined
@@ -238,3 +238,5 @@ export default Plugin.define({
     })
   },
 })
+
+export default Plugin

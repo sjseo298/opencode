@@ -104,6 +104,14 @@ import { VcsGitPlugin } from "./vcs/git.js"
 import { VerbosityPlugin } from "./verbosity.js"
 import { WarmingPlugin } from "./warming.js"
 import { WellKnownPlugin } from "../wellknown/plugin.js"
+import { fromPromise } from "./promise.js"
+import {
+  HierarchicalObjectivesPlugin,
+  CompactionTodoPlugin,
+  SubagentMandatoryInstructionPlugin,
+  LlamaCppContextPlugin,
+  LoopGuardPlugin,
+} from "./builtin/index.js"
 
 const services = [
   Agent.Service,
@@ -267,11 +275,24 @@ const post = [
   ConfigProviderPlugin.Plugin,
   ConfigWebSearchPlugin.Plugin,
   ConfigPolicyPlugin.Plugin,
+  fromPromise(HierarchicalObjectivesPlugin.Plugin),
+  fromPromise(CompactionTodoPlugin.Plugin),
+  fromPromise(SubagentMandatoryInstructionPlugin.Plugin),
+  fromPromise(LlamaCppContextPlugin.Plugin),
+  fromPromise(LoopGuardPlugin.Plugin),
 ] as const satisfies readonly InternalPlugin[]
 
 // Repository config must not switch off policy enforcement or the Console connection that delivers
 // organization statements, so plugin remove operations skip these IDs.
-export const guarded: ReadonlySet<string> = new Set([OpencodePlugin.id, ConfigPolicyPlugin.Plugin.id])
+export const guarded: ReadonlySet<string> = new Set([
+  OpencodePlugin.id,
+  ConfigPolicyPlugin.Plugin.id,
+  HierarchicalObjectivesPlugin.Plugin.id,
+  CompactionTodoPlugin.Plugin.id,
+  SubagentMandatoryInstructionPlugin.Plugin.id,
+  LlamaCppContextPlugin.Plugin.id,
+  LoopGuardPlugin.Plugin.id,
+])
 
 export const list = Effect.fn("PluginInternal.list")(function* () {
   // Capture only services; activation supplies the child Scope and batching context.

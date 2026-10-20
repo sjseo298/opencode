@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode/plugin"
+import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 import fs from "fs"
 import path from "path"
 import os from "os"
@@ -211,7 +211,7 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
   return g.__OPENCODE_DYNAMIC_CONTEXT__
 }
 
-export default Plugin.define({
+export const Plugin = OpenCodePlugin.define({
   id: "llamacpp-context",
   async setup(ctx) {
     const disabled =
@@ -301,8 +301,9 @@ export default Plugin.define({
         }
         if (typeof editor.list === "function") {
           for (const m of editor.list(providerID)) {
-            if (m.id === modelID || m.id.endsWith(modelID) || modelID.endsWith(m.id)) {
-              editor.update(providerID, m.id, (draft) => {
+            const mid = String(m.id)
+            if (mid === modelID || mid.endsWith(modelID) || modelID.endsWith(mid)) {
+              editor.update(providerID, m.id as any, (draft) => {
                 draft.limit.context = nCtx
               })
             }
@@ -484,3 +485,5 @@ export default Plugin.define({
     })
   },
 })
+
+export default Plugin

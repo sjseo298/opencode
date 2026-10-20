@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { Plugin } from "@opencode/plugin"
+import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 
 type LoopGuardOptions = {
   mode?: "warn_only"
@@ -210,7 +210,7 @@ function finalizeTurn(state: SessionState, now: number, settings: Required<LoopG
   state.cooldownUntil = now + settings.cooldownMs
 }
 
-export default Plugin.define({
+export const Plugin = OpenCodePlugin.define({
   id: "loop-guard",
   async setup(ctx) {
     const settings = normalizeOptions(ctx.options as LoopGuardOptions | undefined)
@@ -301,3 +301,5 @@ export default Plugin.define({
     })
   },
 })
+
+export default Plugin

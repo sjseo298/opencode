@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import plugin from "../subagent-mandatory-instruction.ts"
+import plugin from "../../../src/plugin/builtin/subagent-mandatory-instruction.js"
 
 // Helper to create mock client
 function createMockClient(sessions: Record<string, { parentID?: string }>) {

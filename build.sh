@@ -66,16 +66,6 @@ ensure_scripts_executable() {
   fi
 }
 
-# ── sync global plugins ───────────────────────────────────────────
-sync_global_plugins() {
-  local global_plugins_dir="$HOME/.config/opencode/plugins"
-  local local_plugins_dir="$REPO_ROOT/.opencode/plugins"
-  if [[ -d "$local_plugins_dir" ]]; then
-    mkdir -p "$global_plugins_dir"
-    cp -f "$local_plugins_dir"/*.ts "$global_plugins_dir/" 2>/dev/null || true
-    echo "✅ Global plugins synchronized to $global_plugins_dir"
-  fi
-}
 
 # ── resolve conflicts ─────────────────────────────────────────────
 # Attempts to resolve merge/stash conflicts using LLM.
@@ -257,10 +247,10 @@ typecheck_report() {
 }
 
 # ── test local plugins ────────────────────────────────────────────
-# Runs tests for custom plugins in .opencode/plugins/__tests__/
+# Runs tests for custom builtin plugins in packages/core/test/plugin/builtin/
 # Does NOT block the build if tests fail — just reports status.
 test_plugins() {
-  local plugins_test_dir="$REPO_ROOT/.opencode/plugins/__tests__"
+  local plugins_test_dir="$REPO_ROOT/packages/core/test/plugin/builtin"
   
   if [[ ! -d "$plugins_test_dir" ]]; then
     echo "⏭️  No plugin tests found (skipping)"
@@ -326,7 +316,6 @@ if [[ "$skip_sync" == true ]]; then
   typecheck_report
   configure_path
   ensure_scripts_executable
-  sync_global_plugins
 else
   if [[ -z "$SYNC_MODE" ]]; then
     echo ""
@@ -351,7 +340,6 @@ else
   typecheck_report
   configure_path
   ensure_scripts_executable
-  sync_global_plugins
 
   # Show the models config path
   echo ""

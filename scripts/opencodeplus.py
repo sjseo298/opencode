@@ -1286,27 +1286,9 @@ def extract_models_from_servers(server: str) -> dict:
     return {"llamacpp": llamacpp, "lmstudio": lmstudio}
 
 
-def sync_global_plugins() -> None:
-    """Synchronize plugins from .opencode/plugins to ~/.config/opencode/plugins."""
-    src_dir = SCRIPT_DIR.parent / ".opencode" / "plugins"
-    dest_dir = Path.home() / ".config" / "opencode" / "plugins"
-    if not src_dir.exists():
-        return
-    try:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        for ts_file in src_dir.glob("*.ts"):
-            dest_file = dest_dir / ts_file.name
-            if not dest_file.exists() or dest_file.stat().st_mtime < ts_file.stat().st_mtime:
-                shutil.copy2(ts_file, dest_file)
-    except Exception as e:
-        console.print(f"[yellow]⚠ Failed to sync global plugins: {e}[/]")
-
-
 def action_launch_opencode() -> None:
     """Launch the opencode binary."""
     import platform as _platform
-
-    sync_global_plugins()
 
     cli_dist = SCRIPT_DIR.parent / "packages" / "cli" / "dist"
     legacy_dist = SCRIPT_DIR.parent / "packages" / "opencode" / "dist"

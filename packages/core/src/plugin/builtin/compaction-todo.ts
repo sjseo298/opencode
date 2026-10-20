@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode/plugin"
+import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 
 const MAX_TODOS = 30
 const dirtySessions = new Set<string>()
@@ -73,7 +73,7 @@ function openTodosText(todos: unknown[]) {
   }
 }
 
-export default Plugin.define({
+export const Plugin = OpenCodePlugin.define({
   id: "compaction-todo",
   async setup(ctx) {
     await ctx.session.hook("compaction", async (event) => {
@@ -165,3 +165,5 @@ export default Plugin.define({
     })
   },
 })
+
+export default Plugin

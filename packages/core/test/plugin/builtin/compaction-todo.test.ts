@@ -13,10 +13,10 @@ function uniqueSessionID(prefix: string) {
 // We need to reimport the plugin for each test to get fresh state
 async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) {
   // Clear module cache to get fresh plugin state
-  const modulePath = require.resolve("../compaction-todo.ts")
+  const modulePath = require.resolve("../../../src/plugin/builtin/compaction-todo.js")
   delete require.cache[modulePath]
   
-  const { default: plugin } = await import("../compaction-todo.ts")
+  const { default: plugin } = await import("../../../src/plugin/builtin/compaction-todo.js")
   
   const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
   const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
@@ -153,9 +153,9 @@ describe("compaction-todo plugin", () => {
 
     test("handles todos fetch error gracefully", async () => {
       // Import fresh plugin
-      const modulePath = require.resolve("../compaction-todo.ts")
+      const modulePath = require.resolve("../../../src/plugin/builtin/compaction-todo.js")
       delete require.cache[modulePath]
-      const { default: plugin } = await import("../compaction-todo.ts")
+      const { default: plugin } = await import("../../../src/plugin/builtin/compaction-todo.js")
 
       const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
       const mockCtx = {

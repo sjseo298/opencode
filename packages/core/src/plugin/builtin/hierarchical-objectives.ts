@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode/plugin"
+import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 import { Schema } from "effect"
 
 export type SecondaryObjectiveStatus =
@@ -442,7 +442,7 @@ export function reconstructObjectivesFromMessages(
       const soRegex = /-\s*\[(SO-\d+)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/gi
       let match: RegExpExecArray | null
       while ((match = soRegex.exec(text)) !== null) {
-        const id = match[1].toUpperCase()
+        // match[1] is the SO id, e.g. "SO-1"
         const rawStatus = match[2].toLowerCase()
         const title = match[3].trim()
         const extra = match[4] || ""
@@ -611,7 +611,7 @@ export const ObjectiveOutputSchema = Schema.Struct({
   tree: Schema.String,
 })
 
-export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
+export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugin.define({
   id: "hierarchical-objectives",
   async setup(ctx) {
     // 1. Register the objective_manage tool via transform
@@ -991,4 +991,5 @@ export const HierarchicalObjectivesPlugin: Plugin = Plugin.define({
   },
 })
 
+export const Plugin = HierarchicalObjectivesPlugin
 export default HierarchicalObjectivesPlugin
