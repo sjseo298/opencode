@@ -77,15 +77,15 @@ export function extractObjectivesFromMessages(
           if (Array.isArray(input.secondaries) && input.secondaries.length > 0) {
             for (let i = 0; i < input.secondaries.length; i++) {
               const item = input.secondaries[i]
-              const sTitle = item?.title?.trim()
-              if (!sTitle) continue
+              const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
+              const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
               initialSecondaries.push({
-                id: item?.id || `SO-${i + 1}`,
+                id: explicitId,
                 title: sTitle,
                 status: item?.status || "pending",
                 rationale: item?.rationale || "Planned subtask for primary objective",
-                blocker: item?.blocker,
-                validationProof: item?.validationProof,
+                blocker: item?.blocker || undefined,
+                validationProof: item?.validationProof || undefined,
               })
             }
           }
@@ -107,20 +107,45 @@ export function extractObjectivesFromMessages(
           }
           const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
             ? input.secondaries
-            : (input.title ? [{ title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+            : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
 
           for (const item of items) {
-            const sTitle = item?.title?.trim()
-            if (!sTitle) continue
-            const nextId = item?.id || `SO-${po.secondaries.length + 1}`
-            po.secondaries.push({
-              id: nextId,
-              title: sTitle,
-              status: item?.status || "pending",
-              rationale: item?.rationale || "",
-              blocker: item?.blocker,
-              validationProof: item?.validationProof,
-            })
+            const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
+            const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
+            
+            let existing = explicitId ? po.secondaries.find((s) => s.id.toLowerCase() === explicitId.toLowerCase()) : undefined
+            if (!existing) {
+              existing = po.secondaries.find((s) => s.title.toLowerCase() === sTitle.toLowerCase())
+            }
+
+            if (existing) {
+              existing.title = sTitle
+              if (item?.status) existing.status = item.status
+              if (item?.rationale) existing.rationale = item.rationale
+              if (item?.blocker !== undefined) existing.blocker = item.blocker || undefined
+              if (item?.validationProof !== undefined) existing.validationProof = item.validationProof || undefined
+            } else {
+              let nextId = explicitId
+              if (!nextId) {
+                let maxIdx = 0
+                for (const s of po.secondaries) {
+                  const match = s.id.match(/^SO-(\d+)$/i)
+                  if (match) {
+                    const num = parseInt(match[1], 10)
+                    if (num > maxIdx) maxIdx = num
+                  }
+                }
+                nextId = `SO-${Math.max(maxIdx, po.secondaries.length) + 1}`
+              }
+              po.secondaries.push({
+                id: nextId,
+                title: sTitle,
+                status: item?.status || "pending",
+                rationale: item?.rationale || "",
+                blocker: item?.blocker || undefined,
+                validationProof: item?.validationProof || undefined,
+              })
+            }
           }
         } else if (action === "update_secondary" || action === "update_secondaries") {
           if (po) {

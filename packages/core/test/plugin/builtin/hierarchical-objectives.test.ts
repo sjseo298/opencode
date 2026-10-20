@@ -159,7 +159,8 @@ describe("hierarchical-objectives plugin", () => {
       expect(actionEnum).toContain("update_secondary")
       expect(actionEnum).toContain("list")
 
-      const statusEnum = doc.schema.properties.status.anyOf[0].enum
+      const statusProp = doc.schema.properties.status
+      const statusEnum = statusProp.enum || statusProp.anyOf?.find((a: any) => a.enum)?.enum || statusProp.anyOf?.[0]?.anyOf?.find((a: any) => a.enum)?.enum
       expect(statusEnum).toContain("pending")
       expect(statusEnum).toContain("exploring")
       expect(statusEnum).toContain("blocked")
@@ -497,6 +498,136 @@ describe("hierarchical-objectives plugin", () => {
       expect(text).toContain("Protocolo de Objetivos (Objectives Protocol)")
       expect(text).toContain("Post-Compaction Resumption")
       expect(text).toContain("objective_manage")
+    })
+
+    test("handles null validationProof, null blocker, and missing title without errors", async () => {
+      const sid = uniqueSessionID("null-fields")
+      let registeredTool: any = null
+      const mockCtx = {
+        tool: {
+          transform: async (fn: any) => {
+            const editor = {
+              add: (toolDef: any) => {
+                if (toolDef.name === "objective_manage") registeredTool = toolDef
+              },
+            }
+            await fn(editor)
+          },
+          hook: async () => {},
+        },
+        session: { hook: async () => {} },
+      }
+
+      await HierarchicalObjectivesPlugin.setup(mockCtx as any)
+      expect(registeredTool).toBeDefined()
+
+      // The exact payload from the user's report with null validationProof and missing titles
+      const payload = {
+        action: "set_primary",
+        definitionOfDone: "Existe un archivo de arquitectura en el repo.",
+        title: "Actualizar o crear el documento de arquitectura",
+        secondaries: [
+          {
+            id: "SO-1",
+            rationale: "Necesario para saber si ya existe un documento.",
+            blocker: "",
+            validationProof: null,
+          },
+          {
+            id: "SO-2",
+            rationale: "Necesario para que el documento sea fiel al codigo.",
+            blocker: "",
+            validationProof: null,
+          },
+          {
+            id: "SO-3",
+            rationale: "Objetivo final: producir el entregable ARCHITECTURE.md.",
+            blocker: "",
+            validationProof: null,
+          },
+        ],
+      }
+
+      const res = await registeredTool.execute(payload, { sessionID: sid })
+      expect(res.output.success).toBe(true)
+
+      const po = getObjectives(sid)
+      expect(po).toBeDefined()
+      expect(po?.secondaries.length).toBe(3)
+      expect(po?.secondaries[0].id).toBe("SO-1")
+      expect(po?.secondaries[0].title).toBe("Necesario para saber si ya existe un documento.")
+      expect(po?.secondaries[0].validationProof).toBeUndefined()
+      expect(po?.secondaries[1].id).toBe("SO-2")
+      expect(po?.secondaries[2].id).toBe("SO-3")
+
+      // Re-calling set_primary (retry scenario) must NOT duplicate secondaries
+      const retryRes = await registeredTool.execute(payload, { sessionID: sid })
+      expect(retryRes.output.success).toBe(true)
+      const poAfterRetry = getObjectives(sid)
+      expect(poAfterRetry?.secondaries.length).toBe(3)
+      expect(poAfterRetry?.secondaries[0].id).toBe("SO-1")
+      expect(poAfterRetry?.secondaries[1].id).toBe("SO-2")
+      expect(poAfterRetry?.secondaries[2].id).toBe("SO-3")
+    })
+
+    test("add_secondary with explicit ID updates in-place without duplicate IDs", async () => {
+      const sid = uniqueSessionID("add-secondary-dedup")
+      let registeredTool: any = null
+      const mockCtx = {
+        tool: {
+          transform: async (fn: any) => {
+            const editor = {
+              add: (toolDef: any) => {
+                if (toolDef.name === "objective_manage") registeredTool = toolDef
+              },
+            }
+            await fn(editor)
+          },
+          hook: async () => {},
+        },
+        session: { hook: async () => {} },
+      }
+
+      await HierarchicalObjectivesPlugin.setup(mockCtx as any)
+
+      await registeredTool.execute(
+        {
+          action: "set_primary",
+          title: "Main Task",
+          definitionOfDone: "Verify DoD",
+          secondaries: [{ title: "Initial Task", rationale: "R1" }],
+        },
+        { sessionID: sid },
+      )
+
+      const po = getObjectives(sid)
+      expect(po?.secondaries.length).toBe(1)
+      expect(po?.secondaries[0].id).toBe("SO-1")
+
+      // Add secondary with explicit id="SO-1" should update SO-1, not append duplicate
+      await registeredTool.execute(
+        {
+          action: "add_secondary",
+          secondaries: [{ id: "SO-1", title: "Updated Task 1", rationale: "R1 updated" }],
+        },
+        { sessionID: sid },
+      )
+
+      expect(po?.secondaries.length).toBe(1)
+      expect(po?.secondaries[0].id).toBe("SO-1")
+      expect(po?.secondaries[0].title).toBe("Updated Task 1")
+
+      // Add a second objective without explicit ID gets SO-2
+      await registeredTool.execute(
+        {
+          action: "add_secondary",
+          title: "Second Task",
+          rationale: "R2",
+        },
+        { sessionID: sid },
+      )
+      expect(po?.secondaries.length).toBe(2)
+      expect(po?.secondaries[1].id).toBe("SO-2")
     })
   })
 })

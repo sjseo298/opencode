@@ -93,6 +93,7 @@ export function setPrimaryObjective(
   sessionID: string,
   title: string,
   definitionOfDone: string,
+  initialSecondaries?: SecondaryObjective[],
 ): PrimaryObjective {
   const existing = sessionObjectives.get(sessionID)
   const now = Date.now()
@@ -100,7 +101,7 @@ export function setPrimaryObjective(
     title: title.trim(),
     status: existing?.status ?? "exploring",
     definitionOfDone: definitionOfDone.trim(),
-    secondaries: existing?.secondaries ?? [],
+    secondaries: initialSecondaries !== undefined ? initialSecondaries : (existing?.secondaries ?? []),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   }
@@ -148,6 +149,7 @@ export function addSecondaryObjective(
   sessionID: string,
   title: string,
   rationale: string,
+  explicitId?: string,
 ): SecondaryObjective {
   let po = sessionObjectives.get(sessionID)
   const now = Date.now()
@@ -163,8 +165,39 @@ export function addSecondaryObjective(
     sessionObjectives.set(sessionID, po)
   }
 
-  const nextIndex = po.secondaries.length + 1
-  const id = `SO-${nextIndex}`
+  const cleanId = explicitId?.trim()
+  if (cleanId) {
+    const existing = po.secondaries.find((s) => s.id.toLowerCase() === cleanId.toLowerCase())
+    if (existing) {
+      if (title.trim()) existing.title = title.trim()
+      if (rationale.trim()) existing.rationale = rationale.trim()
+      existing.updatedAt = now
+      return existing
+    }
+  }
+
+  const existingByTitle = po.secondaries.find(
+    (s) => s.title.toLowerCase() === title.trim().toLowerCase(),
+  )
+  if (existingByTitle) {
+    if (rationale.trim()) existingByTitle.rationale = rationale.trim()
+    existingByTitle.updatedAt = now
+    return existingByTitle
+  }
+
+  let id = cleanId
+  if (!id) {
+    let maxIdx = 0
+    for (const s of po.secondaries) {
+      const match = s.id.match(/^SO-(\d+)$/i)
+      if (match) {
+        const num = parseInt(match[1], 10)
+        if (num > maxIdx) maxIdx = num
+      }
+    }
+    id = `SO-${Math.max(maxIdx, po.secondaries.length) + 1}`
+  }
+
   const so: SecondaryObjective = {
     id,
     title: title.trim(),
@@ -214,9 +247,9 @@ export function updateSecondaryObjective(
   if (updates.status !== undefined) target.status = updates.status
   if (updates.title !== undefined) target.title = updates.title.trim()
   if (updates.rationale !== undefined) target.rationale = updates.rationale.trim()
-  if (updates.blocker !== undefined) target.blocker = updates.blocker.trim()
+  if (updates.blocker !== undefined) target.blocker = updates.blocker?.trim() || undefined
   if (updates.validationProof !== undefined && updates.status !== "resolved") {
-    target.validationProof = updates.validationProof.trim()
+    target.validationProof = updates.validationProof?.trim() || undefined
   }
 
   const now = Date.now()
@@ -339,18 +372,21 @@ export function reconstructObjectivesFromMessages(
       const action = String(input.action || "").toLowerCase()
       if (action === "set_primary" || action === "init" || action === "set_objectives") {
         if (input.title && input.definitionOfDone) {
-          po = setPrimaryObjective(sessionID, input.title, input.definitionOfDone)
+          const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
+          po = setPrimaryObjective(sessionID, input.title, input.definitionOfDone, initialSecondaries)
           if (Array.isArray(input.secondaries)) {
-            for (const s of input.secondaries) {
-              if (s?.title) {
-                const so = addSecondaryObjective(sessionID, s.title, s.rationale || "Planned subtask")
-                if (s.status && s.status !== "pending") {
-                  updateSecondaryObjective(sessionID, so.id, {
-                    status: s.status,
-                    blocker: s.blocker,
-                    validationProof: s.validationProof,
-                  })
-                }
+            for (let i = 0; i < input.secondaries.length; i++) {
+              const s = input.secondaries[i]
+              const explicitId = (typeof s?.id === "string" && s.id.trim()) ? s.id.trim() : `SO-${i + 1}`
+              const sTitle = s?.title?.trim() || s?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
+              const sRationale = s?.rationale?.trim() || s?.title?.trim() || "Planned subtask"
+              const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
+              if (s.status && s.status !== "pending") {
+                updateSecondaryObjective(sessionID, so.id, {
+                  status: s.status,
+                  blocker: s.blocker || undefined,
+                  validationProof: s.validationProof || undefined,
+                })
               }
             }
           }
@@ -358,17 +394,18 @@ export function reconstructObjectivesFromMessages(
       } else if (action === "add_secondary" || action === "add_secondaries") {
         const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
           ? input.secondaries
-          : (input.title ? [{ title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+          : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
         for (const item of items) {
-          if (item?.title && item?.rationale) {
-            const so = addSecondaryObjective(sessionID, item.title, item.rationale)
-            if (item.status && item.status !== "pending") {
-              updateSecondaryObjective(sessionID, so.id, {
-                status: item.status,
-                blocker: item.blocker,
-                validationProof: item.validationProof,
-              })
-            }
+          const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
+          const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
+          const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask"
+          const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
+          if (item.status && item.status !== "pending") {
+            updateSecondaryObjective(sessionID, so.id, {
+              status: item.status,
+              blocker: item.blocker || undefined,
+              validationProof: item.validationProof || undefined,
+            })
           }
         }
       } else if (action === "update_secondary" || action === "update_secondaries") {
@@ -510,26 +547,26 @@ const SecondaryStatusSchema = Schema.Union([
 
 export const SecondaryInputItemSchema = Schema.Struct({
   id: Schema.optional(
-    Schema.String.pipe(Schema.annotate({ description: "Identifier if updating existing SO (e.g. 'SO-1')" })),
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Identifier if updating existing SO (e.g. 'SO-1')" })),
   ),
   title: Schema.optional(
-    Schema.String.pipe(Schema.annotate({ description: "Title of the secondary objective / subtask" })),
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Title of the secondary objective / subtask" })),
   ),
   rationale: Schema.optional(
-    Schema.String.pipe(Schema.annotate({ description: "Why this SO is necessary to advance or unblock the PO" })),
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Why this SO is necessary to advance or unblock the PO" })),
   ),
   status: Schema.optional(
-    SecondaryStatusSchema.pipe(
+    Schema.NullOr(SecondaryStatusSchema).pipe(
       Schema.annotate({
         description: "Status: 'pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled'",
       }),
     ),
   ),
   blocker: Schema.optional(
-    Schema.String.pipe(Schema.annotate({ description: "Concrete blocker, error symptom, or obstacle if blocked" })),
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Concrete blocker, error symptom, or obstacle if blocked" })),
   ),
   validationProof: Schema.optional(
-    Schema.String.pipe(Schema.annotate({ description: "Concrete test/command output proof. Mandatory when status='resolved'" })),
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Concrete test/command output proof. Mandatory when status='resolved'" })),
   ),
 })
 
@@ -537,11 +574,11 @@ export const ObjectiveInputSchema = Schema.Struct({
   action: ObjectiveActionSchema.pipe(
     Schema.annotate({
       description:
-        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'add_secondary' (add one or multiple secondaries), 'update_secondary' (update status/rationale/proof of SOs), or 'list'.",
+        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary' (add one or multiple secondaries), 'update_secondary' (update status/rationale/proof of SOs), or 'list'.",
     }),
   ),
   title: Schema.optional(
-    Schema.String.pipe(
+    Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
           "Title of the Primary Objective (when action='set_primary') or single Secondary Objective (when action='add_secondary')",
@@ -549,7 +586,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   definitionOfDone: Schema.optional(
-    Schema.String.pipe(
+    Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
           "Verifiable Definition of Done / acceptance criteria for the Primary Objective (required for 'set_primary')",
@@ -557,7 +594,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   id: Schema.optional(
-    Schema.String.pipe(
+    Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
           "Identifier of the secondary objective to update, e.g. 'SO-1' (required for single 'update_secondary')",
@@ -565,7 +602,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   status: Schema.optional(
-    SecondaryStatusSchema.pipe(
+    Schema.NullOr(SecondaryStatusSchema).pipe(
       Schema.annotate({
         description:
           "New status for secondary objective: 'pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled'",
@@ -573,7 +610,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   rationale: Schema.optional(
-    Schema.String.pipe(
+    Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
           "Mandatory rationale explaining why this secondary objective is necessary to unblock or complete the PO",
@@ -581,14 +618,14 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   blocker: Schema.optional(
-    Schema.String.pipe(
+    Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description: "Concrete obstacle, symptom, or error message if status is 'blocked'",
       }),
     ),
   ),
   validationProof: Schema.optional(
-    Schema.String.pipe(
+    Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
           "Concrete verification proof (command run, test output, exit code). MANDATORY when status='resolved'",
@@ -596,7 +633,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   secondaries: Schema.optional(
-    Schema.Array(SecondaryInputItemSchema).pipe(
+    Schema.NullOr(Schema.Array(SecondaryInputItemSchema)).pipe(
       Schema.annotate({
         description:
           "List of secondary objectives. Use in 'set_primary' to establish the complete plan in a single call, or in 'add_secondary' to add multiple subtasks, or in 'update_secondary' to batch-update.",
@@ -641,22 +678,23 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
                   content: "Missing required parameters for set_primary (title and definitionOfDone are mandatory).",
                 }
               }
-              const po = setPrimaryObjective(sessionID, title, dod)
+              const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
+              const po = setPrimaryObjective(sessionID, title, dod, initialSecondaries)
 
               // If secondary objectives were supplied in the same call, register them immediately
               if (Array.isArray(input.secondaries) && input.secondaries.length > 0) {
-                for (const item of input.secondaries) {
-                  const sTitle = item?.title?.trim()
-                  const sRationale = item?.rationale?.trim() || "Planned subtask for primary objective"
-                  if (sTitle) {
-                    const so = addSecondaryObjective(sessionID, sTitle, sRationale)
-                    if (item.status && item.status !== "pending") {
-                      updateSecondaryObjective(sessionID, so.id, {
-                        status: item.status,
-                        blocker: item.blocker,
-                        validationProof: item.validationProof,
-                      })
-                    }
+                for (let i = 0; i < input.secondaries.length; i++) {
+                  const item = input.secondaries[i]
+                  const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
+                  const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
+                  const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
+                  const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
+                  if (item.status && item.status !== "pending") {
+                    updateSecondaryObjective(sessionID, so.id, {
+                      status: item.status,
+                      blocker: item.blocker || undefined,
+                      validationProof: item.validationProof || undefined,
+                    })
                   }
                 }
               }
@@ -720,40 +758,31 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             if (rawAction === "add_secondary" || rawAction === "add_secondaries") {
               const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
                 ? input.secondaries
-                : (input.title ? [{ title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+                : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
 
               if (items.length === 0) {
                 return {
                   output: {
                     success: false,
-                    message: "At least one secondary objective with 'title' and 'rationale' is required for action 'add_secondary'.",
+                    message: "At least one secondary objective is required for action 'add_secondary'.",
                     tree: "",
                   },
-                  content: "Missing required parameters for add_secondary (title and rationale are required).",
+                  content: "Missing required parameters for add_secondary.",
                 }
               }
 
               const addedIds: string[] = []
               for (const item of items) {
-                const sTitle = item?.title?.trim()
-                const sRationale = item?.rationale?.trim()
-                if (!sTitle || !sRationale) {
-                  return {
-                    output: {
-                      success: false,
-                      message: "Each secondary objective requires both 'title' and 'rationale'.",
-                      tree: "",
-                    },
-                    content: "Missing required title or rationale for a secondary objective.",
-                  }
-                }
-                const so = addSecondaryObjective(sessionID, sTitle, sRationale)
+                const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
+                const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
+                const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
+                const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
                 addedIds.push(so.id)
                 if (item.status && item.status !== "pending") {
                   updateSecondaryObjective(sessionID, so.id, {
                     status: item.status,
-                    blocker: item.blocker,
-                    validationProof: item.validationProof,
+                    blocker: item.blocker || undefined,
+                    validationProof: item.validationProof || undefined,
                   })
                 }
               }
@@ -791,11 +820,11 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
                   }
                 }
                 const result = updateSecondaryObjective(sessionID, id, {
-                  status: item.status,
-                  title: item.title,
-                  rationale: item.rationale,
-                  blocker: item.blocker,
-                  validationProof: item.validationProof,
+                  status: item.status || undefined,
+                  title: item.title?.trim() || undefined,
+                  rationale: item.rationale?.trim() || undefined,
+                  blocker: item.blocker || undefined,
+                  validationProof: item.validationProof || undefined,
                 })
                 if (!result.success) {
                   const po = sessionObjectives.get(sessionID)
