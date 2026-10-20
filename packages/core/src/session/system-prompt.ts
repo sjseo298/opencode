@@ -30,8 +30,23 @@ export function render(prompt: string, tools: string[]) {
     )
   }
   if (tools.includes("subagent")) {
+    const g = globalThis as any
+    const rawSlots = g.__OPENCODE_DYNAMIC_CONTEXT__?.getTotalSlots?.() ?? g.__OPENCODE_TOTAL_SLOTS__
+    const rawMaxSub = g.__OPENCODE_DYNAMIC_CONTEXT__?.getMaxSubagents?.() ?? g.__OPENCODE_MAX_SUBAGENTS__
+    const totalSlots =
+      typeof rawSlots === "number" && rawSlots >= 2
+        ? Math.floor(rawSlots)
+        : typeof rawMaxSub === "number" && rawMaxSub >= 1
+          ? Math.floor(rawMaxSub) + 1
+          : 2
+    const maxSubagents =
+      typeof rawMaxSub === "number" && rawMaxSub >= 1 ? Math.floor(rawMaxSub) : Math.max(1, totalSlots - 1)
+    const concurrencyRule =
+      maxSubagents <= 1
+        ? `CRITICAL CONCURRENCY RULE (slots - 1 = 1 subagent out of ${totalSlots} total slots, since 1 slot is your active session): Delegate to only ONE subagent at a time. Never spawn multiple subagents concurrently or in parallel. Wait for the active subagent to complete and evaluate its result before initiating another.`
+        : `CRITICAL CONCURRENCY RULE (slots - 1 = ${maxSubagents} subagents out of ${totalSlots} total slots, since 1 slot is your active session): You may enable at most ${maxSubagents} concurrent subagents at a time. Never exceed ${maxSubagents} simultaneous subagents.`
     instructions.push(
-      "- Subagents: You can leverage subagents to delegate focused, isolated subtasks (e.g. specialized codebase research, running diagnostics, or exploring potential solutions) to keep your primary context clean. CRITICAL CONCURRENCY RULE: Delegate to only ONE subagent at a time. Never spawn multiple subagents concurrently or in parallel. Wait for the active subagent to complete and evaluate its result before initiating another.",
+      `- Subagents: You can leverage subagents to delegate focused, isolated subtasks (e.g. specialized codebase research, running diagnostics, or exploring potential solutions) to keep your primary context clean. ${concurrencyRule} TASK SIZING & CONTEXT PROTECTION RULE: Do NOT delegate overly large tasks to subagents, or they will run out of available context. Always give subagents medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, if the task cannot be split, delegate it to the subagent so it does what it needs to do.`,
     )
   }
   return prompt.replace("${OPENCODE_TOOL_GUIDANCE}", instructions.join("\n"))

@@ -1,5 +1,10 @@
 import { describe, test, expect, afterEach } from "bun:test"
-import plugin, { propsUrl, fetchContextLimit } from "../../../src/plugin/builtin/llamacpp-context.js"
+import plugin, {
+  propsUrl,
+  fetchContextLimit,
+  fetchContextInfo,
+  getOrCreateDynamicContextStore,
+} from "../../../src/plugin/builtin/llamacpp-context.js"
 
 describe("llamacpp-context", () => {
   describe("propsUrl", () => {
@@ -95,6 +100,35 @@ describe("llamacpp-context", () => {
     test("returns undefined when server is unreachable", async () => {
       const nCtx = await fetchContextLimit("http://127.0.0.1:54321", 500)
       expect(nCtx).toBeUndefined()
+    })
+
+    test("fetches total_slots and derives max_subagents = slots - 1 from /props", async () => {
+      using server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url)
+          if (url.pathname === "/props") {
+            return Response.json({
+              default_generation_settings: {
+                n_ctx: 262144,
+                total_slots: 3,
+              },
+              total_slots: 3,
+            })
+          }
+          return new Response("not found", { status: 404 })
+        },
+      })
+
+      const info = await fetchContextInfo(server.url.toString())
+      expect(info.limit).toBe(262144)
+      expect(info.totalSlots).toBe(3)
+      expect(info.maxSubagents).toBe(2)
+
+      const store = getOrCreateDynamicContextStore()
+      store.set("llamacpp/qwen3.8", info)
+      expect(store.getTotalSlots("llamacpp/qwen3.8")).toBe(3)
+      expect(store.getMaxSubagents("llamacpp/qwen3.8")).toBe(2)
     })
   })
 

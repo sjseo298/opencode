@@ -6,19 +6,28 @@ import os from "os"
 export type PropsResponse = {
   default_generation_settings?: {
     n_ctx?: unknown
+    total_slots?: unknown
+    max_subagents?: unknown
   }
   n_ctx?: unknown
+  total_slots?: unknown
+  parallel?: unknown
+  max_subagents?: unknown
 }
 
 export type ContextInfo = {
   limit?: number
   used?: number
+  totalSlots?: number
+  maxSubagents?: number
 }
 
 export type CacheEntry = {
   checkedAt: number
   nCtx?: number
   used?: number
+  totalSlots?: number
+  maxSubagents?: number
 }
 
 export function endpointUrl(base: unknown, endpoint: string): string | undefined {
@@ -47,8 +56,13 @@ export type StatusResponse = {
   kv_ctx?: {
     total_tokens?: unknown
     used_tokens?: unknown
+    parallel?: unknown
+    max_subagents?: unknown
   }
   slots?: {
+    total?: unknown
+    total_slots?: unknown
+    max_subagents?: unknown
     items?: Array<{
       total_tokens?: unknown
       used_tokens?: unknown
@@ -60,12 +74,16 @@ export type StatusResponse = {
   }
   model?: {
     context_effective?: unknown
+    parallel?: unknown
+    max_subagents?: unknown
   }
 }
 
 export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Promise<ContextInfo> {
   let limit: number | undefined
   let used: number | undefined
+  let totalSlots: number | undefined
+  let maxSubagents: number | undefined
 
   const pUrl = propsUrl(baseURL)
   if (pUrl) {
@@ -76,6 +94,21 @@ export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Prom
         const value = body.default_generation_settings?.n_ctx ?? body.n_ctx
         if (typeof value === "number" && Number.isFinite(value) && value > 0) {
           limit = value
+        }
+        const rawSlots =
+          body.total_slots ?? body.parallel ?? body.default_generation_settings?.total_slots
+        if (typeof rawSlots === "number" && Number.isFinite(rawSlots) && rawSlots >= 1) {
+          totalSlots = Math.floor(rawSlots)
+        }
+        const rawMaxSub =
+          body.max_subagents ?? body.default_generation_settings?.max_subagents
+        if (typeof rawMaxSub === "number" && Number.isFinite(rawMaxSub) && rawMaxSub >= 1) {
+          maxSubagents = Math.floor(rawMaxSub)
+        } else if (totalSlots !== undefined) {
+          maxSubagents = Math.max(1, totalSlots - 1)
+        }
+        if (totalSlots === undefined && maxSubagents !== undefined) {
+          totalSlots = maxSubagents + 1
         }
       }
     } catch {
@@ -117,13 +150,38 @@ export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Prom
         if (rawUsed !== undefined) {
           used = rawUsed
         }
+
+        const statusSlots =
+          body.model?.parallel ??
+          body.slots?.total_slots ??
+          body.slots?.total ??
+          body.kv_ctx?.parallel ??
+          (Array.isArray(body.slots?.items) && body.slots.items.length > 0 ? body.slots.items.length : undefined)
+        if (totalSlots === undefined && typeof statusSlots === "number" && Number.isFinite(statusSlots) && statusSlots >= 1) {
+          totalSlots = Math.floor(statusSlots)
+        }
+
+        const statusMaxSub =
+          body.model?.max_subagents ??
+          body.slots?.max_subagents ??
+          body.kv_ctx?.max_subagents
+        if (maxSubagents === undefined) {
+          if (typeof statusMaxSub === "number" && Number.isFinite(statusMaxSub) && statusMaxSub >= 1) {
+            maxSubagents = Math.floor(statusMaxSub)
+          } else if (totalSlots !== undefined) {
+            maxSubagents = Math.max(1, totalSlots - 1)
+          }
+        }
+        if (totalSlots === undefined && maxSubagents !== undefined) {
+          totalSlots = maxSubagents + 1
+        }
       }
     } catch {
       // Ignore status fetch errors
     }
   }
 
-  return { limit, used }
+  return { limit, used, totalSlots, maxSubagents }
 }
 
 export async function fetchContextLimit(baseURL: string, timeoutMs = 3_000): Promise<number | undefined> {
@@ -134,16 +192,22 @@ export async function fetchContextLimit(baseURL: string, timeoutMs = 3_000): Pro
 export type DynamicContextData = {
   limit?: number
   used?: number
+  totalSlots?: number
+  maxSubagents?: number
   timestamp: number
 }
 
 export type DynamicContextStore = {
   entries: Map<string, DynamicContextData>
   listeners: Set<() => void>
+  latestTotalSlots?: number
+  latestMaxSubagents?: number
   get(key: string): DynamicContextData | undefined
   getLimit(key: string): number | undefined
   getUsed(key: string): number | undefined
-  set(key: string, data: { limit?: number; used?: number }): void
+  getTotalSlots(key?: string): number | undefined
+  getMaxSubagents(key?: string): number | undefined
+  set(key: string, data: { limit?: number; used?: number; totalSlots?: number; maxSubagents?: number }): void
   subscribe(fn: () => void): () => void
 }
 
@@ -153,6 +217,8 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
     g.__OPENCODE_DYNAMIC_CONTEXT__ = {
       entries: new Map<string, DynamicContextData>(),
       listeners: new Set<() => void>(),
+      latestTotalSlots: undefined as number | undefined,
+      latestMaxSubagents: undefined as number | undefined,
       get(key: string): DynamicContextData | undefined {
         return this.entries.get(key)
       },
@@ -184,12 +250,58 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         }
         return undefined
       },
-      set(key: string, data: { limit?: number; used?: number }) {
+      getTotalSlots(key?: string): number | undefined {
+        if (key) {
+          const direct = this.entries.get(key)?.totalSlots
+          if (direct) return direct
+          const slash = key.indexOf("/")
+          if (slash !== -1) {
+            const modelID = key.slice(slash + 1)
+            for (const [k, v] of this.entries) {
+              if ((k === modelID || k.endsWith("/" + modelID) || modelID.endsWith(k)) && v.totalSlots) {
+                return v.totalSlots
+              }
+            }
+          }
+        }
+        return this.latestTotalSlots
+      },
+      getMaxSubagents(key?: string): number | undefined {
+        if (key) {
+          const direct = this.entries.get(key)?.maxSubagents
+          if (direct) return direct
+          const slash = key.indexOf("/")
+          if (slash !== -1) {
+            const modelID = key.slice(slash + 1)
+            for (const [k, v] of this.entries) {
+              if ((k === modelID || k.endsWith("/" + modelID) || modelID.endsWith(k)) && v.maxSubagents) {
+                return v.maxSubagents
+              }
+            }
+          }
+        }
+        return this.latestMaxSubagents
+      },
+      set(key: string, data: { limit?: number; used?: number; totalSlots?: number; maxSubagents?: number }) {
         const existing = this.entries.get(key)
+        const resolvedSlots = data.totalSlots ?? existing?.totalSlots
+        const resolvedMaxSub =
+          data.maxSubagents ??
+          (resolvedSlots !== undefined ? Math.max(1, resolvedSlots - 1) : existing?.maxSubagents)
         const updated: DynamicContextData = {
           limit: data.limit ?? existing?.limit,
           used: data.used ?? existing?.used,
+          totalSlots: resolvedSlots,
+          maxSubagents: resolvedMaxSub,
           timestamp: Date.now(),
+        }
+        if (resolvedSlots !== undefined) {
+          this.latestTotalSlots = resolvedSlots
+          g.__OPENCODE_TOTAL_SLOTS__ = resolvedSlots
+        }
+        if (resolvedMaxSub !== undefined) {
+          this.latestMaxSubagents = resolvedMaxSub
+          g.__OPENCODE_MAX_SUBAGENTS__ = resolvedMaxSub
         }
         this.entries.set(key, updated)
         const slash = key.indexOf("/")
@@ -318,7 +430,14 @@ export const Plugin = OpenCodePlugin.define({
       baseURL?: string
       force?: boolean
       sessionID?: string
-    }): Promise<{ updated: boolean; nCtx?: number; previous?: number; error?: boolean }> {
+    }): Promise<{
+      updated: boolean
+      nCtx?: number
+      previous?: number
+      totalSlots?: number
+      maxSubagents?: number
+      error?: boolean
+    }> {
       let pID = input.providerID
       let mID = input.modelID
 
@@ -335,7 +454,12 @@ export const Plugin = OpenCodePlugin.define({
       const now = Date.now()
       const cached = cache.get(key)
       if (!input.force && cached && now - cached.checkedAt < ttlMs) {
-        return { updated: false, nCtx: cached.nCtx }
+        return {
+          updated: false,
+          nCtx: cached.nCtx,
+          totalSlots: cached.totalSlots,
+          maxSubagents: cached.maxSubagents,
+        }
       }
 
       const baseURL =
@@ -345,9 +469,20 @@ export const Plugin = OpenCodePlugin.define({
         (pID === "lmstudio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080")
 
       const detected = await fetchContextInfo(baseURL, timeoutMs)
-      cache.set(key, { checkedAt: now, nCtx: detected.limit, used: detected.used })
+      cache.set(key, {
+        checkedAt: now,
+        nCtx: detected.limit,
+        used: detected.used,
+        totalSlots: detected.totalSlots,
+        maxSubagents: detected.maxSubagents,
+      })
 
-      if (detected.limit !== undefined || detected.used !== undefined) {
+      if (
+        detected.limit !== undefined ||
+        detected.used !== undefined ||
+        detected.totalSlots !== undefined ||
+        detected.maxSubagents !== undefined
+      ) {
         dynamicStore.set(key, detected)
       }
 
@@ -357,16 +492,34 @@ export const Plugin = OpenCodePlugin.define({
 
       const previous = dynamicContexts.get(key)
       if (previous === detected.limit) {
-        return { updated: false, nCtx: detected.limit, previous }
+        return {
+          updated: false,
+          nCtx: detected.limit,
+          previous,
+          totalSlots: detected.totalSlots,
+          maxSubagents: detected.maxSubagents,
+        }
       }
 
       if (autoApply || input.force) {
         dynamicContexts.set(key, detected.limit)
         await ctx.model.reload()
-        return { updated: true, nCtx: detected.limit, previous }
+        return {
+          updated: true,
+          nCtx: detected.limit,
+          previous,
+          totalSlots: detected.totalSlots,
+          maxSubagents: detected.maxSubagents,
+        }
       }
 
-      return { updated: false, nCtx: detected.limit, previous }
+      return {
+        updated: false,
+        nCtx: detected.limit,
+        previous,
+        totalSlots: detected.totalSlots,
+        maxSubagents: detected.maxSubagents,
+      }
     }
 
     // Check upon user prompt
@@ -447,12 +600,17 @@ export const Plugin = OpenCodePlugin.define({
         return
       }
 
+      const slotsSuffix =
+        result.totalSlots !== undefined && result.maxSubagents !== undefined
+          ? ` (${result.totalSlots} slots · max ${result.maxSubagents} subagent${result.maxSubagents === 1 ? "" : "s"})`
+          : ""
+
       if (result.updated && result.nCtx !== undefined) {
         const fromText = result.previous ? ` from ${result.previous.toLocaleString()}` : ""
         await ctx.session
           .synthetic({
             sessionID: invocation.sessionID,
-            text: `✓ Context limit updated${fromText} to ${result.nCtx.toLocaleString()} tokens for ${session.model.id}.`,
+            text: `✓ Context limit updated${fromText} to ${result.nCtx.toLocaleString()} tokens${slotsSuffix} for ${session.model.id}.`,
             resume: false,
           })
           .catch(() => undefined)
@@ -463,7 +621,7 @@ export const Plugin = OpenCodePlugin.define({
         await ctx.session
           .synthetic({
             sessionID: invocation.sessionID,
-            text: `ℹ Context limit is already up-to-date (${result.nCtx.toLocaleString()} tokens) for ${session.model.id}.`,
+            text: `ℹ Context limit is already up-to-date (${result.nCtx.toLocaleString()} tokens${slotsSuffix}) for ${session.model.id}.`,
             resume: false,
           })
           .catch(() => undefined)

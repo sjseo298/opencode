@@ -35,7 +35,13 @@ type Entry = {
 type PropsResponse = {
   default_generation_settings?: {
     n_ctx?: unknown
+    total_slots?: unknown
+    max_subagents?: unknown
   }
+  n_ctx?: unknown
+  total_slots?: unknown
+  parallel?: unknown
+  max_subagents?: unknown
 }
 
 function propsUrl(base: unknown): string | undefined {
@@ -80,8 +86,23 @@ export async function LlamacppContextPlugin(input: PluginInput): Promise<Hooks> 
         const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
         if (res.ok) {
           const body = (await res.json()) as PropsResponse
-          const value = body.default_generation_settings?.n_ctx
+          const value = body.default_generation_settings?.n_ctx ?? body.n_ctx
           if (typeof value === "number" && Number.isFinite(value) && value > 0) nCtx = value
+          const rawSlots = body.total_slots ?? body.parallel ?? body.default_generation_settings?.total_slots
+          const rawMaxSub = body.max_subagents ?? body.default_generation_settings?.max_subagents
+          const g = globalThis as any
+          if (typeof rawSlots === "number" && Number.isFinite(rawSlots) && rawSlots >= 1) {
+            const slots = Math.floor(rawSlots)
+            g.__OPENCODE_TOTAL_SLOTS__ = slots
+            g.__OPENCODE_MAX_SUBAGENTS__ =
+              typeof rawMaxSub === "number" && Number.isFinite(rawMaxSub) && rawMaxSub >= 1
+                ? Math.floor(rawMaxSub)
+                : Math.max(1, slots - 1)
+          } else if (typeof rawMaxSub === "number" && Number.isFinite(rawMaxSub) && rawMaxSub >= 1) {
+            const maxSub = Math.floor(rawMaxSub)
+            g.__OPENCODE_MAX_SUBAGENTS__ = maxSub
+            g.__OPENCODE_TOTAL_SLOTS__ = maxSub + 1
+          }
         }
       } catch {
         return

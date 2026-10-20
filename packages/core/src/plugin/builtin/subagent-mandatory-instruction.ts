@@ -10,10 +10,46 @@ type Options = {
 // Injected into Subagent tool description to guide the orchestrating agent
 // ─────────────────────────────────────────────────────────────────────────────
 
-const defaultOrchestratorGuide = `## Subagent Delegation & Concurrency Policy: Strictly 1 Subagent At A Time
-- You can leverage subagents to offload focused, deep investigations or isolated subtasks to preserve your context window.
+export function getDetectedSubagentCapacity(): { totalSlots: number; maxSubagents: number } {
+  const g = globalThis as any
+  const rawSlots = g.__OPENCODE_DYNAMIC_CONTEXT__?.getTotalSlots?.() ?? g.__OPENCODE_TOTAL_SLOTS__
+  const rawMaxSub = g.__OPENCODE_DYNAMIC_CONTEXT__?.getMaxSubagents?.() ?? g.__OPENCODE_MAX_SUBAGENTS__
+  const totalSlots =
+    typeof rawSlots === "number" && Number.isFinite(rawSlots) && rawSlots >= 2
+      ? Math.floor(rawSlots)
+      : typeof rawMaxSub === "number" && Number.isFinite(rawMaxSub) && rawMaxSub >= 1
+        ? Math.floor(rawMaxSub) + 1
+        : 2
+  const maxSubagents =
+    typeof rawMaxSub === "number" && Number.isFinite(rawMaxSub) && rawMaxSub >= 1
+      ? Math.floor(rawMaxSub)
+      : Math.max(1, totalSlots - 1)
+  return { totalSlots, maxSubagents }
+}
+
+export function buildOrchestratorGuide(capacity = getDetectedSubagentCapacity()): string {
+  const { totalSlots, maxSubagents } = capacity
+  const concurrencyHeader =
+    maxSubagents <= 1
+      ? `## Subagent Delegation & Concurrency Policy: Strictly 1 Subagent At A Time (slots - 1 = 1 of ${totalSlots} slots)`
+      : `## Subagent Delegation & Concurrency Policy: Up To ${maxSubagents} Subagents At A Time (slots - 1 = ${maxSubagents} of ${totalSlots} slots)`
+
+  const concurrencyBullets =
+    maxSubagents <= 1
+      ? `- Server Capacity Rule (\`max_subagents = total_slots - 1\`): The server reports ${totalSlots} parallel slots; 1 slot is used by your active primary session, leaving **1 subagent slot** available.
 - CRITICAL CONCURRENCY RULE: Delegate to only ONE subagent at a time. Never launch multiple subagents in parallel or concurrently.
-- Wait for the active subagent to conclude, review its evidence and output, and integrate it into your active objective before delegating any subsequent task.
+- Wait for the active subagent to conclude, review its evidence and output, and integrate it into your active objective before delegating any subsequent task.`
+      : `- Server Capacity Rule (\`max_subagents = total_slots - 1\`): The server reports ${totalSlots} parallel slots; 1 slot is used by your active primary session, leaving **up to ${maxSubagents} concurrent subagents** available.
+- CRITICAL CONCURRENCY RULE: You may enable at most **${maxSubagents} subagents** concurrently (${totalSlots} total slots minus 1 active primary slot). Never exceed ${maxSubagents} simultaneous subagents.`
+
+  return `${concurrencyHeader}
+- You can leverage subagents to offload focused, deep investigations or isolated subtasks to preserve your context window.
+${concurrencyBullets}
+- TASK SIZING & CONTEXT PROTECTION RULE (MANDATORY):
+  * Do NOT delegate overly large tasks to subagents, or they will run out of available context before completing their work.
+  * Always assign **medium-sized, achievable tasks** (tareas medianas y realizables) with a bounded scope.
+  * If a task is large, **split it into several smaller subagent tasks whenever possible** (partir las tareas grandes en varias subtareas si es posible).
+  * Only as a **last resort** (en último caso)—when a task genuinely cannot be split—delegate the task to the subagent so it does what it needs to do.
 
 ## Structured Prompt Format (Required)
 
@@ -57,6 +93,7 @@ Define WHAT must be returned:
 \`\`\`
 
 If any section is missing or ambiguous, the subagent will return an <execution_blocked> response requesting the missing information. You must then relaunch with a clarified prompt.`
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBAGENT VALIDATION PROTOCOL
@@ -203,7 +240,10 @@ export const Plugin = OpenCodePlugin.define({
   id: "subagent-mandatory-instruction",
   async setup(ctx) {
     const opts = ctx.options as Options | undefined
-    const orchestratorGuide = normalizeString(opts?.orchestratorGuide, defaultOrchestratorGuide)
+    const customOrchestratorGuide =
+      typeof opts?.orchestratorGuide === "string" && opts.orchestratorGuide.trim().length > 0
+        ? opts.orchestratorGuide.trim()
+        : undefined
     const subagentProtocol = normalizeString(opts?.subagentProtocol, defaultSubagentProtocol)
     const sessionParentCache = new Map<string, boolean>()
 
@@ -219,16 +259,29 @@ export const Plugin = OpenCodePlugin.define({
     // Inject structured prompt guide into subagent tool description for orchestrators
     await ctx.tool.transform((editor) => {
       editor.update("subagent", (tool) => {
+        const guide = customOrchestratorGuide ?? buildOrchestratorGuide()
         if (tool.description && !tool.description.includes("## Structured Prompt Format")) {
-          tool.description = [tool.description, orchestratorGuide].join("\n\n")
+          tool.description = [tool.description, guide].join("\n\n")
         }
       })
     })
 
-    // Inject validation protocol into subagent system prompt
+    // Inject validation protocol into subagent system prompt, or update subagent tool capacity on parent context
     await ctx.session.hook("context", async (event) => {
       if (!event.sessionID) return
-      if (!(await isSubagentSession(event.sessionID))) return
+      if (!(await isSubagentSession(event.sessionID))) {
+        if (!customOrchestratorGuide && (event as any).tools?.subagent?.description) {
+          const desc: string = (event as any).tools.subagent.description
+          const markerIdx = desc.indexOf("## Subagent Delegation & Concurrency Policy:")
+          const guide = buildOrchestratorGuide()
+          if (markerIdx !== -1) {
+            ;(event as any).tools.subagent.description = desc.slice(0, markerIdx).trimEnd() + "\n\n" + guide
+          } else if (!desc.includes("## Structured Prompt Format")) {
+            ;(event as any).tools.subagent.description = [desc, guide].join("\n\n")
+          }
+        }
+        return
+      }
       if (event.system.some((item) => (item.text ?? "").includes("SUBAGENT EXECUTION PROTOCOL"))) return
       if (event.system.length > 0) {
         event.system[0] = { ...event.system[0], text: subagentProtocol + "\n\n" + event.system[0].text }

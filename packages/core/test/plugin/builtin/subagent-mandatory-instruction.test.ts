@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import plugin from "../../../src/plugin/builtin/subagent-mandatory-instruction.js"
+import plugin, { buildOrchestratorGuide } from "../../../src/plugin/builtin/subagent-mandatory-instruction.js"
 
 // Helper to create mock client
 function createMockClient(sessions: Record<string, { parentID?: string }>) {
@@ -306,7 +306,13 @@ describe("subagent-mandatory-instruction plugin", () => {
   })
 
   describe("protocol content validation", () => {
-    test("orchestrator guide contains concurrency rule of strictly 1 subagent at a time", async () => {
+    test("orchestrator guide contains concurrency rule of strictly 1 subagent at a time by default (2 slots) and task sizing rules", async () => {
+      ;(globalThis as any).__OPENCODE_TOTAL_SLOTS__ = 2
+      ;(globalThis as any).__OPENCODE_MAX_SUBAGENTS__ = 1
+      if ((globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__) {
+        ;(globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__.latestTotalSlots = 2
+        ;(globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__.latestMaxSubagents = 1
+      }
       const hooks = await createHooks({})
 
       const output = { description: "Subagent", parameters: {} }
@@ -315,6 +321,19 @@ describe("subagent-mandatory-instruction plugin", () => {
       expect(output.description).toContain("Strictly 1 Subagent At A Time")
       expect(output.description).toContain("Delegate to only ONE subagent at a time")
       expect(output.description).toContain("Never launch multiple subagents in parallel or concurrently")
+      expect(output.description).toContain("Do NOT delegate overly large tasks to subagents")
+      expect(output.description).toContain("medium-sized, achievable tasks")
+      expect(output.description).toContain("split it into several smaller subagent tasks whenever possible")
+    })
+
+    test("buildOrchestratorGuide reflects 2 subagents for 3 slots and 3 subagents for 4 slots (slots - 1)", () => {
+      const guide3 = buildOrchestratorGuide({ totalSlots: 3, maxSubagents: 2 })
+      expect(guide3).toContain("Up To 2 Subagents At A Time (slots - 1 = 2 of 3 slots)")
+      expect(guide3).toContain("up to 2 concurrent subagents")
+
+      const guide4 = buildOrchestratorGuide({ totalSlots: 4, maxSubagents: 3 })
+      expect(guide4).toContain("Up To 3 Subagents At A Time (slots - 1 = 3 of 4 slots)")
+      expect(guide4).toContain("up to 3 concurrent subagents")
     })
 
     test("orchestrator guide contains example prompt", async () => {

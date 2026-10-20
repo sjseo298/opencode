@@ -418,14 +418,21 @@ Returns the complete formatted text tree of objectives.
 | **Reasoning Loops** | Frequent re-reading of tasks | Hard anti-loop checks & Value-First test |
 | **TUI Representation** | Generic flat list | Hierarchical right sidebar widget with status badges |
 
-### 11.5 Subagent Delegation & Concurrency Policy
+### 11.5 Subagent Delegation, Slot-Based Concurrency (`slots - 1`) & Task Sizing Policy
 
-When resolving complex tasks, an agent may leverage the `subagent` tool to offload isolated subtasks, deep diagnostic runs, or extensive file searches to prevent saturating the primary session context.
+When resolving complex tasks, an agent may leverage the `subagent` tool to offload isolated subtasks, deep diagnostic runs, or focused codebase inspections to prevent saturating the primary session context.
 
 **Mandatory Rules:**
-1. **Strictly 1 Subagent At A Time**: Never spawn multiple subagents in parallel or launch concurrent agent bursts. Delegation must always be sequential.
-2. **Synchronous Resolution & Evidence Integration**: Wait for the active subagent to conclude, review its evidence and output, and integrate its findings into the active Secondary Objective via `objective_manage` before delegating any subsequent task.
-3. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
+1. **Slot-Based Subagent Concurrency (`max_subagents = total_slots - 1`)**:
+   * When querying the server's maximum available context (`/props` and `/status`), the API reports `total_slots` (between 2 and 4) and `max_subagents = total_slots - 1`, because **1 slot is occupied by the active primary agent session**.
+   * You may enable at most **`total_slots - 1` concurrent subagents** (`1` subagent when 2 slots are active, `2` subagents when 3 slots are active, or `3` subagents when 4 slots are active; defaulting to strictly 1 subagent at a time if not reported). Never exceed `total_slots - 1` simultaneous subagents.
+2. **Subagent Task Sizing & Context Protection (Mandatory)**:
+   * **Do NOT delegate overly large tasks to subagents**, or they will exhaust their available context window before finishing.
+   * Always assign **medium-sized, achievable tasks** (*tareas medianas y realizables*) with a clear, bounded scope.
+   * If a task is large, **split it into several smaller subagent tasks whenever possible** (*partir esas tareas a los subagentes en varias, si es que es posible*).
+   * Only as a **last resort** (*en último caso*)—when a task genuinely cannot be split—delegate the task to the subagent so it does what it needs to do.
+3. **Evidence Integration**: Review each subagent's evidence and output and integrate its findings into the active Secondary Objective via `objective_manage`.
+4. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
 
 ### 11.6 Prompt Caching, KV Cache Reuse & Prefix Invariance Architecture
 
@@ -465,5 +472,5 @@ In local LLM inference engines (`llama.cpp`, vLLM, LM Studio) and frontier provi
 | Thinking or writing internal logs in Spanish while user speaks Spanish | Think and log internally in English; deliver final response in user's language. |
 | Re-investigating an approach discarded 5 turns ago | Check the Options Matrix first; do not retry `DISCARDED` options without new data. |
 | Finishing a turn with modified files without updating objectives | Call `objective_manage` to synchronize the tree before ending the turn. |
-| Spawning multiple subagents in parallel | Run strictly 1 subagent at a time; wait for completion before delegating another. |
+| Spawning more subagents than `total_slots - 1` or delegating huge monolithic tasks to a subagent | Respect `max_subagents = total_slots - 1` (1 slot is your active session) and assign medium-sized, achievable tasks (splitting large tasks into several smaller subagent tasks whenever possible; only delegate undivided as a last resort). |
 | Mutating `event.system` with dynamic trees, targets, or dirty warnings | Keep `event.system` 100% static across all turns to preserve llama.cpp KV cache. |
