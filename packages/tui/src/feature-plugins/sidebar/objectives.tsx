@@ -9,6 +9,15 @@ export type ObjectiveStatus =
   | "discarded"
   | "cancelled"
 
+export interface TertiaryObjectiveView {
+  id: string // "SO-1-T2" etc. — child of its parent Secondary Objective
+  title: string
+  status: ObjectiveStatus
+  rationale: string
+  blocker?: string
+  validationProof?: string
+}
+
 export interface SecondaryObjectiveView {
   id: string
   title: string
@@ -16,6 +25,7 @@ export interface SecondaryObjectiveView {
   rationale: string
   blocker?: string
   validationProof?: string
+  children?: TertiaryObjectiveView[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
 }
 
 export interface PrimaryObjectiveView {
@@ -166,6 +176,76 @@ export function extractObjectivesFromMessages(
               }
             }
           }
+        } else if (action === "add_tertiary" || action === "add_tertaries") {
+          if (!po) {
+            po = {
+              title: "Primary Objective",
+              status: "exploring",
+              definitionOfDone: "Complete all tasks",
+              secondaries: [],
+            }
+          }
+          const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+            ? input.secondaries
+            : (input.id && (input.title || input.rationale) ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+          for (const item of items) {
+            const parentId = typeof item?.id === "string" && item.id.trim() ? item.id.trim() : ""
+            if (!parentId) continue
+            const parent = po.secondaries.find((s) => s.id.toLowerCase() === parentId.toLowerCase())
+            if (!parent) continue
+
+            const tTitle = item?.title?.trim() || item?.rationale?.trim() || "Tertiary sub-objective"
+            parent.children ??= []
+
+            const existing = parent.children.find((t) => t.title.toLowerCase() === tTitle.toLowerCase())
+            if (existing) {
+              if (item?.status) existing.status = item.status
+              if (item?.rationale) existing.rationale = item.rationale
+              if (item?.blocker !== undefined) existing.blocker = item.blocker || undefined
+              if (item?.validationProof !== undefined) existing.validationProof = item.validationProof || undefined
+            } else {
+              const parentNum = parent.id.match(/^SO-(\d+)/i)?.[1] ?? "0"
+              let maxIdx = 0
+              for (const t of parent.children) {
+                const match = t.id.match(new RegExp(`^SO-${parentNum}-T(\\d+)$`, "i"))
+                if (match) {
+                  const num = parseInt(match[1], 10)
+                  if (num > maxIdx) maxIdx = num
+                }
+              }
+              parent.children.push({
+                id: `SO-${parentNum}-T${maxIdx + 1}`,
+                title: tTitle,
+                status: item?.status || "pending",
+                rationale: item?.rationale || "",
+                blocker: item?.blocker || undefined,
+                validationProof: item?.validationProof || undefined,
+              })
+            }
+          }
+        } else if (action === "update_tertiary" || action === "update_tertaries") {
+          if (!po) continue
+          const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+            ? input.secondaries
+            : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+          for (const item of items) {
+            const targetId = typeof item?.id === "string" ? item.id.trim().toLowerCase() : ""
+            if (!targetId) continue
+            let target: TertiaryObjectiveView | undefined
+            for (const so of po.secondaries) {
+              target = (so.children ?? []).find((t) => t.id.toLowerCase() === targetId)
+              if (target) break
+            }
+            if (target) {
+              if (item.status) target.status = item.status
+              if (item.title) target.title = item.title
+              if (item.rationale) target.rationale = item.rationale
+              if (item.blocker !== undefined) target.blocker = item.blocker
+              if (item.validationProof !== undefined) target.validationProof = item.validationProof
+            }
+          }
         } else if (
           action === "complete_primary" ||
           action === "resolve_primary" ||
@@ -241,7 +321,9 @@ export function extractObjectivesFromMessages(
 
       if (poTitle) {
         const secondaries: SecondaryObjectiveView[] = []
-        const soRegex = /-\s*\[(SO-\d+)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/gi
+        // Matches plain secondary ids (SO-N) and tertiary sub-objective ids (SO-N-TM).
+        const soRegex = /-\s*\[(SO-\d+(?:-T\d+)?)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/gi
+        const pendingTertiaries: { id: string; title: string; rationale: string; blocker?: string; proof?: string; status: ObjectiveStatus }[] = []
         let match: RegExpExecArray | null
         while ((match = soRegex.exec(text)) !== null) {
           const id = match[1].toUpperCase()
@@ -274,13 +356,36 @@ export function extractObjectivesFromMessages(
             ? (rawStatus as ObjectiveStatus)
             : "pending"
 
-          secondaries.push({
-            id,
-            title,
-            status,
-            rationale,
-            blocker,
-            validationProof: proof,
+          if (!/-T\d+$/i.test(id)) {
+            secondaries.push({
+              id,
+              title,
+              status,
+              rationale,
+              blocker,
+              validationProof: proof,
+            })
+          } else {
+            pendingTertiaries.push({ id, title, rationale, blocker, proof, status })
+          }
+        }
+
+        // Attach tertiary sub-objectives under their parent SO (recovered placeholder if missing).
+        for (const entry of pendingTertiaries) {
+          const parentId = entry.id.replace(/-T\d+$/i, "")
+          let parent = secondaries.find((s) => s.id.toLowerCase() === parentId.toLowerCase())
+          if (!parent) {
+            parent = { id: parentId, title: `Recovered parent ${parentId}`, status: "exploring", rationale: "Reconstructed from compaction checkpoint" }
+            secondaries.push(parent)
+          }
+          parent.children ??= []
+          parent.children.push({
+            id: entry.id,
+            title: entry.title,
+            status: entry.status,
+            rationale: entry.rationale,
+            blocker: entry.blocker,
+            validationProof: entry.proof,
           })
         }
 
@@ -415,6 +520,56 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                             <text fg={theme.text.feedback.success.base} wrapMode="word">
                               ✅ Proof: {so.validationProof}
                             </text>
+                          </box>
+                        </Show>
+
+                        {/* Tertiary Sub-Objectives (children of this secondary, same pattern as SOs under the PO) */}
+                        <Show when={(so.children ?? []).length > 0}>
+                          <box paddingLeft={4} gap={0}>
+                            <For each={so.children ?? []}>
+                              {(to) => {
+                                const badge = () => statusBadge(to.status)
+                                return (
+                                  <box gap={0} paddingTop={0} paddingBottom={0}>
+                                    <box flexDirection="row" gap={1}>
+                                      <text fg={badge().color} flexShrink={0}>
+                                        {badge().symbol}
+                                      </text>
+                                      <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
+                                        <span style={{ fg: theme.text.muted }}>{to.id}:</span> {to.title}
+                                      </text>
+                                    </box>
+
+                                    {/* Indented Rationale */}
+                                    <Show when={to.rationale}>
+                                      <box paddingLeft={4}>
+                                        <text fg={theme.text.muted} wrapMode="word">
+                                          ↳ {to.rationale}
+                                        </text>
+                                      </box>
+                                    </Show>
+
+                                    {/* Blocker Alert */}
+                                    <Show when={to.blocker}>
+                                      <box paddingLeft={4}>
+                                        <text fg={theme.text.feedback.error.base} wrapMode="word">
+                                          ⚠️ Blocker: {to.blocker}
+                                        </text>
+                                      </box>
+                                    </Show>
+
+                                    {/* Validation Proof */}
+                                    <Show when={to.validationProof}>
+                                      <box paddingLeft={4}>
+                                        <text fg={theme.text.feedback.success.base} wrapMode="word">
+                                          ✅ Proof: {to.validationProof}
+                                        </text>
+                                      </box>
+                                    </Show>
+                                  </box>
+                                )
+                              }}
+                            </For>
                           </box>
                         </Show>
                       </box>

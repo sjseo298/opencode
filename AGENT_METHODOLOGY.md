@@ -38,11 +38,13 @@ The Protocolo de Objetivos is triggered under two conditions:
 
 1. **Construct Plan First**: Call `objective_manage` (`action: 'set_primary'`, with `title`, `definitionOfDone`, and initial `secondaries`) to establish the Primary Objective and initial roadmap before executing mutating tasks.
 2. **Execute In Order**: Execute secondary objectives step-by-step according to the plan.
-3. **Dynamic Secondary Objective Discovery**: As you investigate, debug, or execute a secondary objective, if you uncover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, **add them smoothly to the plan** via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically and seamlessly as new realities are discovered.
-4. **Obey "Done means Done"**: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
-5. **Isolate Blockers & Untangle Errors**: Untangle cascading errors and maintain continuous alignment with the objective tree.
-6. **Mandatory Pre-Delivery Reconciliation**: Before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed. Close the Primary Objective using `action: 'complete_primary'` once all subtasks and the Definition of Done are verified.
-7. **Mandatory Post-Compaction Review & Synchronization**: Immediately after context compaction finishes, when resuming the session, the agent MUST first review what has been accomplished in the objectives from the compaction summary (`## Objective` and `## Work State`) and immediately call `objective_manage` to sync and update the active objectives before taking any other action.
+3. **Dynamic Secondary Objective Discovery & Immediate Re-Planning**: As you investigate, debug, or execute a secondary objective, if you uncover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, **add them smoothly to the plan** via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically and seamlessly as new realities are discovered. This obligation holds even **after execution has started**: when new secondary or tertiary objectives emerge, WHENEVER the user intervenes and changes or corrects direction, scope, or approach, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` before continuing work. A stale plan is prohibited.
+4. **Tertiary Decomposition (Conditional)**: A Secondary Objective may be decomposed into tertiary sub-objectives ONLY when it proves too large to execute as a single unit; do NOT pre-create tertiary objectives for small secondaries. Tertiary objectives are FIRST-CLASS children of their parent SO: register them via `objective_manage` (`action: 'add_tertiary'`, id = parent SO) and manage them with `action: 'update_tertiary'` (id = the TO's own id, e.g., `SO-2-T1`). **CLOSURE RULE (no shortcuts):** an SO is closed only when ALL of its tertiary objectives are closed; the PO closes only when every SO — and all their TOs — is closed. The tool rejects both shortcuts.
+5. **Mandatory Documentation Update Objective**: When any Primary or Secondary objective makes relevant modifications to the repository (public behavior, APIs, configuration schemas, user-facing features), a Secondary Objective MUST be created — and resolved with proof — that updates the affected documentation before the PO may close.
+6. **Obey "Done means Done"**: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
+7. **Isolate Blockers & Untangle Errors**: Untangle cascading errors and maintain continuous alignment with the objective tree.
+8. **Mandatory Pre-Delivery Reconciliation**: Before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed. Close the Primary Objective using `action: 'complete_primary'` once all subtasks and the Definition of Done are verified.
+9. **Mandatory Post-Compaction Review & Synchronization**: Immediately after context compaction finishes, when resuming the session, the agent MUST first review what has been accomplished in the objectives from the compaction summary (`## Objective` and `## Work State`) and immediately call `objective_manage` to sync and update the active objectives before taking any other action.
 
 ---
 
@@ -55,10 +57,11 @@ This framework mandates a **Hierarchical Objective Tree**:
 ```
 [PO] Primary Objective: The user's explicit ultimate end-state
  ├── [SO-1] Secondary Objective: Mandatory prerequisite / blocker
- │    └── [F-001] Concrete Finding / Validation Proof
+ │    ├── [F-001] Concrete Finding / Validation Proof
+ │    └── [SO-1-T1] Tertiary Sub-Objective (only when SO-1 proves too large)
  ├── [SO-2] Secondary Objective: Discovered blocker during SO-1
  │    └── [F-002] Concrete Finding / Validation Proof
- └── [SO-3] Secondary Objective: Final integration / regression test
+ └── [SO-3] Secondary Objective: Final integration / regression test (+ documentation update if relevant repo changes were made)
 ```
 
 ### 1.1 Classification of Objectives
@@ -72,6 +75,14 @@ This framework mandates a **Hierarchical Objective Tree**:
   * Discovered sub-goals, technical prerequisites, missing infrastructure, or active blockers.
   * Numbered sequentially (`SO-1`, `SO-2`, `SO-3`, ...).
   * Each SO must have an explicit **Dependency Rationale**: a clear explanation of *why* resolving this secondary objective is necessary to unblock or achieve the Primary Objective.
+
+* **Tertiary Objectives (SO-N-TM)**:
+  * Conditional sub-decomposition of a Secondary Objective, permitted ONLY when that SO proves too large to execute as a single unit. They are never pre-created for small secondaries.
+  * First-class children of the parent SO in the data model (`children` array): registered via `objective_manage` (`action: 'add_tertiary'`, id = parent SO) and managed with `action: 'update_tertiary'` (id = TO's own id, e.g., `SO-2-T1`).
+  * Inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy.
+  * Closure (no shortcuts): the SO resolves only when all its tertiary objectives are closed; the PO completes only when every SO and TO is closed — the tool rejects both shortcuts.
+
+* **Mandatory Documentation Update Objective**: When any Primary or Secondary objective makes relevant modifications to the repository (public behavior, APIs, configuration schemas, user-facing features), a Secondary Objective MUST be created — and resolved with proof — that updates the affected documentation before the PO may close.
 
 ### 1.2 Objective Lifecycle & State Machine
 
@@ -274,6 +285,17 @@ export type SecondaryObjectiveStatus =
 
 export type PrimaryObjectiveStatus = "pending" | "exploring" | "resolved"
 
+export interface TertiaryObjective {
+  id: string                   // "SO-1-T2" etc. — child of its parent Secondary Objective
+  title: string
+  status: SecondaryObjectiveStatus
+  rationale: string           // Why this tertiary sub-objective is necessary to close its parent SO
+  blocker?: string            // Concrete symptom, obstacle, or root cause if blocked
+  validationProof?: string    // Concrete test/command output proof. Mandatory when status='resolved'
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SecondaryObjective {
   id: string                   // "SO-1", "SO-2", etc.
   title: string
@@ -281,6 +303,7 @@ export interface SecondaryObjective {
   rationale: string           // Mandatory: why this SO is necessary to advance or unblock the PO
   blocker?: string            // Concrete symptom, obstacle, or root cause if blocked
   validationProof?: string    // Concrete test/command output proof. Mandatory when status='resolved'
+  children?: TertiaryObjective[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
   createdAt: number
   updatedAt: number
 }
@@ -364,7 +387,7 @@ Or updating metadata/status specifically via `update_primary`:
 ```
 
 #### Action 3: `add_secondary` (Alias: `add_secondaries`)
-Adds one or more Secondary Objectives dynamically:
+Adds one or more Secondary Objectives dynamically. To register a Tertiary sub-objective under an SO that proves too large, pass an explicit hierarchical `id` derived from its parent (e.g., `'SO-2-T1'`):
 ```json
 {
   "action": "add_secondary",
@@ -403,14 +426,38 @@ If blocked:
 }
 ```
 
-#### Action 5: `list` (Aliases: `get_tree`, `show`)
-Returns the complete formatted text tree of objectives.
+#### Action 5: `add_tertiary` (Alias: `add_tertaries`)
+Adds a Tertiary sub-objective under an existing Secondary Objective (`id` = PARENT SO id). The TO's own hierarchical id is derived automatically (`SO-<n>-T<m>`):
+```json
+{
+  "action": "add_tertiary",
+  "id": "SO-2",
+  "title": "Patch migration step A",
+  "rationale": "Isolate one independent step of the oversized SO-2."
+}
+```
+
+#### Action 6: `update_tertiary` (Alias: `update_tertaries`)
+Updates status, blocker, or validation proof of a Tertiary Objective by its own id. **Crucial Rule: If `status: "resolved"`, `validationProof` is mandatory!**
+```json
+{
+  "action": "update_tertiary",
+  "id": "SO-2-T1",
+  "status": "resolved",
+  "validationProof": "'bun test stepA.test.ts' -> 9 passing, exit code 0."
+}
+```
+
+**Closure rule (no shortcuts):** an SO cannot be resolved while any of its TOs is open; the PO cannot complete until every SO and all their TOs are closed — both shortcuts are rejected by the tool with a concrete error listing the blocking ids.
+
+#### Action 7: `list` (Aliases: `get_tree`, `show`)
+Returns the complete formatted text tree of objectives, with tertiary sub-objectives nested under their parent SO.
 
 ### 11.4 Comparison: Standard TODO vs. Protocolo de Objetivos
 
 | Feature | Standard OpenCode TODO | Protocolo de Objetivos |
 |---|---|---|
-| **Structure** | Flat list of strings | Nested tree: PO $\rightarrow$ SO-N $\rightarrow$ Findings |
+| **Structure** | Flat list of strings | Nested tree: PO $\rightarrow$ SO-N (optional Tertiary SO-N-TM) $\rightarrow$ Findings |
 | **Causal Link** | None (independent items) | Explicit Dependency Rationale required |
 | **Completion Criteria** | Agent self-declares "completed" | Requires verified execution proof (`validationProof`) |
 | **Error Handling** | New todo appended | Cascading classification (Originating vs Masking) |
@@ -423,16 +470,17 @@ Returns the complete formatted text tree of objectives.
 When resolving complex tasks, an agent may leverage the `subagent` tool to offload isolated subtasks, deep diagnostic runs, or focused codebase inspections to prevent saturating the primary session context.
 
 **Mandatory Rules:**
-1. **Slot-Based Subagent Concurrency (`max_subagents = total_slots - 1`)**:
+1. **Delegation Candidacy Rule**: Every Secondary and Tertiary objective is a candidate to be resolved by a subagent. Before executing each one, validate whether delegation pays off given slot availability (`max_subagents = total_slots - 1`): delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists—this protects the primary session's context; execute it in the main thread instead when the task is small or tightly coupled with other objectives, or when no subagent slot is available.
+2. **Slot-Based Subagent Concurrency (`max_subagents = total_slots - 1`)**:
    * When querying the server's maximum available context (`/props` and `/status`), the API reports `total_slots` (between 2 and 4) and `max_subagents = total_slots - 1`, because **1 slot is occupied by the active primary agent session**.
    * You may enable at most **`total_slots - 1` concurrent subagents** (`1` subagent when 2 slots are active, `2` subagents when 3 slots are active, or `3` subagents when 4 slots are active; defaulting to strictly 1 subagent at a time if not reported). Never exceed `total_slots - 1` simultaneous subagents.
-2. **Subagent Task Sizing & Context Protection (Mandatory)**:
+3. **Subagent Task Sizing & Context Protection (Mandatory)**:
    * **Do NOT delegate overly large tasks to subagents**, or they will exhaust their available context window before finishing.
    * Always assign **medium-sized, achievable tasks** (*tareas medianas y realizables*) with a clear, bounded scope.
    * If a task is large, **split it into several smaller subagent tasks whenever possible** (*partir esas tareas a los subagentes en varias, si es que es posible*).
    * Only as a **last resort** (*en último caso*)—when a task genuinely cannot be split—delegate the task to the subagent so it does what it needs to do.
-3. **Evidence Integration**: Review each subagent's evidence and output and integrate its findings into the active Secondary Objective via `objective_manage`.
-4. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
+4. **Evidence Integration**: Review each subagent's evidence and output and integrate its findings into the active Secondary Objective (or Tertiary) via `objective_manage`.
+5. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
 
 ### 11.6 Prompt Caching, KV Cache Reuse & Prefix Invariance Architecture
 
@@ -473,4 +521,8 @@ In local LLM inference engines (`llama.cpp`, vLLM, LM Studio) and frontier provi
 | Re-investigating an approach discarded 5 turns ago | Check the Options Matrix first; do not retry `DISCARDED` options without new data. |
 | Finishing a turn with modified files without updating objectives | Call `objective_manage` to synchronize the tree before ending the turn. |
 | Spawning more subagents than `total_slots - 1` or delegating huge monolithic tasks to a subagent | Respect `max_subagents = total_slots - 1` (1 slot is your active session) and assign medium-sized, achievable tasks (splitting large tasks into several smaller subagent tasks whenever possible; only delegate undivided as a last resort). |
+| Closing the PO while relevant repository modifications remain undocumented | Create and resolve a documentation-update Secondary Objective with concrete proof before calling `complete_primary`. |
+| Pre-creating tertiary objectives for every SO, or executing an oversized SO without decomposition | Decompose into tertiary sub-objectives (`SO-N-TM`) ONLY when the SO proves too large to execute as one unit; treat each SO/TO as a subagent-delegation candidate and validate slot availability before choosing delegation vs. main thread. |
+| Resolving an SO while it still has open TOs, or closing the PO with nested TOs unresolved (shortcuts) | Enforce bottom-up closure: close every TO first (`update_tertiary`), then its parent SO (`update_secondary`), then `complete_primary`; the tool rejects any shortcut and lists the blocking ids. |
+| Continuing work with a stale objective plan after user correction or self-detected gaps | Update the objective list via `objective_manage` IMMEDIATELY — even mid-execution — whenever new objectives emerge, the user changes/corrects direction, or a missing step is detected. |
 | Mutating `event.system` with dynamic trees, targets, or dirty warnings | Keep `event.system` 100% static across all turns to preserve llama.cpp KV cache. |

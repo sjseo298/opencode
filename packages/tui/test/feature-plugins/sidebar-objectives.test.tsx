@@ -313,4 +313,141 @@ describe("SidebarObjectives TUI component", () => {
       app.renderer.destroy()
     }
   })
+
+  test("renders tertiary sub-objectives nested under their parent secondary", async () => {
+    const sid = "render-nested-to"
+    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
+    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+      title: "Platform Overhaul",
+      status: "exploring",
+      definitionOfDone: "Zero regressions",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "Oversized task",
+          status: "exploring",
+          rationale: "Needs decomposition",
+          children: [
+            {
+              id: "SO-1-T1",
+              title: "Patch step A",
+              status: "resolved",
+              rationale: "Isolate first step",
+              validationProof: "exit 0 on stepA test",
+            },
+            {
+              id: "SO-1-T2",
+              title: "Patch step B",
+              status: "pending",
+              rationale: "Isolate second step",
+            },
+          ],
+        },
+      ],
+    })
+
+    const ctx = makeMockContext({ messages: [] })
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
+      width: 46,
+      height: 30,
+    })
+
+    try {
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("Oversized task")
+      expect(frame).toContain("SO-1-T1:")
+      expect(frame).toContain("Patch step A")
+      expect(frame).toContain("[✓]")
+      expect(frame).toContain("Proof: exit 0 on stepA test")
+      expect(frame).toContain("SO-1-T2:")
+      expect(frame).toContain("Isolate second step")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("reconstructs tertiary objectives from add_tertiary/update_tertiary tool calls", () => {
+    const sid = "test-session-to-replay"
+    const messages = [
+      {
+        id: "m1",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            tool: "objective_manage",
+            input: { action: "set_primary", title: "Nested Task", definitionOfDone: "All levels closed" },
+          },
+        ],
+      },
+      {
+        id: "m2",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            tool: "objective_manage",
+            input: { action: "add_secondary", title: "Oversized task", rationale: "Needs decomposition" },
+          },
+        ],
+      },
+      {
+        id: "m3",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            tool: "objective_manage",
+            input: { action: "add_tertiary", id: "SO-1", title: "Patch step A", rationale: "Isolate first step" },
+          },
+        ],
+      },
+      {
+        id: "m4",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            tool: "objective_manage",
+            input: { action: "update_tertiary", id: "SO-1-T1", status: "resolved", validationProof: "step A exit 0" },
+          },
+        ],
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.secondaries.length).toBe(1)
+    expect(po?.secondaries[0].children?.length).toBe(1)
+    expect(po?.secondaries[0].children?.[0]?.id).toBe("SO-1-T1")
+    expect(po?.secondaries[0].children?.[0]?.status).toBe("resolved")
+    expect(po?.secondaries[0].children?.[0]?.validationProof).toContain("step A exit 0")
+  })
+
+  test("attaches tertiary lines to their parent when reconstructing from compaction checkpoint", () => {
+    const sid = "test-session-to-checkpoint"
+    const messages = [
+      {
+        id: "c1",
+        type: "compaction",
+        summary: [
+          "[PO] Checkpoint Nest Task [EXPLORING]",
+          "Definition of Done: All levels recovered",
+          "",
+          "### Active / Exploring Objectives",
+          "- [SO-2] [EXPLORING] Oversized work (Rationale: Needs decomposition)",
+          "  - [SO-2-T1] [PENDING] Patch step A",
+        ].join("\n"),
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.secondaries.length).toBe(1)
+    expect(po?.secondaries[0].id).toBe("SO-2")
+    expect(po?.secondaries[0].children?.length).toBe(1)
+    expect(po?.secondaries[0].children?.[0]?.id).toBe("SO-2-T1")
+    expect(po?.secondaries[0].children?.[0]?.status).toBe("pending")
+  })
 })

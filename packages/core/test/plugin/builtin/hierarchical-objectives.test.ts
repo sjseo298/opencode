@@ -4,7 +4,11 @@ import {
   setPrimaryObjective,
   addSecondaryObjective,
   updateSecondaryObjective,
+  addTertiaryObjective,
+  updateTertiaryObjective,
+  updatePrimaryObjective,
   renderObjectiveTree,
+  formatCompactionObjectivesInput,
   getObjectives,
   clearSessionObjectives,
   MAX_CONSECUTIVE_READS,
@@ -628,6 +632,224 @@ describe("hierarchical-objectives plugin", () => {
       )
       expect(po?.secondaries.length).toBe(2)
       expect(po?.secondaries[1].id).toBe("SO-2")
+    })
+  })
+
+  describe("Tertiary Objectives & Closure Semantics", () => {
+    async function setupT() {
+      let registeredTool: any = null
+      const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+      const mockCtx = {
+        options: {},
+        session: {
+          todo: async () => [],
+          hook: async (name: string, handler: any) => {
+            sessionHooks[name] = sessionHooks[name] ?? []
+            sessionHooks[name].push(handler)
+          },
+        },
+        tool: {
+          transform: async (cb: (editor: any) => void) =>
+            cb({ add: (toolDef: any) => { registeredTool = toolDef } }),
+          hook: async () => {},
+        },
+      }
+      await HierarchicalObjectivesPlugin.setup(mockCtx as any)
+      return { getRegisteredTool: () => registeredTool, sessionHooks }
+    }
+
+    test("creates tertiary objectives as children of their parent SO with hierarchical ids", () => {
+      const sid = uniqueSessionID("to-create")
+      setPrimaryObjective(sid, "Big Migration", "All steps verified")
+      addSecondaryObjective(sid, "Small task", "Trivial scope")
+      addSecondaryObjective(sid, "Oversized task", "Needs decomposition")
+
+      const r1 = addTertiaryObjective(sid, "SO-2", "Patch step A", "Isolate first independent step")
+      expect(r1.success).toBe(true)
+      expect(r1.objective?.id).toBe("SO-2-T1")
+      expect(r1.objective?.status).toBe("pending")
+
+      const r2 = addTertiaryObjective(sid, "SO-2", "Patch step B", "Isolate second independent step")
+      expect(r2.success).toBe(true)
+      expect(r2.objective?.id).toBe("SO-2-T2")
+
+      const po = getObjectives(sid)!
+      expect(po.secondaries[0].children).toBeUndefined()
+      expect(po.secondaries[1].children?.length).toBe(2)
+      expect(po.secondaries[1].children?.map((t) => t.id)).toEqual(["SO-2-T1", "SO-2-T2"])
+    })
+
+    test("rejects add_tertiary under an unknown parent SO", () => {
+      const sid = uniqueSessionID("to-bad-parent")
+      setPrimaryObjective(sid, "Task", "Done")
+      const result = addTertiaryObjective(sid, "SO-9", "Orphan step", "No such parent")
+      expect(result.success).toBe(false)
+      expect(result.error).toContain("not found")
+    })
+
+    test("enforces Done-means-Done for tertiary resolution", () => {
+      const sid = uniqueSessionID("to-proof-gate")
+      setPrimaryObjective(sid, "Task", "Done")
+      addSecondaryObjective(sid, "Oversized task", "Needs decomposition")
+      addTertiaryObjective(sid, "SO-1", "Patch step A", "Isolate first independent step")
+
+      const fail = updateTertiaryObjective(sid, "SO-1-T1", { status: "resolved" })
+      expect(fail.success).toBe(false)
+      expect(fail.error).toContain("Cannot mark SO-1-T1 as resolved without concrete validation proof")
+
+      const ok = updateTertiaryObjective(sid, "SO-1-T1", {
+        status: "resolved",
+        validationProof: "'bun test stepA.test.ts' -> 9 passing, exit code 0.",
+      })
+      expect(ok.success).toBe(true)
+      expect(ok.objective?.status).toBe("resolved")
+    })
+
+    test("BLOCKS the shortcut: an SO cannot be resolved while its tertiary objectives are open", () => {
+      const sid = uniqueSessionID("so-shortcut-blocked")
+      setPrimaryObjective(sid, "Task", "Done")
+      addSecondaryObjective(sid, "Oversized task", "Needs decomposition")
+      addTertiaryObjective(sid, "SO-1", "Patch step A", "Isolate first independent step")
+      addTertiaryObjective(sid, "SO-1", "Patch step B", "Isolate second independent step")
+
+      const blocked = updateSecondaryObjective(sid, "SO-1", {
+        status: "resolved",
+        validationProof: "Looks complete already",
+      })
+      expect(blocked.success).toBe(false)
+      expect(blocked.error).toContain("open tertiary objectives")
+      expect(blocked.error).toContain("SO-1-T1")
+
+      // Close every child first, then the SO can be resolved with its own proof.
+      updateTertiaryObjective(sid, "SO-1-T1", { status: "resolved", validationProof: "step A verified" })
+      updateTertiaryObjective(sid, "SO-1-T2", { status: "discarded" })
+      const allowed = updateSecondaryObjective(sid, "SO-1", {
+        status: "resolved",
+        validationProof: "All steps of the oversized task verified end-to-end.",
+      })
+      expect(allowed.success).toBe(true)
+      expect(allowed.objective?.status).toBe("resolved")
+    })
+
+    test("BLOCKS the shortcut: PO cannot resolve while nested tertiary objectives are open", () => {
+      const sid = uniqueSessionID("po-shortcut-blocked")
+      setPrimaryObjective(sid, "Task", "Done")
+      addSecondaryObjective(sid, "Oversized task", "Needs decomposition")
+      addTertiaryObjective(sid, "SO-1", "Patch step A", "Isolate first independent step")
+
+      // Simulate legacy/corrupt state: SO force-resolved while its child is still open.
+      const po = getObjectives(sid)!
+      po.secondaries[0].status = "resolved"
+      po.secondaries[0].validationProof = "stale proof"
+
+      const result = updatePrimaryObjective(sid, { status: "resolved", validationProof: "e2e green" })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain("open secondary objectives")
+    })
+
+    test("renders tertiary objectives nested under their parent SO in the tree", () => {
+      const sid = uniqueSessionID("to-render")
+      setPrimaryObjective(sid, "Core Upgrade", "Zero regressions")
+      addSecondaryObjective(sid, "Oversized task", "Needs decomposition")
+      addTertiaryObjective(sid, "SO-1", "Patch step A", "Isolate first independent step")
+
+      const tree = renderObjectiveTree(getObjectives(sid)!)
+      expect(tree).toContain("- **SO-1** [PENDING] Oversized task")
+      expect(tree).toContain("  - **SO-1-T1** [PENDING] Patch step A")
+      expect(tree).toContain("    - *Rationale:* Isolate first independent step")
+    })
+
+    test("compaction snapshot lists tertiary lines indented under their parent SO", () => {
+      const sid = uniqueSessionID("to-compaction")
+      setPrimaryObjective(sid, "Compaction Task", "No loss")
+      addSecondaryObjective(sid, "Oversized task", "Needs decomposition")
+      addTertiaryObjective(sid, "SO-1", "Patch step A", "Isolate first independent step")
+
+      const text = formatCompactionObjectivesInput(getObjectives(sid)!)
+      expect(text).toContain("- [SO-1] [PENDING] Oversized task (Rationale: Needs decomposition)")
+      expect(text).toContain("  - [SO-1-T1] [PENDING] Patch step A")
+    })
+
+    test("tool executes add_tertiary/update_tertiary end-to-end with closure nudge and schema actions", async () => {
+      const { getRegisteredTool } = await setupT()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("to-tool")
+
+      const r1 = await tool.execute(
+        { action: "set_primary", title: "API Overhaul", definitionOfDone: "All endpoints verified" },
+        { sessionID: sid },
+      )
+      expect(r1.output.success).toBe(true)
+      await tool.execute({ action: "add_secondary", title: "Oversized task", rationale: "Needs decomposition" }, { sessionID: sid })
+
+      const rAdd = await tool.execute(
+        { action: "add_tertiary", id: "SO-1", title: "Patch step A", rationale: "Isolate first independent step" },
+        { sessionID: sid },
+      )
+      expect(rAdd.output.success).toBe(true)
+      expect(rAdd.output.message).toContain("SO-1-T1")
+      expect(rAdd.output.tree).toContain("**SO-1-T1** [PENDING]")
+
+      const rBadParent = await tool.execute(
+        { action: "add_tertiary", id: "SO-77", title: "Orphan", rationale: "No parent" },
+        { sessionID: sid },
+      )
+      expect(rBadParent.output.success).toBe(false)
+      expect(rBadParent.output.message).toContain("not found")
+
+      const rNoProof = await tool.execute(
+        { action: "update_tertiary", id: "SO-1-T1", status: "resolved" },
+        { sessionID: sid },
+      )
+      expect(rNoProof.output.success).toBe(false)
+      expect(rNoProof.output.message).toContain("validation proof")
+
+      const rClose = await tool.execute(
+        { action: "update_tertiary", id: "SO-1-T1", status: "resolved", validationProof: "step A verified with exit code 0" },
+        { sessionID: sid },
+      )
+      expect(rClose.output.success).toBe(true)
+      expect(rClose.output.message).toContain("All tertiary objectives under SO-1 are closed")
+
+      const { Schema } = await import("effect")
+      const doc = Schema.toJsonSchemaDocument(tool.input as any) as any
+      const actionEnum = doc.schema.properties.action.enum
+      expect(actionEnum).toContain("add_tertiary")
+      expect(actionEnum).toContain("update_tertiary")
+    })
+
+    test("reconstructs tertiary objectives from compaction checkpoint text", async () => {
+      const { sessionHooks } = await setupT()
+      const sid = uniqueSessionID("to-checkpoint-rebuild")
+      clearSessionObjectives(sid)
+
+      const checkpointMessage = {
+        role: "user",
+        content: [
+          "<conversation-checkpoint>",
+          "[PO] Nested Recovery Task [EXPLORING]",
+          "Definition of Done: Everything recovered",
+          "",
+          "### Active / Exploring Objectives",
+          "- [SO-2] [EXPLORING] Oversized work (Rationale: Needs decomposition)",
+          "  - [SO-2-T1] [PENDING] Patch step A",
+          "  - [SO-2-T2] [RESOLVED] Patch step B (Proof: exit code 0)",
+        ].join("\n"),
+      }
+
+      const event = { sessionID: sid, system: [] as { type: string; text: string }[], messages: [checkpointMessage] }
+      for (const h of sessionHooks["context"] ?? []) {
+        await h(event)
+      }
+
+      const po = getObjectives(sid)
+      expect(po).toBeDefined()
+      expect(po?.secondaries.length).toBe(1)
+      expect(po?.secondaries[0].id).toBe("SO-2")
+      expect(po?.secondaries[0].children?.length).toBe(2)
+      expect(po?.secondaries[0].children?.map((t) => t.id)).toEqual(["SO-2-T1", "SO-2-T2"])
+      expect(po?.secondaries[0].children?.[0]?.status).toBe("pending")
+      expect(po?.secondaries[0].children?.[1]?.status).toBe("resolved")
     })
   })
 })
