@@ -514,4 +514,58 @@ describe("SidebarObjectives TUI component", () => {
     expect(po?.secondaries[2].id).toBe("SO-3")
     expect(po?.secondaries[2].status).toBe("exploring")
   })
+
+  test("auto-repairs memory status if PO says resolved but SOs are open", () => {
+    const sid = "test-corrupt-mem"
+    globalThis.__OPENCODE_OBJECTIVES__ = new Map([[
+      sid,
+      {
+        title: "Corrupt Task",
+        status: "resolved",
+        definitionOfDone: "DoD",
+        secondaries: [
+          { id: "SO-1", title: "Open subtask", status: "pending", rationale: "r" },
+        ],
+      },
+    ]])
+
+    const po = extractObjectivesFromMessages(sid, [])
+    expect(po).toBeDefined()
+    // Auto-repaired to exploring because SO-1 is pending
+    expect(po?.status).toBe("exploring")
+  })
+
+  test("message reconstruction complete_primary rejects resolved if an SO is still pending", () => {
+    const sid = "test-msg-complete-gate"
+    const messages = [
+      {
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            name: "objective_manage",
+            input: {
+              action: "set_primary",
+              title: "Task",
+              definitionOfDone: "DoD",
+              secondaries: [{ id: "SO-1", title: "Task 1", status: "pending", rationale: "r" }],
+            },
+          },
+          {
+            type: "tool",
+            name: "objective_manage",
+            input: {
+              action: "complete_primary",
+              validationProof: "premature attempt",
+            },
+          },
+        ],
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    // Cannot be resolved because SO-1 is pending
+    expect(po?.status).toBe("exploring")
+  })
 })

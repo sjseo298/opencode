@@ -117,12 +117,26 @@ export function extractObjectivesFromMessages(
   if (globalThis.__OPENCODE_OBJECTIVES__?.has(sessionID)) {
     const raw = globalThis.__OPENCODE_OBJECTIVES__.get(sessionID)
     if (raw && typeof raw.title === "string") {
-      const status: PrimaryObjectiveStatus =
+      let status: PrimaryObjectiveStatus =
         raw.status === "pending" ||
         raw.status === "resolved" ||
         raw.status === "presented_awaiting_confirmation"
           ? raw.status
           : "exploring"
+
+      // Invariante jerárquico estricto en memoria viva:
+      // Si el PO dice 'resolved' pero alguno de sus SOs o TOs está abierto,
+      // la UI debe auto-repararlo inmediatamente a 'exploring' para nunca mostrar
+      // un PO cerrado con tareas abiertas.
+      const secondaries: SecondaryObjectiveView[] = Array.isArray(raw.secondaries) ? [...raw.secondaries] : []
+      const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
+      const hasOpenChild = secondaries.some(
+        (s) => !isClosed(s.status) || (s.children ?? []).some((t) => !isClosed(t.status)),
+      )
+      if (status === "resolved" && hasOpenChild) {
+        status = "exploring"
+      }
+
       const rawDod = Array.isArray(raw.dodCriteria)
         ? raw.dodCriteria
         : Array.isArray(raw.dod)
@@ -132,7 +146,7 @@ export function extractObjectivesFromMessages(
         title: raw.title,
         status,
         definitionOfDone: raw.definitionOfDone ?? "",
-        secondaries: Array.isArray(raw.secondaries) ? [...raw.secondaries] : [],
+        secondaries,
         dodCriteria: rawDod ? [...rawDod] : undefined,
         findings: Array.isArray(raw.findings) ? [...raw.findings] : undefined,
         options: Array.isArray(raw.options) ? [...raw.options] : undefined,
@@ -265,6 +279,14 @@ export function extractObjectivesFromMessages(
                 if (item.rationale) target.rationale = item.rationale
                 if (item.blocker !== undefined) target.blocker = item.blocker
                 if (item.validationProof !== undefined) target.validationProof = item.validationProof
+
+                // Invariante de coherencia jerárquica en reconstrucción:
+                // Si el SO se actualiza a un estado abierto ('pending', 'exploring', 'blocked'),
+                // el PO se reabre automáticamente a 'exploring'.
+                const isOpen = target.status === "pending" || target.status === "exploring" || target.status === "blocked"
+                if (isOpen && (po.status === "resolved" || po.status === "presented_awaiting_confirmation")) {
+                  po.status = "exploring"
+                }
               }
             }
           }
@@ -345,6 +367,20 @@ export function extractObjectivesFromMessages(
               if (item.rationale) target.rationale = item.rationale
               if (item.blocker !== undefined) target.blocker = item.blocker
               if (item.validationProof !== undefined) target.validationProof = item.validationProof
+
+              // Invariante de coherencia jerárquica en reconstrucción:
+              // Si el TO se actualiza a abierto ('pending', 'exploring', 'blocked'),
+              // el SO padre y el PO se reabren automáticamente a 'exploring'.
+              const isOpen = target.status === "pending" || target.status === "exploring" || target.status === "blocked"
+              if (isOpen) {
+                const parentSO = po.secondaries.find((s) => (s.children ?? []).some((t) => t.id === target?.id))
+                if (parentSO && parentSO.status === "resolved") {
+                  parentSO.status = "exploring"
+                }
+                if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+                  po.status = "exploring"
+                }
+              }
             }
           }
         } else if (action === "add_finding") {
@@ -476,7 +512,20 @@ export function extractObjectivesFromMessages(
           action === "close_primary"
         ) {
           if (po) {
-            po.status = "resolved"
+            // Invariante de coherencia jerárquica:
+            // Un PO solo puede cerrarse como 'resolved' si TODOS los SOs y TOs están cerrados.
+            const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
+            const allSecondariesClosed =
+              po.secondaries.length === 0 ||
+              po.secondaries.every(
+                (s) => isClosed(s.status) && (s.children ?? []).every((t) => isClosed(t.status)),
+              )
+
+            if (allSecondariesClosed) {
+              po.status = "resolved"
+            } else {
+              po.status = "exploring"
+            }
           }
         } else if (action === "update_primary") {
           if (po) {
