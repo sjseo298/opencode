@@ -450,7 +450,14 @@ Updates status, blocker, or validation proof of a Tertiary Objective by its own 
 
 **Closure rule (no shortcuts):** an SO cannot be resolved while any of its TOs is open; the PO cannot complete until every SO and all their TOs are closed — both shortcuts are rejected by the tool with a concrete error listing the blocking ids.
 
-#### Action 7: `add_finding` / `update_finding` / `search_findings` (Epistemic Layer, F-2)
+**Ascending Reopening Cascade:**
+- If an open Tertiary Objective (`TO`) is added or updated to an open state (`pending`, `exploring`, `blocked`):
+  1. Its parent `SO` is automatically reopened from `resolved` to `exploring`.
+  2. The Primary Objective (`PO`) is automatically reopened from `resolved` or paused (`presented_awaiting_confirmation`) to `exploring`.
+- If an open Secondary Objective (`SO`) is added or updated to an open state, the `PO` is automatically reopened to `exploring`.
+- The tool explicitly alerts the agent with `⚠️ HIERARCHICAL REOPENING` in tool responses so the agent never assumes a task remains closed while unfinished work exists.
+
+#### Action 7: `add_finding` / `update_finding` / `search_findings` (Epistemic Layer, F-2, F-7)
 Findings (`F-NNN`) are first-class, search-before-write knowledge entities with typed evidence:
 ```json
 {
@@ -462,10 +469,13 @@ Findings (`F-NNN`) are first-class, search-before-write knowledge entities with 
   "nextAction": "Add IDN normalization step prior to cookie map lookup"
 }
 ```
-Invariants:
+Invariants & Semantic Search:
 - **Typed evidence**: `COMMAND_OUTPUT`, `QUERY_RESULT`, `LOG_EXCERPT`, `FILE_READ`, `SCREENSHOT` with non-empty `source`.
 - **Anti-placeholder validation**: `title`, `result`, `nextAction` must be >=15 chars and contain no placeholder markers (`TBD`, `TODO`, `<...>`, etc.).
-- **Search-before-write**: queries existing findings. Score $\ge 0.68 \implies$ rejected as non-novel (must extend in place via `update_finding`). Score $0.55 .. 0.68 \implies$ created with similarity warning and forced `seeAlso`. Score $< 0.55 \implies$ created clean.
+- **Search-before-write & Semantic Embeddings**:
+  - Automatically queries existing findings. Pluggable contract (`FindingScorer`) with opt-in support for local LM Studio embeddings (`OPENCODE_OBJECTIVES_EMBEDDINGS=true`, resolved via `LMSTUDIO_BASE_URL` / `LMSTUDIO_URL`) and transparent fallback to lexical query-coverage scoring.
+  - Automatically warms up embeddings in background during session hydration (`hydrateSessionObjectives`, `sync`).
+  - Score $\ge 0.68 \implies$ rejected as non-novel (must extend in place via `update_finding`). Score $0.55 .. 0.68 \implies$ created with similarity warning and forced `seeAlso`. Score $< 0.55 \implies$ created clean.
 - **In-place extension**: update via `update_finding` (`findingId="F-001"`). Mark superseded findings with `subsumedBy="F-001"`.
 
 #### Action 8: `add_option` / `update_option` (Multi-candidate, F-5)
@@ -539,9 +549,10 @@ Returns the complete formatted text tree of objectives, with tertiary sub-object
 - **Decision**: Integrate features F-1..F-11 directly into `@opencode/core`'s `hierarchical-objectives` builtin plugin:
   1. *Source of Truth*: Plugin storage (`ctx.storage`) with versioned serialization and automatic hydration; message-history reconstruction kept as secondary fallback.
   2. *First-Class Epistemic Entities*: Findings (`F-NNN`) and Options (`OPT-N`) with server-side invariants, anti-placeholder gates, and search-before-write validation.
-  3. *Strict Gates*: `complete_primary` enforces resolution of all SOs and TOs, `proofRef` on all DoD criteria, clean compliance audit, and documentation updates for public-surface changes.
-  4. *Freeze State Machine*: `present_plan` rejects mutating actions until explicit `resume_plan`.
-  5. *Deadlock-Free Anti-Loop*: Read counter resets upon throwing to prevent inspection deadlocks.
+  3. *Strict Gates*: `complete_primary` enforces resolution of all SOs and TOs, `proofRef` on all DoD criteria, clean compliance audit, and documentation updates for relevant project changes.
+  4. *Freeze State Machine & Reopening*: `present_plan` rejects mutating actions until explicit `resume_plan`. Adding or reopening any sub-objective automatically cascades and reopens the PO to `exploring`.
+  5. *Intelligent Documentation Gate (F-10)*: Integrates one-shot `/btw` (`session.generate`) evaluation on modified files with asymmetric idempotency (relevant files remain relevant at zero overhead) to block closure if relevant project changes lack a documentation objective.
+  6. *Deadlock-Free Anti-Loop*: Read counter resets upon throwing to prevent inspection deadlocks.
 - **Consequences**: Tree state is robust across compaction and reloads. Deduplication and proof enforcement prevent phantom progress and speculative claims.
 
 ### 11.5 Comparison: Standard TODO vs. Protocolo de Objetivos
