@@ -396,6 +396,17 @@ export function addSecondaryObjective(
     updatedAt: now,
   }
   po.secondaries.push(so)
+
+  // Invariante de coherencia jerárquica:
+  // Si el PO ya estaba cerrado (resolved) o en pausa (presented_awaiting_confirmation)
+  // y se agrega un nuevo SO abierto, el PO se REABRE automáticamente a 'exploring'.
+  if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+    po.status = "exploring"
+    if (po.phase) {
+      po.phase.paused = false
+    }
+  }
+
   po.updatedAt = now
   persistSessionObjectives(sessionID)
   return so
@@ -414,7 +425,7 @@ export function updateSecondaryObjective(
     preconditions?: Precondition[]
   },
   opts?: { preconditionsMet?: string[]; bypassGates?: boolean },
-): { success: boolean; error?: string; objective?: SecondaryObjective } {
+): { success: boolean; error?: string; objective?: SecondaryObjective; poReopened?: boolean } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
     return { success: false, error: `No active objective tree found for session ${sessionID}.` }
@@ -518,12 +529,27 @@ export function updateSecondaryObjective(
     target.validationProof = updates.validationProof?.trim() || target.validationProof?.trim()
   }
 
+  // Cascada ascendente: Si el SO pasa a un estado abierto ('pending', 'exploring', 'blocked')
+  // y el PO estaba cerrado o pausado, el PO se reabre automáticamente a 'exploring'.
+  let poReopened = false
+  if (isOpenStatus(target.status)) {
+    if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+      po.status = "exploring"
+      if (po.phase) po.phase.paused = false
+      poReopened = true
+    }
+  }
+
   const now = Date.now()
   target.updatedAt = now
   po.updatedAt = now
   persistSessionObjectives(sessionID)
 
-  return { success: true, objective: target }
+  return { success: true, objective: target, poReopened }
+}
+
+function isOpenStatus(status: string): boolean {
+  return status === "pending" || status === "exploring" || status === "blocked"
 }
 
 export function addTertiaryObjective(
@@ -592,6 +618,22 @@ export function addTertiaryObjective(
     updatedAt: now,
   }
   parent.children.push(tertiary)
+
+  // Invariante de coherencia jerárquica:
+  // Si el PO estaba cerrado o pausado y se añade un TO abierto, el PO se REABRE automáticamente a 'exploring'.
+  if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+    po.status = "exploring"
+    if (po.phase) {
+      po.phase.paused = false
+    }
+  }
+
+  // De la misma manera, si el padre SO estaba resuelto, se reabre a exploring
+  if (parent.status === "resolved") {
+    parent.status = "exploring"
+    parent.updatedAt = now
+  }
+
   po.updatedAt = now
   persistSessionObjectives(sessionID)
   return { success: true, objective: tertiary }
@@ -608,7 +650,7 @@ export function updateTertiaryObjective(
     validationProof?: string
   },
   opts?: { bypassGates?: boolean },
-): { success: boolean; error?: string; objective?: TertiaryObjective } {
+): { success: boolean; error?: string; objective?: TertiaryObjective; poReopened?: boolean; parentReopened?: boolean } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
     return { success: false, error: `No active objective tree found for session ${sessionID}.` }
@@ -661,11 +703,30 @@ export function updateTertiaryObjective(
     target.validationProof = updates.validationProof?.trim() || undefined
   }
 
+  // Cascada ascendente: Si el TO pasa a un estado abierto ('pending', 'exploring', 'blocked'):
+  // 1. Si el padre SO estaba 'resolved', se reabre a 'exploring'.
+  // 2. Si el PO estaba 'resolved' o en pausa, se reabre a 'exploring'.
+  let poReopened = false
+  let parentReopened = false
+  const parentSO = po.secondaries.find((s) => (s.children ?? []).some((t) => t.id === target?.id))
+  if (isOpenStatus(target.status)) {
+    if (parentSO && parentSO.status === "resolved") {
+      parentSO.status = "exploring"
+      parentSO.updatedAt = Date.now()
+      parentReopened = true
+    }
+    if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+      po.status = "exploring"
+      if (po.phase) po.phase.paused = false
+      poReopened = true
+    }
+  }
+
   const now = Date.now()
   target.updatedAt = now
   po.updatedAt = now
   persistSessionObjectives(sessionID)
-  return { success: true, objective: target }
+  return { success: true, objective: target, poReopened, parentReopened }
 }
 
 // ---------- Epistemic layer: findings, options, DoD, fingerprints (F-2..F-5, F-7) ----------
@@ -2394,8 +2455,12 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
+    const current = sessionObjectives.get(sessionID)
+    const reopenNotice = current?.status === "exploring"
+      ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective is EXPLORING because new/open sub-objectives exist."
+      : ""
     return {
-      output: { success: true, message: `Added secondary objective(s): ${addedIds.join(", ")}.`, tree },
+      output: { success: true, message: `Added secondary objective(s): ${addedIds.join(", ")}.${reopenNotice}`, tree },
       content: tree,
     }
   }
@@ -2451,6 +2516,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         (s) => isClosedStatus(s.status) && (s.children ?? []).every((t) => isClosedStatus(t.status)),
       )
 
+    const reopenNotice = current?.status === "exploring" && !allResolvedOrDiscarded
+      ? " ⚠️ HIERARCHICAL NOTICE: Open sub-objectives exist; Primary Objective remains in EXPLORING state until all work is resolved."
+      : ""
+
     const completionNotice =
       allResolvedOrDiscarded && current.status !== "resolved"
         ? " All secondary objectives are resolved! Call objective_manage with action: 'complete_primary' to formally close the Primary Objective before presenting your final response."
@@ -2459,7 +2528,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     return {
       output: {
         success: true,
-        message: `Secondary objective(s) successfully updated.${completionNotice}`,
+        message: `Secondary objective(s) successfully updated.${reopenNotice}${completionNotice}`,
         tree,
       },
       content: tree,
@@ -2500,7 +2569,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
-    return { output: { success: true, message: `Added tertiary objective(s): ${addedIds.join(", ")}.`, tree }, content: tree }
+    const current = sessionObjectives.get(sessionID)
+    const reopenNotice = current?.status === "exploring"
+      ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective and/or parent SO are in EXPLORING state because an open tertiary sub-objective was added."
+      : ""
+    return { output: { success: true, message: `Added tertiary objective(s): ${addedIds.join(", ")}.${reopenNotice}`, tree }, content: tree }
   }
 
   if (rawAction === "update_tertiary" || rawAction === "update_tertaries") {

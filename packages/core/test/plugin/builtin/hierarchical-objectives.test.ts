@@ -1588,6 +1588,60 @@ describe("hierarchical-objectives plugin", () => {
       expect(report).toContain("F-001")
       expect(report).toContain("OPT-1")
     })
+
+    // ---------- Hierarchical Reopening (Ascending Cascade) ----------
+
+    test("adding an open SO to a resolved PO automatically reopens the PO to exploring", () => {
+      const sid = uniqueSessionID("reopen-so")
+      const po = setPrimaryObjective(sid, "Initial Task", "Done when tests pass")
+      addSecondaryObjective(sid, "Subtask 1", "Initial work")
+      updateSecondaryObjective(sid, "SO-1", { status: "resolved", validationProof: "Passed test 1" })
+      updatePrimaryObjective(sid, { status: "resolved", validationProof: "All done" })
+      expect(po.status).toBe("resolved")
+
+      // User adds a new secondary objective
+      addSecondaryObjective(sid, "Subtask 2 (new user requirement)", "Discovered post-completion")
+      expect(po.status).toBe("exploring")
+    })
+
+    test("adding an open TO to a resolved SO and resolved PO cascades and reopens both to exploring", () => {
+      const sid = uniqueSessionID("reopen-to")
+      const po = setPrimaryObjective(sid, "Nested Project", "All levels done")
+      const so1 = addSecondaryObjective(sid, "Parent Subtask", "Oversized work")
+      addTertiaryObjective(sid, "SO-1", "Child 1", "Subtask part 1")
+      updateTertiaryObjective(sid, "SO-1-T1", { status: "resolved", validationProof: "Done T1" })
+      updateSecondaryObjective(sid, "SO-1", { status: "resolved", validationProof: "Done SO-1" })
+      updatePrimaryObjective(sid, { status: "resolved", validationProof: "Done PO" })
+
+      expect(po.status).toBe("resolved")
+      expect(so1.status).toBe("resolved")
+
+      // Adding a new open tertiary sub-objective
+      addTertiaryObjective(sid, "SO-1", "Child 2 (follow-up)", "Needs more work")
+      expect(so1.status).toBe("exploring")
+      expect(po.status).toBe("exploring")
+    })
+
+    test("reopening a TO via updateTertiaryObjective cascades and reopens both parent SO and PO", () => {
+      const sid = uniqueSessionID("reopen-update-to")
+      const po = setPrimaryObjective(sid, "Cascade Task", "Done")
+      const so1 = addSecondaryObjective(sid, "Parent Task", "Work")
+      addTertiaryObjective(sid, "SO-1", "Child 1", "Subpart")
+      updateTertiaryObjective(sid, "SO-1-T1", { status: "resolved", validationProof: "Passed" })
+      updateSecondaryObjective(sid, "SO-1", { status: "resolved", validationProof: "Passed SO" })
+      updatePrimaryObjective(sid, { status: "resolved", validationProof: "Passed PO" })
+
+      expect(po.status).toBe("resolved")
+      expect(so1.status).toBe("resolved")
+
+      // TO hits a regression and becomes blocked
+      const res = updateTertiaryObjective(sid, "SO-1-T1", { status: "blocked", blocker: "Regression detected in exit code 1" })
+      expect(res.success).toBe(true)
+      expect(res.parentReopened).toBe(true)
+      expect(res.poReopened).toBe(true)
+      expect(so1.status).toBe("exploring")
+      expect(po.status).toBe("exploring")
+    })
   })
 
   async function setupPluginInstanceLocal() {

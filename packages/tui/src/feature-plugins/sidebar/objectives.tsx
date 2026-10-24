@@ -242,6 +242,12 @@ export function extractObjectivesFromMessages(
                 validationProof: item?.validationProof || undefined,
               })
             }
+
+            // Invariante de coherencia jerárquica en reconstrucción:
+            // Al añadir un SO a un PO cerrado o en pausa, se reabre a 'exploring'
+            if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+              po.status = "exploring"
+            }
           }
         } else if (action === "update_secondary" || action === "update_secondaries") {
           if (po) {
@@ -308,6 +314,15 @@ export function extractObjectivesFromMessages(
                 blocker: item?.blocker || undefined,
                 validationProof: item?.validationProof || undefined,
               })
+            }
+
+            // Invariante de coherencia jerárquica en reconstrucción:
+            // Al añadir un TO abierto a un PO/SO cerrado, se reabren a 'exploring'
+            if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+              po.status = "exploring"
+            }
+            if (parent.status === "resolved") {
+              parent.status = "exploring"
             }
           }
         } else if (action === "update_tertiary" || action === "update_tertaries") {
