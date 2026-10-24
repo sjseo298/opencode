@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from "bun:test"
+import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import {
   HierarchicalObjectivesPlugin,
   setPrimaryObjective,
@@ -12,7 +12,32 @@ import {
   getObjectives,
   clearSessionObjectives,
   MAX_CONSECUTIVE_READS,
+  addFinding,
+  updateFinding,
+  addOption,
+  updateOption,
+  addFingerprint,
+  setDoDCriteria,
+  presentPlan,
+  resumePlan,
+  makeCheckpoint,
+  exportSession,
+  importSession,
+  hydrateSessionObjectives,
+  setObjectivesStore,
 } from "../../../src/plugin/builtin/hierarchical-objectives.js"
+import {
+  validateFindingFields,
+  runComplianceAudit,
+  searchFindings,
+  defaultFindingScore,
+  setFindingScorer,
+  parseDocument,
+  repairDocumentInvariants,
+  evaluateDoD,
+  renderProjection,
+} from "../../../src/plugin/builtin/objectives-model.js"
+import { createObjectivesStore } from "../../../src/plugin/builtin/objectives-persistence.js"
 
 let testCounter = 0
 function uniqueSessionID(prefix: string) {
@@ -852,4 +877,750 @@ describe("hierarchical-objectives plugin", () => {
       expect(po?.secondaries[0].children?.[1]?.status).toBe("resolved")
     })
   })
+
+  describe("Epistemic Layer Invariants (F-1..F-11)", () => {
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 1))
+
+    function makeFindingInput(overrides: Record<string, any> = {}) {
+      return {
+        title: "Cookie parsing fails on unicode domains",
+        result: "getCookie returns undefined for punycode encoded hostnames",
+        nextAction: "Add punycode normalization to the cookie parser",
+        evidence: { type: "FILE_READ", source: "auth/cookies.ts:42-58" },
+        ...overrides,
+      }
+    }
+
+    // ---------- Findings (F-2) ----------
+
+    test("addFinding rejects placeholder fields (anti-placeholder validation)", () => {
+      const sid = uniqueSessionID("finding-placeholder")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+
+      const shortTitle = addFinding(sid, makeFindingInput({ title: "TBD" }))
+      expect(shortTitle.success).toBe(false)
+      expect(shortTitle.error).toContain("anti-placeholder")
+
+      const todoResult = addFinding(sid, makeFindingInput({ result: "TODO: investigate later" }))
+      expect(todoResult.success).toBe(false)
+      expect(todoResult.error).toContain("placeholder")
+
+      const noSource = addFinding(sid, makeFindingInput({ evidence: { type: "FILE_READ", source: "" } }))
+      expect(noSource.success).toBe(false)
+      expect(noSource.error).toContain("evidence")
+    })
+
+    test("validateFindingFields reports each violation independently", () => {
+      const violations = validateFindingFields({ title: "x", result: "y", nextAction: "z", evidenceSource: "" })
+      expect(violations.length).toBe(4)
+      expect(validateFindingFields({
+        title: "A complete one-line statement",
+        result: "A literal observation from running the code",
+        nextAction: "Run the failing command again with verbose logging",
+        evidenceSource: "src/auth.ts:10-20",
+      })).toEqual([])
+    })
+
+    test("addFinding requires a valid soRef (existing SO id or PO)", () => {
+      const sid = uniqueSessionID("finding-soref")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+      addSecondaryObjective(sid, "Patch cookie parser", "Root cause lives in the parser")
+
+      expect(addFinding(sid, makeFindingInput({ soRef: "SO-1" })).success).toBe(true)
+      const bad = addFinding(sid, makeFindingInput({ soRef: "SO-99" }))
+      expect(bad.success).toBe(false)
+      expect(bad.error).toContain("soRef")
+    })
+
+    test("search-before-write: near-duplicate finding is rejected and points at the existing one", () => {
+      const sid = uniqueSessionID("finding-dup")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+      const first = addFinding(sid, makeFindingInput())
+      expect(first.success).toBe(true)
+      expect(first.finding?.id).toBe("F-001")
+
+      const duplicate = addFinding(
+        sid,
+        makeFindingInput({
+          title: "Cookie parsing fails on unicode domains",
+          result: "getCookie returns undefined for punycode encoded hostnames",
+        }),
+      )
+      expect(duplicate.success).toBe(false)
+      expect(duplicate.error).toContain("Search-before-write")
+      expect(duplicate.error).toContain("F-001")
+      expect(getObjectives(sid)!.findings!.length).toBe(1)
+    })
+
+    test("search-before-write: 0.55-0.68 similarity band creates with warning and forced seeAlso", () => {
+      const sid = uniqueSessionID("finding-band")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+      const first = addFinding(sid, makeFindingInput())
+      expect(first.success).toBe(true)
+
+      const related = addFinding(
+        sid,
+        makeFindingInput({
+          title: "Cookie parsing fails on international domains",
+          result: "Hostnames with international domains fail to parse",
+        }),
+      )
+      expect(related.success).toBe(true)
+      expect(related.finding?.id).toBe("F-002")
+      expect(related.warning).toBeDefined()
+      expect(related.finding?.seeAlso).toContain("F-001")
+    })
+
+    test("updateFinding extends in place and subsumes on request", () => {
+      const sid = uniqueSessionID("finding-update")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+      addFinding(sid, makeFindingInput())
+
+      const extended = updateFinding(sid, "F-001", {
+        result: "getCookie returns undefined for punycode encoded hostnames and IDN labels",
+      })
+      expect(extended.success).toBe(true)
+      expect(extended.finding?.lifecycle).toBe("EXTENDED")
+      expect(getObjectives(sid)!.findings!.length).toBe(1)
+
+      addFinding(
+        sid,
+        makeFindingInput({
+          title: "Older note about cookie edge cases in the parser",
+          result: "Parser mishandles certain internationalized domain names",
+        }),
+      )
+      const subsumed = updateFinding(sid, "F-002", { subsumedBy: "F-001" })
+      expect(subsumed.success).toBe(true)
+      expect(subsumed.finding?.lifecycle).toBe("SUBSUMED")
+      expect(subsumed.finding?.supersedes).toContain("F-001")
+    })
+
+    test("defaultFindingScore and searchFindings honor the scorer contract", () => {
+      const finding = {
+        id: "F-001",
+        soRef: "PO",
+        title: "Cookie parsing fails on unicode domains",
+        evidence: { type: "FILE_READ", source: "auth/cookies.ts:42-58", capturedAt: Date.now() },
+        result: "getCookie returns undefined for punycode encoded hostnames",
+        nextAction: "Add punycode normalization to the cookie parser",
+        seeAlso: [],
+        supersedes: [],
+        lifecycle: "NEW",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as any
+
+      expect(defaultFindingScore("cookie parsing unicode domains", finding)).toBeGreaterThan(0.68)
+      expect(defaultFindingScore("completely unrelated database migration topic", finding)).toBeLessThan(0.1)
+
+      const hits = searchFindings([finding], "cookie parsing unicode domains")
+      expect(hits.length).toBe(1)
+      expect(hits[0].score).toBeGreaterThan(0.68)
+
+      setFindingScorer({ score: () => 0.99 })
+      expect(searchFindings([finding], "anything at all")[0].score).toBe(0.99)
+      setFindingScorer(undefined)
+      expect(searchFindings([finding], "cookie parsing unicode domains")[0].score).toBeGreaterThan(0.68)
+    })
+
+    test("cosineSimilarity computes standard normalized cosine vector product", () => {
+      const { cosineSimilarity } = require("../../../src/plugin/builtin/objectives-embeddings.js")
+      expect(cosineSimilarity([1, 0], [1, 0])).toBe(1)
+      expect(cosineSimilarity([1, 0], [0, 1])).toBe(0)
+      expect(cosineSimilarity([1, 1], [1, 1])).toBe(1)
+      expect(cosineSimilarity([], [])).toBe(0)
+    })
+
+    // ---------- Options (F-5) ----------
+
+    test("SUCCESSFUL option auto-cancels open siblings and requires proofRef", () => {
+      const sid = uniqueSessionID("option-success")
+      setPrimaryObjective(sid, "Pick Auth Strategy", "One strategy adopted")
+      addOption(sid, "Adopt JWT rotation middleware for all services")
+      addOption(sid, "Adopt opaque session tokens with server-side store")
+      addOption(sid, "Adopt signed cookies with per-domain scopes")
+
+      const noProof = updateOption(sid, "OPT-1", { status: "SUCCESSFUL" })
+      expect(noProof.success).toBe(false)
+      expect(noProof.error).toContain("proofRef")
+
+      const ok = updateOption(sid, "OPT-1", { status: "SUCCESSFUL", proofRef: "bun test auth -> 34 passed, exit code 0" })
+      expect(ok.success).toBe(true)
+
+      const po = getObjectives(sid)!
+      expect(po.options!.find((o) => o.id === "OPT-1")?.status).toBe("SUCCESSFUL")
+      expect(po.options!.find((o) => o.id === "OPT-2")?.status).toBe("CANCELLED")
+      expect(po.options!.find((o) => o.id === "OPT-3")?.status).toBe("CANCELLED")
+      expect(po.options!.find((o) => o.id === "OPT-2")?.result).toContain("Cancelled: OPT-1")
+
+      const second = updateOption(sid, "OPT-2", { status: "SUCCESSFUL", proofRef: "bun test -> passed" })
+      expect(second.success).toBe(false)
+      expect(second.error).toContain("at most one per topic")
+    })
+
+    test("DISCARDED option requires a reason (silent discard prohibited)", () => {
+      const sid = uniqueSessionID("option-discard")
+      setPrimaryObjective(sid, "Pick Auth Strategy", "One strategy adopted")
+      addOption(sid, "Adopt JWT rotation middleware for all services")
+
+      const noReason = updateOption(sid, "OPT-1", { status: "DISCARDED" })
+      expect(noReason.success).toBe(false)
+      expect(noReason.error).toContain("reason")
+
+      const withReason = updateOption(sid, "OPT-1", { status: "DISCARDED", reason: "Token store does not meet the latency budget measured in the load test" })
+      expect(withReason.success).toBe(true)
+      expect(getObjectives(sid)!.options![0].status).toBe("DISCARDED")
+    })
+
+    test("finding impactOnOption updates the option atomically and validates it first", () => {
+      const sid = uniqueSessionID("finding-option")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+      addFinding(sid, makeFindingInput())
+      addOption(sid, "Adopt JWT rotation middleware for all services")
+
+      const rejected = updateFinding(sid, "F-001", {
+        impactOnOption: { optionId: "OPT-1", newStatus: "DISCARDED", reason: "" },
+      })
+      expect(rejected.success).toBe(false)
+      expect(getObjectives(sid)!.options![0].status).toBe("PENDING")
+
+      const ok = updateFinding(sid, "F-001", {
+        impactOnOption: { optionId: "OPT-1", newStatus: "DISCARDED", reason: "Root cause is upstream in the parser, not the auth layer" },
+      })
+      expect(ok.success).toBe(true)
+      expect(getObjectives(sid)!.options![0].status).toBe("DISCARDED")
+      expect(getObjectives(sid)!.findings![0].impactOnOption?.optionId).toBe("OPT-1")
+    })
+
+    // ---------- Decomposed DoD + complete_primary gate (F-3) ----------
+
+    test("complete_primary rejects while a DoD criterion lacks a proofRef", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-gate")
+
+      const r1 = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Ship Feature X",
+          definitionOfDone: "Feature works end to end",
+          dodCriteria: [{ statement: "All tests pass", verifiableBy: "bun test" }],
+        },
+        { sessionID: sid },
+      )
+      expect(r1.output.success).toBe(true)
+
+      const r2 = await tool.execute(
+        { action: "add_secondary", title: "Implement feature", rationale: "Core work" },
+        { sessionID: sid },
+      )
+      expect(r2.output.success).toBe(true)
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "bun test -> 42 passed, exit code 0" },
+        { sessionID: sid },
+      )
+
+      const blocked = await tool.execute(
+        { action: "complete_primary", validationProof: "Manual smoke test passed" },
+        { sessionID: sid },
+      )
+      expect(blocked.output.success).toBe(false)
+      expect(blocked.output.message).toMatch(/proofRef|Definition of Done/i)
+
+      const r3 = await tool.execute(
+        {
+          action: "update_dod",
+          dodCriteria: [{ id: "D1", statement: "All tests pass", verifiableBy: "bun test", proofRef: "bun test -> 42 passed, exit code 0" }],
+        },
+        { sessionID: sid },
+      )
+      expect(r3.output.success).toBe(true)
+
+      const done = await tool.execute(
+        { action: "complete_primary", validationProof: "Manual smoke test passed" },
+        { sessionID: sid },
+      )
+      expect(done.output.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("resolved")
+    })
+
+    test("evaluateDoD: explicit criteria need proofRef and verifiableBy; legacy falls back to PO proof", () => {
+      const explicit = evaluateDoD({
+        dod: [
+          { id: "D1", statement: "Tests pass", verifiableBy: "bun test", satisfiedBy: [], proofRef: "bun test -> ok" },
+          { id: "D2", statement: "Docs updated", verifiableBy: "", satisfiedBy: [] },
+        ],
+      })
+      expect(explicit.legacy).toBe(false)
+      expect(explicit.criteria[0].satisfied).toBe(true)
+      expect(explicit.criteria[1].satisfied).toBe(false)
+
+      const legacy = evaluateDoD({ definitionOfDone: "It works", validationProof: "" })
+      expect(legacy.legacy).toBe(true)
+      expect(legacy.criteria[0].satisfied).toBe(false)
+      expect(evaluateDoD({ definitionOfDone: "It works", validationProof: "curl -> HTTP 200" }).criteria[0].satisfied).toBe(true)
+    })
+
+    // ---------- Compliance audit (F-4) ----------
+
+    test("resolved SO with unvalidated root-cause phrasing is rejected by the audit", () => {
+      const sid = uniqueSessionID("audit-cause")
+      setPrimaryObjective(sid, "Fix Intermittent Failure", "Stable under load")
+      addSecondaryObjective(sid, "Investigate flaky timeout", "Failure appears under load")
+
+      const rejected = updateSecondaryObjective(sid, "SO-1", {
+        status: "resolved",
+        validationProof: "The root cause is the retry loop, it should now work",
+      })
+      expect(rejected.success).toBe(false)
+      expect(rejected.error).toMatch(/root cause|audit/i)
+
+      const accepted = updateSecondaryObjective(sid, "SO-1", {
+        status: "resolved",
+        validationProof: "Ran load test -> 0 failures in 1000 requests, exit code 0",
+      })
+      expect(accepted.success).toBe(true)
+    })
+
+    test("blocked SO declaring an unvalidated root cause is rejected", () => {
+      const sid = uniqueSessionID("audit-blocked")
+      setPrimaryObjective(sid, "Fix Intermittent Failure", "Stable under load")
+      addSecondaryObjective(sid, "Investigate flaky timeout", "Failure appears under load")
+
+      const rejected = updateSecondaryObjective(sid, "SO-1", {
+        status: "blocked",
+        blocker: "logically the session store is the culprit",
+      })
+      expect(rejected.success).toBe(false)
+      expect(rejected.error).toMatch(/root cause|unvalidated|audit/i)
+    })
+
+    test("runComplianceAudit flags empty EXPLORING results, DISCARDED without reason, SUCCESSFUL without proofRef", () => {
+      const audit = runComplianceAudit({
+        secondaries: [],
+        options: [
+          { id: "OPT-1", statement: "s".repeat(20), status: "EXPLORING", result: "", createdAt: 0, updatedAt: 0 },
+          { id: "OPT-2", statement: "s".repeat(20), status: "DISCARDED", result: "", reason: "", createdAt: 0, updatedAt: 0 },
+          { id: "OPT-3", statement: "s".repeat(20), status: "SUCCESSFUL", result: "done", proofRef: "", createdAt: 0, updatedAt: 0 },
+        ],
+      } as any)
+      expect(audit.pass).toBe(false)
+      expect(audit.violations.some((v) => v.startsWith("OPT-1"))).toBe(true)
+      expect(audit.violations.some((v) => v.startsWith("OPT-2"))).toBe(true)
+      expect(audit.violations.some((v) => v.startsWith("OPT-3"))).toBe(true)
+    })
+
+    // ---------- Fingerprints (blocker memory) ----------
+
+    test("fingerprints dedupe by normalized key and gate re-opening without justification", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("fingerprint")
+      setPrimaryObjective(sid, "Fix Cookie Bug", "Cookies parse on all domains")
+      addSecondaryObjective(sid, "Patch cookie parser", "Root cause lives in the parser")
+
+      const fp1 = addFingerprint(sid, { symptom: "Cookie parsing fails on unicode domains", soRef: "SO-1", fixRef: "F-001" })
+      expect(fp1.success).toBe(true)
+      const fp2 = addFingerprint(sid, { symptom: "unicode domains cookie parsing fails", soRef: "SO-1", fixRef: "F-002" })
+      expect(fp2.success).toBe(true)
+      expect(getObjectives(sid)!.fingerprints!.length).toBe(1)
+      expect(getObjectives(sid)!.fingerprints![0].fixRef).toBe("F-002")
+
+      const collision = await tool.execute(
+        { action: "add_secondary", title: "Cookie parsing fails on unicode domains", rationale: "Re-investigate the unicode domain failure" },
+        { sessionID: sid },
+      )
+      expect(collision.output.success).toBe(false)
+      expect(collision.output.message).toContain("justification")
+
+      const justified = await tool.execute(
+        {
+          action: "add_secondary",
+          title: "Cookie parsing fails on unicode domains",
+          rationale: "New failure mode after the punycode patch",
+          justification: "Failure reappeared with a different stack trace on IDN labels",
+        },
+        { sessionID: sid },
+      )
+      expect(justified.output.success).toBe(true)
+    })
+
+    // ---------- Plan pause / checkpoint (F-6) ----------
+
+    test("present_plan freezes the tree; resume_plan restores mutation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("plan-pause")
+      setPrimaryObjective(sid, "Refactor Billing", "Billing suite green")
+
+      const presented = presentPlan(sid, "Awaiting user decision on the API shape")
+      expect(presented.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+      expect(getObjectives(sid)!.phase?.paused).toBe(true)
+
+      const frozen = await tool.execute(
+        { action: "add_secondary", title: "Add a new subtask while paused", rationale: "Should be rejected" },
+        { sessionID: sid },
+      )
+      expect(frozen.output.success).toBe(false)
+      expect(frozen.output.message).toContain("FROZEN")
+
+      const resumed = resumePlan(sid, "Proceed with option A")
+      expect(resumed.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
+
+      const unfrozen = await tool.execute(
+        { action: "add_secondary", title: "Add billing retry queue", rationale: "Needed for reliability" },
+        { sessionID: sid },
+      )
+      expect(unfrozen.output.success).toBe(true)
+    })
+
+    test("makeCheckpoint derives a phase report from the tree only", () => {
+      const sid = uniqueSessionID("checkpoint")
+      setPrimaryObjective(sid, "Refactor Billing", "Billing suite green")
+      addSecondaryObjective(sid, "Extract invoice mapper", "Pure function extraction")
+      updateSecondaryObjective(sid, "SO-1", { status: "resolved", validationProof: "bun test billing -> 18 passed, exit code 0" })
+      setDoDCriteria(sid, [{ statement: "Billing tests green", verifiableBy: "bun test billing", proofRef: "bun test billing -> 18 passed" }])
+      addFinding(sid, makeFindingInput())
+
+      const checkpoint = makeCheckpoint(sid, "End of day 1")
+      expect(checkpoint.success).toBe(true)
+      expect(checkpoint.report).toContain("Phase Checkpoint")
+      expect(checkpoint.report).toContain("DoD: 1/1")
+      expect(checkpoint.report).toContain("SO-1")
+      expect(checkpoint.report).toContain("F-001")
+      expect(checkpoint.report).toContain("PAUSED")
+      expect(getObjectives(sid)!.phase?.paused).toBe(true)
+    })
+
+    // ---------- Anti-loop actionLog (F-9) ----------
+
+    test("repeated identical read actions on the active SO surface a value-first warning", async () => {
+      const { getRegisteredTool, toolHooks } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("anti-loop")
+      setPrimaryObjective(sid, "Trace Memory Leak", "Heap stable after 1h")
+      addSecondaryObjective(sid, "Profile heap growth", "Find the allocation source")
+
+      const hooks = toolHooks["execute.after"] ?? []
+      for (let i = 0; i < 2; i++) {
+        for (const hook of hooks) {
+          await hook({ sessionID: sid, tool: "read", input: { path: "src/heap.ts" } })
+        }
+      }
+
+      const result = await tool.execute({ action: "list" }, { sessionID: sid })
+      expect(result.content).toContain("Repeated action")
+      expect(result.content).toContain("SO-1")
+    })
+
+    // ---------- Documentation gate (F-10) ----------
+
+    test("complete_primary auto-creates a documentation SO when public-surface files changed", async () => {
+      const { getRegisteredTool, toolHooks } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("docs-gate")
+      setPrimaryObjective(sid, "Add Public API Flag", "Flag documented and shipped")
+      addSecondaryObjective(sid, "Implement flag", "Core feature work")
+
+      const hooks = toolHooks["execute.after"] ?? []
+      for (const hook of hooks) {
+        await hook({ sessionID: sid, tool: "write", input: { path: "README.md" } })
+      }
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "bun test -> 9 passed, exit code 0" },
+        { sessionID: sid },
+      )
+
+      const gated = await tool.execute({ action: "complete_primary", validationProof: "Flag works end to end" }, { sessionID: sid })
+      expect(gated.output.success).toBe(false)
+      expect(gated.output.message).toContain("Documentation gate")
+      expect(gated.output.message).toContain("README.md")
+
+      const po = getObjectives(sid)!
+      const docsSO = po.secondaries.find((s) => /documentation/i.test(s.title))
+      expect(docsSO).toBeDefined()
+    })
+
+    test("complete_primary auto-creates a documentation SO when public-surface code files (package.json, schema) change", async () => {
+      const { getRegisteredTool, toolHooks } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("docs-gate-code")
+      setPrimaryObjective(sid, "Add New Config Schema", "Schema shipped")
+      addSecondaryObjective(sid, "Implement schema", "Core change")
+
+      const hooks = toolHooks["execute.after"] ?? []
+      for (const hook of hooks) {
+        await hook({ sessionID: sid, tool: "write", input: { path: "src/config/schema.ts" } })
+      }
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "bun test -> ok" },
+        { sessionID: sid },
+      )
+
+      const gated = await tool.execute({ action: "complete_primary", validationProof: "Ready" }, { sessionID: sid })
+      expect(gated.output.success).toBe(false)
+      expect(gated.output.message).toContain("Documentation gate")
+      expect(gated.output.message).toContain("schema.ts")
+
+      const po = getObjectives(sid)!
+      const docsSO = po.secondaries.find((s) => /documentation/i.test(s.title))
+      expect(docsSO).toBeDefined()
+    })
+
+    test("complete_primary ignores test-only files but triggers on any production source file (e.g. py, go, rust, ts)", async () => {
+      const { getRegisteredTool, toolHooks } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("docs-gate-universal")
+      setPrimaryObjective(sid, "Python Backend Change", "Backend verified")
+      addSecondaryObjective(sid, "Refactor handler", "Core work")
+
+      const hooks = toolHooks["execute.after"] ?? []
+      // 1. Only test files touched -> does NOT force documentation
+      for (const hook of hooks) {
+        await hook({ sessionID: sid, tool: "write", input: { path: "tests/test_handler.py" } })
+      }
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "pytest -> ok" },
+        { sessionID: sid },
+      )
+
+      const doneTestOnly = await tool.execute({ action: "complete_primary", validationProof: "Tests pass" }, { sessionID: sid })
+      expect(doneTestOnly.output.success).toBe(true)
+
+      // 2. Production source touched -> triggers documentation gate
+      const sid2 = uniqueSessionID("docs-gate-py-prod")
+      setPrimaryObjective(sid2, "Python Core Logic", "Core logic updated")
+      addSecondaryObjective(sid2, "Patch engine", "Core patch")
+      for (const hook of hooks) {
+        await hook({ sessionID: sid2, tool: "write", input: { path: "services/engine/worker.py" } })
+      }
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "pytest -> ok" },
+        { sessionID: sid2 },
+      )
+
+      const gated = await tool.execute({ action: "complete_primary", validationProof: "Done" }, { sessionID: sid2 })
+      expect(gated.output.success).toBe(false)
+      expect(gated.output.message).toContain("Documentation gate")
+      expect(gated.output.message).toContain("worker.py")
+    })
+
+    test("one-shot /btw session.generate evaluator confirms relevant files and records them in relevantDocumentableFiles", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("docs-btw-eval")
+      setPrimaryObjective(sid, "Plugin Evolution", "Plugin verified")
+      addSecondaryObjective(sid, "Update plugin code", "Core patch")
+
+      const { setSessionGenerator } = await import("../../../src/plugin/builtin/hierarchical-objectives.js")
+      let generatorPromptReceived = ""
+      setSessionGenerator(async ({ prompt }) => {
+        generatorPromptReceived = prompt
+        return "YES - this file alters the public billing interface"
+      })
+
+      const hooks = toolHooks["execute.after"] ?? []
+      for (const hook of hooks) {
+        await hook({ sessionID: sid, tool: "write", input: { path: "billing/checkout.ts" } })
+      }
+
+      // Small tick for background promise resolution
+      await new Promise((r) => setTimeout(r, 10))
+
+      expect(generatorPromptReceived).toContain("billing/checkout.ts")
+      const po = getObjectives(sid)!
+      expect(po.relevantDocumentableFiles).toContain("billing/checkout.ts")
+
+      // Subsequent modification of an already relevant file skips session.generate (zero overhead)
+      let secondCallAttempted = false
+      setSessionGenerator(async () => {
+        secondCallAttempted = true
+        return "YES"
+      })
+      for (const hook of hooks) {
+        await hook({ sessionID: sid, tool: "edit", input: { path: "billing/checkout.ts" } })
+      }
+      await new Promise((r) => setTimeout(r, 10))
+      expect(secondCallAttempted).toBe(false)
+
+      setSessionGenerator(undefined)
+    })
+
+    // ---------- Cross-session persistence (F-1) ----------
+
+    describe("persistence round-trip", () => {
+      afterEach(() => {
+        setObjectivesStore(undefined)
+      })
+
+      test("tree auto-persists and hydrates after in-memory loss", async () => {
+        const kv = new Map<string, unknown>()
+        setObjectivesStore(
+          createObjectivesStore({
+            get: async (key) => kv.get(key),
+            set: async (key, value) => {
+              kv.set(key, value)
+            },
+            remove: async (key) => {
+              kv.delete(key)
+            },
+          }),
+        )
+
+        const sid = uniqueSessionID("persist")
+        setPrimaryObjective(sid, "Persisted Objective", "Survives restart")
+        addSecondaryObjective(sid, "Subtask A", "Needed for the goal")
+        addFinding(sid, makeFindingInput())
+        addOption(sid, "Adopt JWT rotation middleware for all services")
+        await flush()
+
+        expect(kv.has(`objectives/v1/${sid}`)).toBe(true)
+
+        clearSessionObjectives(sid)
+        expect(getObjectives(sid)).toBeUndefined()
+
+        await hydrateSessionObjectives(sid)
+        const po = getObjectives(sid)
+        expect(po?.title).toBe("Persisted Objective")
+        expect(po?.secondaries.length).toBe(1)
+        expect(po?.findings?.length).toBe(1)
+        expect(po?.options?.length).toBe(1)
+      })
+
+      test("exportSession registers a topic key; importSession hydrates a new session from the payload", async () => {
+        const kv = new Map<string, unknown>()
+        setObjectivesStore(
+          createObjectivesStore({
+            get: async (key) => kv.get(key),
+            set: async (key, value) => {
+              kv.set(key, value)
+            },
+            remove: async (key) => {
+              kv.delete(key)
+            },
+          }),
+        )
+
+        const sid = uniqueSessionID("export")
+        setPrimaryObjective(sid, "Topic Objective", "Done when verified")
+        addFinding(sid, makeFindingInput())
+        await flush()
+
+        const exported = exportSession(sid, "outlook_bulk_triage")
+        expect(exported.success).toBe(true)
+        const payload = JSON.parse(exported.payload!)
+        expect(payload.version).toBe(1)
+        expect(payload.title).toBe("Topic Objective")
+        await flush()
+        expect(kv.has("objectives/v1/topic/outlook_bulk_triage")).toBe(true)
+
+        const sid2 = uniqueSessionID("import")
+        const imported = importSession(sid2, { tree: exported.payload! })
+        expect(imported.success).toBe(true)
+        expect(getObjectives(sid2)?.title).toBe("Topic Objective")
+        expect(getObjectives(sid2)?.findings?.length).toBe(1)
+        expect(exported.report).toContain("Topic Objective")
+      })
+    })
+
+    // ---------- Document boundary + projection (F-11) ----------
+
+    test("parseDocument validates the boundary; repairDocumentInvariants reverts corrupt resolved POs", () => {
+      expect(parseDocument(null)).toBeUndefined()
+      expect(parseDocument({})).toBeUndefined()
+      expect(parseDocument({ title: "X" })?.secondaries).toEqual([])
+
+      const doc = parseDocument({
+        title: "Broken",
+        status: "resolved",
+        secondaries: [
+          { id: "SO-1", title: "Open work", status: "pending", rationale: "r", createdAt: 0, updatedAt: 0 },
+        ],
+      })!
+      const repairs = repairDocumentInvariants(doc)
+      expect(doc.status).toBe("exploring")
+      expect(repairs.length).toBe(1)
+      expect(repairs[0]).toContain("reverted to exploring")
+    })
+
+    test("renderProjection renders the single-vocabulary tree including findings and options", () => {
+      const report = renderProjection({
+        title: "Ship Feature X",
+        status: "exploring",
+        definitionOfDone: "Feature works end to end",
+        secondaries: [
+          {
+            id: "SO-1",
+            title: "Implement feature",
+            status: "exploring",
+            rationale: "Core work",
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        ],
+        findings: [
+          {
+            id: "F-001",
+            soRef: "SO-1",
+            title: "Cookie parsing fails on unicode domains",
+            evidence: { type: "FILE_READ", source: "auth/cookies.ts:42-58", capturedAt: 0 },
+            result: "getCookie returns undefined for punycode encoded hostnames",
+            nextAction: "Add punycode normalization to the cookie parser",
+            seeAlso: [],
+            supersedes: [],
+            lifecycle: "NEW",
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        ],
+        options: [
+          { id: "OPT-1", statement: "Adopt JWT rotation middleware for all services", status: "EXPLORING", result: "Load test running", createdAt: 0, updatedAt: 0 },
+        ],
+        dod: [],
+        touchedFiles: [],
+        createdAt: 0,
+        updatedAt: 0,
+      } as any)
+      expect(report).toContain("Ship Feature X")
+      expect(report).toContain("SO-1")
+      expect(report).toContain("F-001")
+      expect(report).toContain("OPT-1")
+    })
+  })
+
+  async function setupPluginInstanceLocal() {
+    const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+    const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+    let registeredTool: any = null
+
+    const mockCtx = {
+      options: {},
+      session: {
+        todo: async () => [],
+        hook: async (name: string, handler: any) => {
+          sessionHooks[name] = sessionHooks[name] ?? []
+          sessionHooks[name].push(handler)
+        },
+      },
+      tool: {
+        transform: async (callback: (editor: any) => void) => {
+          const editor = {
+            add: (tool: any) => {
+              registeredTool = tool
+            },
+          }
+          callback(editor)
+        },
+        hook: async (name: string, handler: any) => {
+          toolHooks[name] = toolHooks[name] ?? []
+          toolHooks[name].push(handler)
+        },
+      },
+    }
+
+    await HierarchicalObjectivesPlugin.setup(mockCtx as any)
+    return { sessionHooks, toolHooks, getRegisteredTool: () => registeredTool }
+  }
 })

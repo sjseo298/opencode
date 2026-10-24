@@ -29,12 +29,34 @@ function formatObjectivesSnapshot(po: any) {
     `[PO] ${po.title} [${po.status?.toUpperCase() ?? "EXPLORING"}]`,
     `Definition of Done: ${po.definitionOfDone || "Verified"}`,
   ]
+  const dodList = Array.isArray(po.dodCriteria)
+    ? po.dodCriteria
+    : Array.isArray(po.dod)
+      ? po.dod
+      : []
+  if (dodList.length > 0) {
+    for (const c of dodList) {
+      lines.push(`  - [${c.id ?? "DoD"}] ${c.statement ?? ""}${c.proofRef ? ` (proof: ${c.proofRef})` : ""}`)
+    }
+  }
   if (Array.isArray(po.secondaries)) {
     for (const so of po.secondaries) {
       lines.push(`  - [${so.id}] [${so.status?.toUpperCase() ?? "PENDING"}] ${so.title}`)
       if (so.rationale) lines.push(`    Rationale: ${so.rationale}`)
       if (so.blocker) lines.push(`    Blocker: ${so.blocker}`)
       if (so.validationProof) lines.push(`    Proof: ${so.validationProof}`)
+    }
+  }
+  if (Array.isArray(po.findings) && po.findings.length > 0) {
+    lines.push("Findings:")
+    for (const f of po.findings) {
+      lines.push(`  - [${f.id}] [${f.lifecycle?.toUpperCase() ?? "NEW"}] ${f.title}${f.result ? ` — ${f.result}` : ""}`)
+    }
+  }
+  if (Array.isArray(po.options) && po.options.length > 0) {
+    lines.push("Options:")
+    for (const o of po.options) {
+      lines.push(`  - [${o.id}] [${o.status?.toUpperCase() ?? "PENDING"}] ${o.statement}${o.result ? ` — ${o.result}` : ""}`)
     }
   }
   return [

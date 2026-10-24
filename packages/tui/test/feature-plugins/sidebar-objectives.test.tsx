@@ -450,4 +450,33 @@ describe("SidebarObjectives TUI component", () => {
     expect(po?.secondaries[0].children?.[0]?.id).toBe("SO-2-T1")
     expect(po?.secondaries[0].children?.[0]?.status).toBe("pending")
   })
+
+  test("hydrates findings, options, and dod fallback from memory and messages", () => {
+    const sid = "test-session-epistemic"
+    const memoryTree = {
+      title: "Epistemic Task",
+      status: "presented_awaiting_confirmation",
+      definitionOfDone: "Verify DoD",
+      dod: [{ id: "D1", statement: "Criteria 1", proofRef: "proof" }],
+      findings: [
+        { id: "F-001", title: "Cookie bug", lifecycle: "NEW", result: "observed", evidence: { source: "src/auth.ts" } },
+      ],
+      options: [
+        { id: "OPT-1", statement: "Strategy A", status: "DISCARDED", result: "failed", reason: "slow" },
+        { id: "OPT-2", statement: "Strategy B", status: "SUCCESSFUL", result: "ok" },
+      ],
+      secondaries: [],
+    }
+    ;(globalThis as any).__OPENCODE_OBJECTIVES__ = new Map([[sid, memoryTree]])
+
+    const po = extractObjectivesFromMessages(sid, [])
+    expect(po).toBeDefined()
+    expect(po?.status).toBe("presented_awaiting_confirmation")
+    expect(po?.dodCriteria?.length).toBe(1)
+    expect(po?.dodCriteria?.[0]?.statement).toBe("Criteria 1")
+    expect(po?.findings?.length).toBe(1)
+    expect(po?.options?.length).toBe(2)
+    // DISCARDED sibling was preserved when OPT-2 became SUCCESSFUL
+    expect(po?.options?.find((o) => o.id === "OPT-1")?.status).toBe("DISCARDED")
+  })
 })

@@ -450,10 +450,101 @@ Updates status, blocker, or validation proof of a Tertiary Objective by its own 
 
 **Closure rule (no shortcuts):** an SO cannot be resolved while any of its TOs is open; the PO cannot complete until every SO and all their TOs are closed — both shortcuts are rejected by the tool with a concrete error listing the blocking ids.
 
-#### Action 7: `list` (Aliases: `get_tree`, `show`)
-Returns the complete formatted text tree of objectives, with tertiary sub-objectives nested under their parent SO.
+#### Action 7: `add_finding` / `update_finding` / `search_findings` (Epistemic Layer, F-2)
+Findings (`F-NNN`) are first-class, search-before-write knowledge entities with typed evidence:
+```json
+{
+  "action": "add_finding",
+  "soRef": "SO-1",
+  "title": "Cookie parsing fails on punycode domains",
+  "evidence": { "type": "FILE_READ", "source": "packages/core/src/auth/cookies.ts:42-58" },
+  "result": "getCookie returns undefined for hostnames with xn-- prefix",
+  "nextAction": "Add IDN normalization step prior to cookie map lookup"
+}
+```
+Invariants:
+- **Typed evidence**: `COMMAND_OUTPUT`, `QUERY_RESULT`, `LOG_EXCERPT`, `FILE_READ`, `SCREENSHOT` with non-empty `source`.
+- **Anti-placeholder validation**: `title`, `result`, `nextAction` must be >=15 chars and contain no placeholder markers (`TBD`, `TODO`, `<...>`, etc.).
+- **Search-before-write**: queries existing findings. Score $\ge 0.68 \implies$ rejected as non-novel (must extend in place via `update_finding`). Score $0.55 .. 0.68 \implies$ created with similarity warning and forced `seeAlso`. Score $< 0.55 \implies$ created clean.
+- **In-place extension**: update via `update_finding` (`findingId="F-001"`). Mark superseded findings with `subsumedBy="F-001"`.
 
-### 11.4 Comparison: Standard TODO vs. Protocolo de Objetivos
+#### Action 8: `add_option` / `update_option` (Multi-candidate, F-5)
+Manages hypotheses/architectural candidates with a live `Result` column:
+```json
+{
+  "action": "add_option",
+  "statement": "Adopt JWT rotation middleware for all internal services"
+}
+```
+Update status with concrete results:
+```json
+{
+  "action": "update_option",
+  "optionId": "OPT-1",
+  "optionStatus": "SUCCESSFUL",
+  "proofRef": "bun test auth-perf -> 34 passed, latency within 5ms budget"
+}
+```
+Invariants:
+- **At most 1 SUCCESSFUL** candidate per topic (requires `proofRef`).
+- **Sibling auto-cancellation**: marking an option `SUCCESSFUL` automatically transitions all remaining non-`DISCARDED` siblings to `CANCELLED`.
+- **No silent discard**: `DISCARDED` requires an explicit `reason`.
+
+#### Action 9: `update_dod` (Decomposed Definition of Done, F-3)
+Decomposes acceptance criteria into verifiable rows:
+```json
+{
+  "action": "update_dod",
+  "dodCriteria": [
+    { "statement": "All regression tests pass", "verifiableBy": "bun test", "proofRef": "51 passed, exit 0" },
+    { "statement": "No new compiler errors", "verifiableBy": "bun run check", "proofRef": "34/34 tasks successful" }
+  ]
+}
+```
+Gate: `complete_primary` will reject closure until **every** declared criterion has a `proofRef` and `verifiableBy`.
+
+#### Action 10: `add_fingerprint` (Blocker Memory, F-7)
+Records canonical blocker signatures so future sessions can look them up instead of re-analyzing:
+```json
+{
+  "action": "add_fingerprint",
+  "symptom": "Cookie parsing fails on unicode domains",
+  "soRef": "SO-1",
+  "fixRef": "F-001"
+}
+```
+Re-opening an SO whose title matches a known resolved/discarded fingerprint requires an explicit `justification`.
+
+#### Action 11: `present_plan` / `resume_plan` / `checkpoint` (Plan Pause, F-6)
+- `present_plan`: Freezes the objective tree (`status: presented_awaiting_confirmation`). All mutating actions are rejected with a clear message until the user confirms.
+- `resume_plan`: Unfreezes the plan with the user's explicit instructions (`note`).
+- `checkpoint`: Derives a phase progress report strictly from the tree, pauses execution, and requests confirmation before advancing to the next phase.
+
+#### Action 12: `sync` / `export_tree` / `import_tree` (Cross-Session Persistence, F-1)
+The tree is automatically persisted to plugin storage (`objectives/v1/<sessionID>`).
+- `sync`: Rehydrates from disk after compaction or restart; storage wins over stale memory.
+- `export_tree`: Returns the versioned JSON document and updates the topic key (`objectives/v1/topic/<topicKey>`).
+- `import_tree`: Loads a tree document from a JSON string or cross-session `topicKey`.
+
+#### Action 13: `audit` (Compliance Audit, F-4)
+Runs the mechanical compliance audit on demand (also enforced automatically on status transitions). Fails on unvalidated root-cause phrasing (`"root cause is"`, `"should pass"`, etc.) lacking adjacent execution evidence markers (`exit code`, `passed`, `HTTP 200`, etc.).
+
+#### Action 14: `list` (Aliases: `get_tree`, `show`)
+Returns the complete formatted text tree of objectives, with tertiary sub-objectives nested under their parent SO, alongside findings, options, and phase status.
+
+### 11.4 Architecture Decision Record (ADR): Epistemic Layer in Protocolo de Objetivos
+
+- **Status**: Implemented & Verified
+- **Context**: Previous iterations suffered from (1) losing objective context across process restarts, (2) stale or hand-mirrored findings scattered in conversation messages, (3) conflicting options explored without explicit cancellation of alternatives, and (4) premature closure of the Primary Objective while subtasks remained open or unverified.
+- **Decision**: Integrate features F-1..F-11 directly into `@opencode/core`'s `hierarchical-objectives` builtin plugin:
+  1. *Source of Truth*: Plugin storage (`ctx.storage`) with versioned serialization and automatic hydration; message-history reconstruction kept as secondary fallback.
+  2. *First-Class Epistemic Entities*: Findings (`F-NNN`) and Options (`OPT-N`) with server-side invariants, anti-placeholder gates, and search-before-write validation.
+  3. *Strict Gates*: `complete_primary` enforces resolution of all SOs and TOs, `proofRef` on all DoD criteria, clean compliance audit, and documentation updates for public-surface changes.
+  4. *Freeze State Machine*: `present_plan` rejects mutating actions until explicit `resume_plan`.
+  5. *Deadlock-Free Anti-Loop*: Read counter resets upon throwing to prevent inspection deadlocks.
+- **Consequences**: Tree state is robust across compaction and reloads. Deduplication and proof enforcement prevent phantom progress and speculative claims.
+
+### 11.5 Comparison: Standard TODO vs. Protocolo de Objetivos
 
 | Feature | Standard OpenCode TODO | Protocolo de Objetivos |
 |---|---|---|

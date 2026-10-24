@@ -28,15 +28,85 @@ export interface SecondaryObjectiveView {
   children?: TertiaryObjectiveView[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
 }
 
+export type PrimaryObjectiveStatus =
+  | "pending"
+  | "exploring"
+  | "resolved"
+  | "presented_awaiting_confirmation"
+
+export type FindingLifecycle = "NEW" | "EXTENDED" | "SUBSUMED"
+
+export type OptionStatusView = "PENDING" | "EXPLORING" | "DISCARDED" | "SUCCESSFUL" | "CANCELLED"
+
+export interface DoDCriterionView {
+  id: string
+  statement: string
+  proofRef?: string
+}
+
+export interface FindingView {
+  id: string // "F-001"
+  title: string
+  lifecycle: FindingLifecycle
+  result: string
+  soRef?: string
+  evidenceType?: string
+}
+
+export interface OptionView {
+  id: string // "OPT-1"
+  statement: string
+  status: OptionStatusView
+  result?: string
+  reason?: string
+}
+
 export interface PrimaryObjectiveView {
   title: string
-  status: "pending" | "exploring" | "resolved"
+  status: PrimaryObjectiveStatus
   definitionOfDone: string
   secondaries: SecondaryObjectiveView[]
+  dodCriteria?: DoDCriterionView[]
+  findings?: FindingView[]
+  options?: OptionView[]
+  checkpointNote?: string
 }
 
 declare global {
   var __OPENCODE_OBJECTIVES__: Map<string, any> | undefined
+}
+
+function nextFindingIdView(findings: FindingView[]): string {
+  let maxIdx = 0
+  for (const f of findings) {
+    const match = f.id.match(/^F-(\d+)$/i)
+    if (match) maxIdx = Math.max(maxIdx, parseInt(match[1], 10))
+  }
+  return `F-${String(maxIdx + 1).padStart(3, "0")}`
+}
+
+function nextOptionIdView(options: OptionView[]): string {
+  let maxIdx = 0
+  for (const o of options) {
+    const match = o.id.match(/^OPT-(\d+)$/i)
+    if (match) maxIdx = Math.max(maxIdx, parseInt(match[1], 10))
+  }
+  return `OPT-${maxIdx + 1}`
+}
+
+function parseDodCriteriaInput(value: any): DoDCriterionView[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const criteria: DoDCriterionView[] = []
+  for (const c of value) {
+    if (typeof c?.statement !== "string" || !c.statement.trim()) continue
+    const id = typeof c.id === "string" && c.id.trim() ? c.id.trim() : `DoD-${criteria.length + 1}`
+    criteria.push({
+      id,
+      statement: c.statement.trim(),
+      proofRef: typeof c.proofRef === "string" && c.proofRef.trim() ? c.proofRef.trim() : undefined,
+    })
+  }
+  return criteria.length > 0 ? criteria : undefined
 }
 
 export function extractObjectivesFromMessages(
@@ -47,11 +117,26 @@ export function extractObjectivesFromMessages(
   if (globalThis.__OPENCODE_OBJECTIVES__?.has(sessionID)) {
     const raw = globalThis.__OPENCODE_OBJECTIVES__.get(sessionID)
     if (raw && typeof raw.title === "string") {
+      const status: PrimaryObjectiveStatus =
+        raw.status === "pending" ||
+        raw.status === "resolved" ||
+        raw.status === "presented_awaiting_confirmation"
+          ? raw.status
+          : "exploring"
+      const rawDod = Array.isArray(raw.dodCriteria)
+        ? raw.dodCriteria
+        : Array.isArray(raw.dod)
+          ? raw.dod
+          : undefined
       return {
         title: raw.title,
-        status: raw.status ?? "exploring",
+        status,
         definitionOfDone: raw.definitionOfDone ?? "",
         secondaries: Array.isArray(raw.secondaries) ? [...raw.secondaries] : [],
+        dodCriteria: rawDod ? [...rawDod] : undefined,
+        findings: Array.isArray(raw.findings) ? [...raw.findings] : undefined,
+        options: Array.isArray(raw.options) ? [...raw.options] : undefined,
+        checkpointNote: typeof raw.checkpointNote === "string" ? raw.checkpointNote : undefined,
       }
     }
   }
@@ -105,6 +190,7 @@ export function extractObjectivesFromMessages(
             status: "exploring",
             definitionOfDone: input.definitionOfDone || "",
             secondaries: initialSecondaries.length > 0 ? initialSecondaries : prevSecondaries,
+            dodCriteria: parseDodCriteriaInput(input.dodCriteria),
           }
         } else if (action === "add_secondary" || action === "add_secondaries") {
           if (!po) {
@@ -246,6 +332,129 @@ export function extractObjectivesFromMessages(
               if (item.validationProof !== undefined) target.validationProof = item.validationProof
             }
           }
+        } else if (action === "add_finding") {
+          if (!po) {
+            po = {
+              title: "Primary Objective",
+              status: "exploring",
+              definitionOfDone: "Complete all tasks",
+              secondaries: [],
+            }
+          }
+          po.findings ??= []
+          const fTitle = input.title?.trim() || input.result?.trim() || "Finding"
+          const explicitId = typeof input.findingId === "string" && input.findingId.trim() ? input.findingId.trim() : ""
+          const existing = explicitId
+            ? po.findings.find((f) => f.id.toLowerCase() === explicitId.toLowerCase())
+            : undefined
+          if (existing) {
+            if (input.title?.trim()) existing.title = input.title.trim()
+            if (input.result?.trim()) existing.result = input.result.trim()
+          } else {
+            po.findings.push({
+              id: explicitId || nextFindingIdView(po.findings),
+              title: fTitle,
+              lifecycle: "NEW",
+              result: input.result?.trim() ?? "",
+              soRef: typeof input.soRef === "string" && input.soRef.trim() ? input.soRef.trim() : undefined,
+              evidenceType:
+                input.evidence && typeof input.evidence === "object" && typeof input.evidence.type === "string"
+                  ? input.evidence.type
+                  : "FILE_READ",
+            })
+          }
+        } else if (action === "update_finding") {
+          if (po) {
+            const targetId = typeof input.findingId === "string" ? input.findingId.trim().toLowerCase() : ""
+            if (!targetId) continue
+            const target = po.findings?.find((f) => f.id.toLowerCase() === targetId)
+            if (target) {
+              if (typeof input.subsumedBy === "string" && input.subsumedBy.trim()) {
+                target.lifecycle = "SUBSUMED"
+              } else {
+                target.lifecycle = "EXTENDED"
+                if (input.title?.trim()) target.title = input.title.trim()
+                if (input.result?.trim()) target.result = input.result.trim()
+              }
+            }
+          }
+        } else if (action === "add_option") {
+          const statement = input.statement?.trim()
+          if (!statement) continue
+          if (!po) {
+            po = {
+              title: "Primary Objective",
+              status: "exploring",
+              definitionOfDone: "Complete all tasks",
+              secondaries: [],
+            }
+          }
+          po.options ??= []
+          po.options.push({
+            id: nextOptionIdView(po.options),
+            statement,
+            status: typeof input.optionStatus === "string" && input.optionStatus ? (input.optionStatus as OptionStatusView) : "PENDING",
+            result: input.result?.trim() || undefined,
+            reason: input.reason?.trim() || undefined,
+          })
+        } else if (action === "update_option") {
+          if (po) {
+            const targetId = typeof input.optionId === "string" ? input.optionId.trim().toLowerCase() : ""
+            if (!targetId) continue
+            const target = po.options?.find((o) => o.id.toLowerCase() === targetId)
+            if (target) {
+              const newStatus =
+                typeof input.optionStatus === "string" && input.optionStatus
+                  ? (input.optionStatus as OptionStatusView)
+                  : undefined
+              if (newStatus) target.status = newStatus
+              if (input.result?.trim()) target.result = input.result.trim()
+              if (input.reason?.trim()) target.reason = input.reason.trim()
+              // Mirror the server invariant: SUCCESSFUL auto-cancels every open sibling (preserving DISCARDED).
+              if (newStatus === "SUCCESSFUL") {
+                for (const sibling of po.options ?? []) {
+                  if (sibling.id === target.id) continue
+                  if (
+                    sibling.status === "SUCCESSFUL" ||
+                    sibling.status === "CANCELLED" ||
+                    sibling.status === "DISCARDED"
+                  ) {
+                    continue
+                  }
+                  sibling.status = "CANCELLED"
+                  sibling.result = `Cancelled: ${target.id} reached SUCCESSFUL.`
+                }
+              }
+            }
+          }
+        } else if (action === "update_dod" || (action === "update_primary" && Array.isArray(input.dodCriteria))) {
+          if (po) {
+            const criteria = parseDodCriteriaInput(input.dodCriteria)
+            if (criteria) {
+              po.dodCriteria ??= []
+              for (const c of criteria) {
+                const existing = po.dodCriteria.find((x) => x.id.toLowerCase() === c.id.toLowerCase())
+                if (existing) {
+                  existing.statement = c.statement
+                  if (c.proofRef) existing.proofRef = c.proofRef
+                } else {
+                  po.dodCriteria.push(c)
+                }
+              }
+            }
+          }
+        } else if (action === "present_plan") {
+          if (po) {
+            po.status = "presented_awaiting_confirmation"
+            po.checkpointNote = input.reason?.trim() || input.note?.trim() || undefined
+          }
+        } else if (action === "resume_plan") {
+          if (po) {
+            po.status = "exploring"
+            if (input.note?.trim()) po.checkpointNote = input.note.trim()
+          }
+        } else if (action === "checkpoint") {
+          if (po && input.note?.trim()) po.checkpointNote = input.note.trim()
         } else if (
           action === "complete_primary" ||
           action === "resolve_primary" ||
@@ -431,6 +640,31 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
     }
   }
 
+  const findingBadge = (lifecycle: FindingLifecycle) => {
+    switch (lifecycle) {
+      case "EXTENDED":
+        return { symbol: "[↻]", color: theme.text.base }
+      case "SUBSUMED":
+        return { symbol: "[✕]", color: theme.text.muted }
+      default:
+        return { symbol: "[●]", color: theme.text.feedback.warning.base }
+    }
+  }
+
+  const optionBadge = (status: OptionStatusView) => {
+    switch (status) {
+      case "SUCCESSFUL":
+        return { symbol: "[✓]", color: theme.text.feedback.success.base }
+      case "EXPLORING":
+        return { symbol: "[•]", color: theme.text.feedback.warning.base }
+      case "DISCARDED":
+      case "CANCELLED":
+        return { symbol: "[✕]", color: theme.text.muted }
+      default:
+        return { symbol: "[ ]", color: theme.text.muted }
+    }
+  }
+
   return (
     <Show when={objectives()}>
       {(po) => (
@@ -457,7 +691,7 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
 
           <Show when={view.open}>
             {/* Primary Objective Card */}
-            <box paddingTop={0} paddingBottom={0}>
+            <box paddingTop={0} paddingBottom={0} gap={0}>
               <box flexDirection="row" gap={1}>
                 <text
                   fg={
@@ -466,7 +700,13 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                       : theme.text.feedback.warning.base
                   }
                 >
-                  <b>{po().status === "resolved" ? "[PO ✓]" : "[PO]"}</b>
+                  <b>
+                    {po().status === "resolved"
+                      ? "[PO ✓]"
+                      : po().status === "presented_awaiting_confirmation"
+                        ? "[PO ⏸]"
+                        : "[PO]"}
+                  </b>
                 </text>
                 <text fg={theme.text.base} wrapMode="word">
                   <b>{po().title}</b>
@@ -475,6 +715,23 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
               <Show when={po().definitionOfDone}>
                 <text fg={theme.text.muted} wrapMode="word">
                   DoD: {po().definitionOfDone}
+                </text>
+              </Show>
+              {/* Decomposed Definition of Done: ✓ = proofRef attached */}
+              <Show when={(po().dodCriteria ?? []).length > 0}>
+                <box gap={0}>
+                  <For each={po().dodCriteria ?? []}>
+                    {(c) => (
+                      <text fg={theme.text.muted} wrapMode="word">
+                        {c.proofRef ? "✓" : "·"} {c.statement}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
+              <Show when={po().checkpointNote}>
+                <text fg={theme.text.muted} wrapMode="word">
+                  ⏸ {po().checkpointNote}
                 </text>
               </Show>
             </box>
@@ -572,6 +829,56 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                             </For>
                           </box>
                         </Show>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
+            </Show>
+
+            {/* Findings (epistemic layer): one compact line per finding */}
+            <Show when={(po().findings ?? []).length > 0}>
+              <box paddingTop={1} gap={0}>
+                <text fg={theme.text.muted}>Findings ({(po().findings ?? []).length})</text>
+                <For each={po().findings ?? []}>
+                  {(f) => {
+                    const badge = () => findingBadge(f.lifecycle)
+                    return (
+                      <box flexDirection="row" gap={1}>
+                        <text fg={badge().color} flexShrink={0}>
+                          {badge().symbol}
+                        </text>
+                        <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
+                          <span style={{ fg: theme.text.muted }}>{f.id}:</span> {f.title}
+                          {f.result ? (
+                            <span style={{ fg: theme.text.muted }}> — {f.result}</span>
+                          ) : null}
+                        </text>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
+            </Show>
+
+            {/* Options (multi-candidate): live Result column */}
+            <Show when={(po().options ?? []).length > 0}>
+              <box paddingTop={1} gap={0}>
+                <text fg={theme.text.muted}>Options ({(po().options ?? []).length})</text>
+                <For each={po().options ?? []}>
+                  {(o) => {
+                    const badge = () => optionBadge(o.status)
+                    return (
+                      <box flexDirection="row" gap={1}>
+                        <text fg={badge().color} flexShrink={0}>
+                          {badge().symbol}
+                        </text>
+                        <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
+                          <span style={{ fg: theme.text.muted }}>{o.id}:</span> {o.statement}
+                          {o.result ? (
+                            <span style={{ fg: theme.text.muted }}> — {o.result}</span>
+                          ) : null}
+                        </text>
                       </box>
                     )
                   }}

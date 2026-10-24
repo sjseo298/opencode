@@ -1,5 +1,46 @@
 import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 import { Schema } from "effect"
+import {
+  type ActionEntry,
+  type AffectedResources,
+  type DoDCriterion,
+  type Finding,
+  type FindingEvidence,
+  type Fingerprint,
+  type Option,
+  type OptionStatus,
+  type PhaseState,
+  type Precondition,
+  FINDING_EVIDENCE_TYPES,
+  SEARCH_ATTACH_THRESHOLD,
+  SEARCH_NOVEL_THRESHOLD,
+  relevantProjectFiles,
+  evaluateDoD,
+  nextConcreteAction,
+  nextDoDCriterionId,
+  nextFindingId,
+  nextOptionId,
+  normalizeFingerprintKey,
+  parseDocument,
+  renderProjection,
+  repairDocumentInvariants,
+  runComplianceAudit,
+  searchFindings,
+  validateFindingFields,
+} from "./objectives-model.js"
+import { createObjectivesStore, type ObjectivesStore } from "./objectives-persistence.js"
+import { autoConfigureEmbeddingsScorer, warmUpFindingsEmbeddings } from "./objectives-embeddings.js"
+
+// F-7: public swap point — an embeddings backend replaces the default dependency-free lexical scorer.
+export { setFindingScorer } from "./objectives-model.js"
+export type { FindingScorer } from "./objectives-model.js"
+export {
+  autoConfigureEmbeddingsScorer,
+  createLmStudioFindingScorer,
+  fetchEmbedding,
+  cosineSimilarity,
+  warmUpFindingsEmbeddings,
+} from "./objectives-embeddings.js"
 
 export type SecondaryObjectiveStatus =
   | "pending"
@@ -9,7 +50,11 @@ export type SecondaryObjectiveStatus =
   | "discarded"
   | "cancelled"
 
-export type PrimaryObjectiveStatus = "pending" | "exploring" | "resolved"
+export type PrimaryObjectiveStatus =
+  | "pending"
+  | "exploring"
+  | "resolved"
+  | "presented_awaiting_confirmation"
 
 export interface TertiaryObjective {
   id: string // "SO-1-T2" etc. — hierarchical child of its parent Secondary Objective
@@ -30,6 +75,10 @@ export interface SecondaryObjective {
   blocker?: string // Concrete symptom, obstacle, or root cause if blocked
   validationProof?: string // Verifiable test output, exit code, or command evidence
   children?: TertiaryObjective[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
+  affectedResources?: AffectedResources // Blast radius: files/envs/schemas/services this SO may touch
+  preconditions?: Precondition[] // Declarative gates: actionClass -> required tokens/scripts before it counts toward proof
+  actionLog?: ActionEntry[] // Anti-loop: normalized actions executed while this SO was active
+  touchedFiles?: string[] // Files modified via edit/write while this SO was active (docs-surface detection)
   createdAt: number
   updatedAt: number
 }
@@ -37,8 +86,17 @@ export interface SecondaryObjective {
 export interface PrimaryObjective {
   title: string
   status: PrimaryObjectiveStatus
-  definitionOfDone: string // Acceptance criteria
+  definitionOfDone: string // Acceptance criteria (legacy blob; kept for compatibility and rendering)
   secondaries: SecondaryObjective[]
+  validationProof?: string // Concrete proof attached to the Primary Objective itself
+  topicKey?: string // Cross-session identity for export/import (e.g. "outlook_bulk_triage")
+  dod?: DoDCriterion[] // Decomposed Definition of Done (F-3); empty means legacy single-criterion mode
+  findings?: Finding[] // First-class knowledge units (F-2)
+  options?: Option[] // Multi-candidate options with a live Result column (F-5)
+  fingerprints?: Fingerprint[] // Normalized blocker fingerprints (F-7/C-4)
+  phase?: PhaseState // Plan-pause / checkpoint state (F-6)
+  touchedFiles?: string[] // Session-level record of files modified via edit/write
+  relevantDocumentableFiles?: string[] // Files judged (via one-shot /btw or heuristic) to require documentation
   createdAt: number
   updatedAt: number
 }
@@ -59,6 +117,26 @@ globalThis.__OPENCODE_POST_COMPACTION_SESSIONS__ = postCompactionSessions
 // Inspection tracking for anti-loop protocol per session
 export const consecutiveReadCounts = new Map<string, number>()
 export const antiLoopWarnings = new Map<string, string>()
+
+// Per-session warnings about repeated actions (F-9), surfaced on the next tool output and cleared.
+const actionWarnings = new Map<string, string[]>()
+
+// Persistent store (F-1). Set by the plugin when the context exposes a JSON KV storage domain.
+let activeStore: ObjectivesStore | undefined
+export function setObjectivesStore(store: ObjectivesStore | undefined): void {
+  activeStore = store
+}
+
+export function getObjectivesStore(): ObjectivesStore | undefined {
+  return activeStore
+}
+
+function persistSessionObjectives(sessionID: string): void {
+  if (!activeStore) return
+  const po = sessionObjectives.get(sessionID)
+  if (!po) return
+  void activeStore.save(sessionID, po as unknown as Record<string, any>).catch(() => {})
+}
 
 export const READONLY_TOOLS = new Set([
   "read",
@@ -83,14 +161,21 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
   "2. Decompose the task into initial **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
   "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete initial plan immediately before taking action.",
-  "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: when new secondary or tertiary objectives are discovered, WHENEVER the user intervenes and changes or corrects direction, scope, or approach, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
-  "5. Tertiary Objectives (Conditional Decomposition): A Secondary Objective may be decomposed into tertiary sub-objectives ONLY when it proves too large to execute as a single unit (broad scope, multiple independent steps, or high context cost). Do NOT pre-create tertiary objectives for small secondaries. They are FIRST-CLASS children of their parent SO: register them with `objective_manage` (`action: 'add_tertiary'`, passing the parent SO id in `id`, e.g., `SO-2`, plus title and rationale) and manage them with `action: 'update_tertiary'` using each tertiary's own id (e.g., `SO-2-T1`). They inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy. CLOSURE RULE (NO SHORTCUTS): a secondary objective can only be resolved when ALL of its tertiary objectives are closed (resolved/discarded/cancelled), and the Primary Objective can only be completed when EVERY secondary objective — including all of their tertiary objectives — is closed; the tool rejects both shortcuts.",
-  "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented.",
+  "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: whenever you discover new secondary or tertiary objectives, WHENEVER the user intervenes and changes or corrects direction, scope, or approach, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
+  "5. Tertiary Objectives (Conditional Decomposition): A Secondary Objective may be decomposed into tertiary sub-objectives ONLY when it proves too large to execute as a single unit (broad scope, multiple independent steps, or high context cost). Do NOT pre-create tertiary objectives for small secondaries. They are FIRST-CLASS children of their parent SO: register them with `objective_manage` (`action: 'add_tertiary'`, passing the parent SO id in `id`, e.g. `SO-2`, plus title and rationale) and manage them with `action: 'update_tertiary'` using each tertiary's own id (e.g. `SO-2-T1`). They inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy. CLOSURE RULE (NO SHORTCUTS): a secondary objective can only be resolved when ALL of its tertiary objectives are closed (resolved/discarded/cancelled), and the Primary Objective can only be completed when EVERY secondary objective — including all of their tertiary objectives — is closed; the tool rejects both shortcuts.",
+  "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented. The tool auto-creates this documentation objective when it detects public-surface file changes and no documentation objective exists.",
   "7. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "8. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
-  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. You MUST NOT leave objectives open, in-progress, or pending if their work has been done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
+  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
   "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. DELEGATION CANDIDACY RULE: every secondary and tertiary objective is a candidate to be resolved by a subagent; before executing each one, validate whether delegation pays off given slot availability (`max_subagents = total_slots - 1`)—delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists, which protects your primary session's context; execute it in the main thread instead when the task is small or tightly coupled with other objectives, or when no subagent slot is available. CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
-  "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items.",
+  "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
+  "12. Findings (F-NNN): every durable discovery is registered with `action: 'add_finding'` the moment it is made (checkpoint immediately, before the next step), with typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
+  "13. Options: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. When a finding changes the root cause, update the affected Option BEFORE writing any other artifact.",
+  "14. Definition of Done: decompose it into verifiable criteria (`dodCriteria` with statement + verifiableBy + proofRef, managed with `action: 'update_dod'`). The Primary Objective cannot be resolved while any criterion lacks proofRef. When a finding invalidates a criterion, edit the criterion with `action: 'update_dod'` at the moment of discovery — never reinterpret silently at the end.",
+  "15. Compliance audit: the tool runs a mechanical audit on every resolved/blocked/discarded transition and on complete_primary (typed proof present, no unvalidated root-cause phrasing such as 'should pass' / 'logically' / 'the root cause is' without adjacent execution evidence, EXPLORING options have a live Result, findings are complete). A failed audit REJECTS the transition with the violation list — fix the violations and retry. Run `action: 'audit'` on demand to inspect the current violations.",
+  "16. Plan pause & checkpoints: before multi-step work present the plan with `action: 'present_plan'` — the tree FREEZES until the user explicitly confirms, then resume with `action: 'resume_plan'` carrying the user's instruction. After each significant phase call `action: 'checkpoint'`: the report is derived ONLY from the objective tree (no parallel mental model), and the tree pauses until the user's next instruction.",
+  "17. Blocker fingerprints & anti-loop: when a finding resolves a blocker, register its fingerprint with `action: 'add_fingerprint'` so future sessions answer 'did we solve this before?' in a lookup instead of re-analysis. The tool tracks repeated read actions per SO and warns on duplicates; opening an SO whose title matches a resolved/discarded fingerprint requires an explicit `justification`.",
+  "18. Cross-session persistence: the whole tree (objectives, findings, options, fingerprints, DoD criteria) is auto-persisted and auto-hydrated; `action: 'export_tree'` returns the serialized document plus the auto-rendered EXPLORATION-style projection, and `action: 'import_tree'` hydrates a session from a topic key or a serialized document. The EXPLORATION document is ALWAYS an auto-rendered projection of the live tree — never a hand-maintained mirror with its own vocabulary.",
 ].join("\n")
 
 export const MAX_CONSECUTIVE_READS = 5
@@ -99,10 +184,45 @@ export function clearSessionObjectives(sessionID: string) {
   sessionObjectives.delete(sessionID)
   consecutiveReadCounts.delete(sessionID)
   antiLoopWarnings.delete(sessionID)
+  actionWarnings.delete(sessionID)
 }
 
 export function getObjectives(sessionID: string): PrimaryObjective | undefined {
   return sessionObjectives.get(sessionID)
+}
+
+// F-1 hydration: in-memory first, then the persistent store (source of truth across
+// compaction and restarts), then message-history reconstruction as last resort.
+export async function hydrateSessionObjectives(
+  sessionID: string,
+  messages?: readonly unknown[],
+): Promise<PrimaryObjective | undefined> {
+  const inMemory = sessionObjectives.get(sessionID)
+  if (inMemory) return inMemory
+  if (activeStore) {
+    const doc = await activeStore.load(sessionID)
+    if (doc) {
+      repairDocumentInvariants(doc)
+      const po = doc as unknown as PrimaryObjective
+      sessionObjectives.set(sessionID, po)
+      // Pre-warm embeddings cache in background for all hydrated findings
+      if (Array.isArray(po.findings) && po.findings.length > 0) {
+        void warmUpFindingsEmbeddings(po.findings).catch(() => {})
+      }
+      return po
+    }
+  }
+  if (Array.isArray(messages)) {
+    const po = reconstructObjectivesFromMessages(sessionID, messages)
+    if (po) {
+      persistSessionObjectives(sessionID)
+      if (Array.isArray(po.findings) && po.findings.length > 0) {
+        void warmUpFindingsEmbeddings(po.findings).catch(() => {})
+      }
+    }
+    return po
+  }
+  return undefined
 }
 
 export function setPrimaryObjective(
@@ -110,6 +230,7 @@ export function setPrimaryObjective(
   title: string,
   definitionOfDone: string,
   initialSecondaries?: SecondaryObjective[],
+  extra?: { topicKey?: string; dod?: DoDCriterion[] },
 ): PrimaryObjective {
   const existing = sessionObjectives.get(sessionID)
   const now = Date.now()
@@ -118,12 +239,24 @@ export function setPrimaryObjective(
     status: existing?.status ?? "exploring",
     definitionOfDone: definitionOfDone.trim(),
     secondaries: initialSecondaries !== undefined ? initialSecondaries : (existing?.secondaries ?? []),
+    validationProof: existing?.validationProof,
+    topicKey: extra?.topicKey?.trim() || existing?.topicKey,
+    dod: extra?.dod ?? existing?.dod,
+    findings: existing?.findings ?? [],
+    options: existing?.options ?? [],
+    fingerprints: existing?.fingerprints ?? [],
+    phase: existing?.phase,
+    touchedFiles: existing?.touchedFiles ?? [],
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   }
   sessionObjectives.set(sessionID, po)
+  persistSessionObjectives(sessionID)
   return po
 }
+
+const isClosedStatus = (status: SecondaryObjectiveStatus) =>
+  status === "resolved" || status === "discarded" || status === "cancelled"
 
 export function updatePrimaryObjective(
   sessionID: string,
@@ -132,18 +265,25 @@ export function updatePrimaryObjective(
     title?: string
     definitionOfDone?: string
     validationProof?: string
+    dod?: DoDCriterion[]
   },
+  opts?: { bypassGates?: boolean },
 ): { success: boolean; error?: string; po?: PrimaryObjective } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
     return { success: false, error: `No active objective tree found for session ${sessionID}.` }
   }
 
-  if (updates.status === "resolved") {
+  // Apply non-status updates first so closure gates see the fresh proof/criteria.
+  if (updates.title !== undefined) po.title = updates.title.trim()
+  if (updates.definitionOfDone !== undefined) po.definitionOfDone = updates.definitionOfDone.trim()
+  if (updates.validationProof !== undefined) po.validationProof = updates.validationProof?.trim() || undefined
+  if (updates.dod !== undefined) po.dod = updates.dod
+
+  if (updates.status === "resolved" && !opts?.bypassGates) {
     // No-shortcuts closure rule: an SO counts as closed only when the SO itself AND every one of its tertiary sub-objectives are closed.
-    const isClosed = (status: SecondaryObjectiveStatus) => status === "resolved" || status === "discarded" || status === "cancelled"
     const openSecondaries = po.secondaries.filter(
-      (s) => !isClosed(s.status) || (s.children ?? []).some((t) => !isClosed(t.status)),
+      (s) => !isClosedStatus(s.status) || (s.children ?? []).some((t) => !isClosedStatus(t.status)),
     )
     if (openSecondaries.length > 0) {
       return {
@@ -151,14 +291,32 @@ export function updatePrimaryObjective(
         error: `Cannot resolve Primary Objective while there are still open secondary objectives: ${openSecondaries.map((s) => s.id).join(", ")}. Resolve or discard all secondary objectives and their tertiary sub-objectives first.`,
       }
     }
+
+    // F-3 gate: every DoD criterion must carry a typed proofRef (legacy mode: the PO proof).
+    const dodEval = evaluateDoD(po)
+    const unsatisfied = dodEval.criteria.filter((c) => !c.satisfied)
+    if (unsatisfied.length > 0) {
+      return {
+        success: false,
+        error: `Cannot resolve Primary Objective: unsatisfied Definition of Done criterion(s): ${unsatisfied
+          .map((u) => `${u.criterion.id} — ${u.reason}`)
+          .join("; ")}. Attach proofRef to each criterion (action 'update_dod') and re-verify.`,
+      }
+    }
+
+    // F-4 gate: mechanical compliance audit must pass before closure.
+    const audit = runComplianceAudit(po)
+    if (!audit.pass) {
+      return {
+        success: false,
+        error: `Cannot resolve Primary Objective: compliance audit failed — ${audit.violations.join(" | ")}`,
+      }
+    }
   }
 
   if (updates.status !== undefined) po.status = updates.status
-  if (updates.title !== undefined) po.title = updates.title.trim()
-  if (updates.definitionOfDone !== undefined) po.definitionOfDone = updates.definitionOfDone.trim()
-
-  const now = Date.now()
-  po.updatedAt = now
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
 
   return { success: true, po }
 }
@@ -168,6 +326,7 @@ export function addSecondaryObjective(
   title: string,
   rationale: string,
   explicitId?: string,
+  extra?: { affectedResources?: AffectedResources; preconditions?: Precondition[] },
 ): SecondaryObjective {
   let po = sessionObjectives.get(sessionID)
   const now = Date.now()
@@ -177,6 +336,10 @@ export function addSecondaryObjective(
       status: "exploring",
       definitionOfDone: "Resolve all blockers and verify requirements.",
       secondaries: [],
+      findings: [],
+      options: [],
+      fingerprints: [],
+      touchedFiles: [],
       createdAt: now,
       updatedAt: now,
     }
@@ -189,7 +352,10 @@ export function addSecondaryObjective(
     if (existing) {
       if (title.trim()) existing.title = title.trim()
       if (rationale.trim()) existing.rationale = rationale.trim()
+      if (extra?.affectedResources) existing.affectedResources = extra.affectedResources
+      if (extra?.preconditions) existing.preconditions = extra.preconditions
       existing.updatedAt = now
+      persistSessionObjectives(sessionID)
       return existing
     }
   }
@@ -199,7 +365,10 @@ export function addSecondaryObjective(
   )
   if (existingByTitle) {
     if (rationale.trim()) existingByTitle.rationale = rationale.trim()
+    if (extra?.affectedResources) existingByTitle.affectedResources = extra.affectedResources
+    if (extra?.preconditions) existingByTitle.preconditions = extra.preconditions
     existingByTitle.updatedAt = now
+    persistSessionObjectives(sessionID)
     return existingByTitle
   }
 
@@ -221,11 +390,14 @@ export function addSecondaryObjective(
     title: title.trim(),
     status: "pending",
     rationale: rationale.trim(),
+    affectedResources: extra?.affectedResources,
+    preconditions: extra?.preconditions,
     createdAt: now,
     updatedAt: now,
   }
   po.secondaries.push(so)
   po.updatedAt = now
+  persistSessionObjectives(sessionID)
   return so
 }
 
@@ -238,7 +410,10 @@ export function updateSecondaryObjective(
     rationale?: string
     blocker?: string
     validationProof?: string
+    affectedResources?: AffectedResources
+    preconditions?: Precondition[]
   },
+  opts?: { preconditionsMet?: string[]; bypassGates?: boolean },
 ): { success: boolean; error?: string; objective?: SecondaryObjective } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
@@ -250,20 +425,17 @@ export function updateSecondaryObjective(
     return { success: false, error: `Secondary objective ${id} not found.` }
   }
 
-  // No-shortcuts closure rule: an SO cannot be resolved while any of its tertiary sub-objectives remain open — the sum of its children is what closes it.
-  if (updates.status === "resolved") {
-    const isClosed = (status: SecondaryObjectiveStatus) => status === "resolved" || status === "discarded" || status === "cancelled"
-    const openTertiaries = (target.children ?? []).filter((t) => !isClosed(t.status))
+  if (updates.status === "resolved" && !opts?.bypassGates) {
+    // No-shortcuts closure rule: an SO cannot be resolved while any of its tertiary sub-objectives remain open — the sum of its children is what closes it.
+    const openTertiaries = (target.children ?? []).filter((t) => !isClosedStatus(t.status))
     if (openTertiaries.length > 0) {
       return {
         success: false,
         error: `Cannot mark ${id} as resolved while it has open tertiary objectives: ${openTertiaries.map((t) => t.id).join(", ")}. Resolve or discard each tertiary objective first.`,
       }
     }
-  }
 
-  // Strict Done-means-Done Rule: validation proof is mandatory for "resolved"
-  if (updates.status === "resolved") {
+    // Strict Done-means-Done Rule: validation proof is mandatory for "resolved"
     const proof = updates.validationProof?.trim() || target.validationProof?.trim()
     if (!proof) {
       return {
@@ -271,29 +443,85 @@ export function updateSecondaryObjective(
         error: `Cannot mark ${id} as resolved without concrete validation proof. Deduction alone is a hypothesis, not proof. Run the test/command and attach the observed output.`,
       }
     }
-    target.validationProof = proof
+
+    // F-8 gate: declared preconditions must be acknowledged as met before the proof counts.
+    const preconditions = target.preconditions ?? []
+    if (preconditions.length > 0) {
+      const met = new Set((opts?.preconditionsMet ?? []).map((p) => p.trim().toLowerCase()))
+      const missing = preconditions.filter((p) => !met.has(p.actionClass.trim().toLowerCase()))
+      if (missing.length > 0) {
+        return {
+          success: false,
+          error: `Cannot mark ${id} as resolved: precondition(s) not acknowledged as met: ${missing
+            .map((p) => `${p.actionClass} (requires: ${p.requires.join(", ")})`)
+            .join("; ")}. Pass 'preconditionsMet' listing each satisfied actionClass.`,
+        }
+      }
+    }
+
+    // F-4 gate: mechanical compliance audit on the resolved transition.
+    // Audit the proposed transition state (target with new proof/status applied) rather than the pre-update state.
+    const proposed = {
+      ...po,
+      secondaries: po.secondaries.map((s) =>
+        s.id === target.id
+          ? {
+              ...s,
+              status: "resolved",
+              validationProof: proof,
+            }
+          : s,
+      ),
+    }
+    const audit = runComplianceAudit(proposed)
+    if (!audit.pass) {
+      return {
+        success: false,
+        error: `Cannot mark ${id} as resolved: compliance audit failed — ${audit.violations.join(" | ")}`,
+      }
+    }
+  }
+
+  if (updates.status === "blocked" && !opts?.bypassGates) {
+    const proposedBlocker = updates.blocker?.trim() || target.blocker?.trim()
+    const proposed = {
+      ...po,
+      secondaries: po.secondaries.map((s) =>
+        s.id === target.id
+          ? {
+              ...s,
+              status: "blocked",
+              blocker: proposedBlocker,
+            }
+          : s,
+      ),
+    }
+    const audit = runComplianceAudit(proposed)
+    if (!audit.pass) {
+      return {
+        success: false,
+        error: `Cannot mark ${id} as blocked: compliance audit failed — ${audit.violations.join(" | ")}`,
+      }
+    }
   }
 
   if (updates.status !== undefined) target.status = updates.status
   if (updates.title !== undefined) target.title = updates.title.trim()
   if (updates.rationale !== undefined) target.rationale = updates.rationale.trim()
   if (updates.blocker !== undefined) target.blocker = updates.blocker?.trim() || undefined
+  if (updates.affectedResources !== undefined) target.affectedResources = updates.affectedResources
+  if (updates.preconditions !== undefined) target.preconditions = updates.preconditions
   if (updates.validationProof !== undefined && updates.status !== "resolved") {
     target.validationProof = updates.validationProof?.trim() || undefined
+  }
+  if (updates.status === "resolved") {
+    target.validationProof = updates.validationProof?.trim() || target.validationProof?.trim()
   }
 
   const now = Date.now()
   target.updatedAt = now
   po.updatedAt = now
-
-  // Check if all secondaries are completed/discarded to evaluate PO
-  const allResolvedOrDiscarded =
-    po.secondaries.length > 0 &&
-    po.secondaries.every((s) => s.status === "resolved" || s.status === "discarded" || s.status === "cancelled")
-
-  if (allResolvedOrDiscarded && po.status === "exploring") {
-    // Keep po exploring unless explicitly marked resolved or confirmed
-  }
+  persistSessionObjectives(sessionID)
 
   return { success: true, objective: target }
 }
@@ -328,6 +556,7 @@ export function addTertiaryObjective(
       if (title.trim()) existing.title = title.trim()
       if (rationale.trim()) existing.rationale = rationale.trim()
       existing.updatedAt = now
+      persistSessionObjectives(sessionID)
       return { success: true, objective: existing }
     }
   }
@@ -336,6 +565,7 @@ export function addTertiaryObjective(
   if (existingByTitle) {
     if (rationale.trim()) existingByTitle.rationale = rationale.trim()
     existingByTitle.updatedAt = now
+    persistSessionObjectives(sessionID)
     return { success: true, objective: existingByTitle }
   }
 
@@ -363,6 +593,7 @@ export function addTertiaryObjective(
   }
   parent.children.push(tertiary)
   po.updatedAt = now
+  persistSessionObjectives(sessionID)
   return { success: true, objective: tertiary }
 }
 
@@ -376,6 +607,7 @@ export function updateTertiaryObjective(
     blocker?: string
     validationProof?: string
   },
+  opts?: { bypassGates?: boolean },
 ): { success: boolean; error?: string; objective?: TertiaryObjective } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
@@ -391,13 +623,31 @@ export function updateTertiaryObjective(
     return { success: false, error: `Tertiary objective ${id} not found.` }
   }
 
-  // Strict Done-means-Done Rule: validation proof is mandatory for "resolved"
-  if (updates.status === "resolved") {
+  if (updates.status === "resolved" && !opts?.bypassGates) {
+    // Strict Done-means-Done Rule: validation proof is mandatory for "resolved"
     const proof = updates.validationProof?.trim() || target.validationProof?.trim()
     if (!proof) {
       return {
         success: false,
         error: `Cannot mark ${id} as resolved without concrete validation proof. Deduction alone is a hypothesis, not proof. Run the test/command and attach the observed output.`,
+      }
+    }
+    const proposed = {
+      ...po,
+      secondaries: po.secondaries.map((s) => ({
+        ...s,
+        children: (s.children ?? []).map((t) =>
+          t.id === target.id
+            ? { ...t, status: "resolved" as SecondaryObjectiveStatus, validationProof: proof }
+            : t,
+        ),
+      })),
+    }
+    const audit = runComplianceAudit(proposed)
+    if (!audit.pass) {
+      return {
+        success: false,
+        error: `Cannot mark ${id} as resolved: compliance audit failed — ${audit.violations.join(" | ")}`,
       }
     }
     target.validationProof = proof
@@ -414,8 +664,641 @@ export function updateTertiaryObjective(
   const now = Date.now()
   target.updatedAt = now
   po.updatedAt = now
+  persistSessionObjectives(sessionID)
   return { success: true, objective: target }
 }
+
+// ---------- Epistemic layer: findings, options, DoD, fingerprints (F-2..F-5, F-7) ----------
+
+function normalizeEvidence(input: any): FindingEvidence {
+  const now = Date.now()
+  if (typeof input === "string") {
+    return { type: "FILE_READ", source: input.trim(), capturedAt: now }
+  }
+  if (input && typeof input === "object") {
+    const type = FINDING_EVIDENCE_TYPES.includes(input.type) ? input.type : "FILE_READ"
+    return { type, source: String(input.source ?? "").trim(), capturedAt: now }
+  }
+  return { type: "FILE_READ", source: "", capturedAt: now }
+}
+
+export function addFinding(
+  sessionID: string,
+  input: {
+    soRef?: string
+    title?: string
+    evidence?: any
+    result?: string
+    nextAction?: string
+    impactOnOption?: { optionId: string; newStatus: OptionStatus; reason: string }
+    seeAlso?: string[]
+    supersedes?: string[]
+    spawnedBy?: string
+  },
+): { success: boolean; error?: string; warning?: string; finding?: Finding } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}. Call 'set_primary' first.` }
+  }
+
+  const soRef = (input.soRef ?? "PO").trim()
+  if (soRef !== "PO" && !po.secondaries.some((s) => s.id.toLowerCase() === soRef.toLowerCase())) {
+    return { success: false, error: `Finding soRef '${soRef}' does not match any secondary objective id (or 'PO').` }
+  }
+
+  const evidence = normalizeEvidence(input.evidence)
+  const violations = validateFindingFields({
+    title: input.title,
+    result: input.result,
+    nextAction: input.nextAction,
+    evidenceSource: evidence.source,
+  })
+  if (violations.length > 0) {
+    return { success: false, error: `Finding rejected (anti-placeholder validation): ${violations.join(" | ")}` }
+  }
+
+  po.findings ??= []
+
+  // Search-before-write (F-2): the tool decides whether this is new, an extension, or a duplicate.
+  const query = `${input.title?.trim() ?? ""} ${input.result?.trim() ?? ""}`
+  const hits = searchFindings(po.findings, query)
+  const top = hits[0]
+  if (top && top.score >= SEARCH_ATTACH_THRESHOLD) {
+    const candidates = hits
+      .slice(0, 3)
+      .map((h) => `${h.findingId} (score ${h.score})`)
+      .join(", ")
+    return {
+      success: false,
+      error: `Search-before-write: this finding is NOT new. Existing candidate(s): ${candidates}. Extend ${top.findingId} in place with action 'update_finding' (findingId=${top.findingId}) instead of creating a duplicate.`,
+    }
+  }
+
+  // F-5 invariant: if the finding changes an option, the option is updated FIRST (single operation).
+  if (input.impactOnOption) {
+    const optionResult = applyOptionChange(po, input.impactOnOption.optionId, {
+      status: input.impactOnOption.newStatus,
+      reason: input.impactOnOption.reason,
+    })
+    if (!optionResult.success) {
+      return { success: false, error: `Finding rejected: option update failed — ${optionResult.error}` }
+    }
+  }
+
+  const now = Date.now()
+  const finding: Finding = {
+    id: nextFindingId(po.findings),
+    soRef,
+    title: input.title!.trim(),
+    evidence,
+    result: input.result!.trim(),
+    impactOnOption: input.impactOnOption,
+    nextAction: input.nextAction!.trim(),
+    seeAlso: top && top.score >= SEARCH_NOVEL_THRESHOLD ? [top.findingId, ...(input.seeAlso ?? [])] : (input.seeAlso ?? []),
+    supersedes: input.supersedes ?? [],
+    spawnedBy: input.spawnedBy,
+    lifecycle: "NEW",
+    createdAt: now,
+    updatedAt: now,
+  }
+  po.findings.push(finding)
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+
+  const warning =
+    top && top.score >= SEARCH_NOVEL_THRESHOLD
+      ? `Similarity warning: ${top.findingId} scored ${top.score} (0.55–0.68 band). Cross-referenced via seeAlso; verify this is genuinely new knowledge.`
+      : undefined
+
+  return { success: true, finding, warning }
+}
+
+export function updateFinding(
+  sessionID: string,
+  findingId: string,
+  updates: {
+    title?: string
+    result?: string
+    nextAction?: string
+    evidence?: any
+    seeAlso?: string[]
+    supersedes?: string[]
+    subsumedBy?: string
+    impactOnOption?: { optionId: string; newStatus: OptionStatus; reason: string }
+  },
+): { success: boolean; error?: string; finding?: Finding } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const finding = (po.findings ?? []).find((f) => f.id.toLowerCase() === findingId.trim().toLowerCase())
+  if (!finding) {
+    return { success: false, error: `Finding ${findingId} not found.` }
+  }
+
+  if (updates.subsumedBy) {
+    finding.lifecycle = "SUBSUMED"
+    finding.supersedes = [...new Set([...finding.supersedes, updates.subsumedBy.trim()])]
+  } else {
+    // In-place extension (C-2): a finding is never duplicated — it is extended where it lives.
+    if (updates.title?.trim()) finding.title = updates.title.trim()
+    if (updates.result?.trim()) finding.result = updates.result.trim()
+    if (updates.nextAction?.trim()) finding.nextAction = updates.nextAction.trim()
+    if (updates.evidence !== undefined) finding.evidence = normalizeEvidence(updates.evidence)
+    if (updates.seeAlso) finding.seeAlso = [...new Set([...finding.seeAlso, ...updates.seeAlso.map((s) => s.trim())])]
+    if (updates.supersedes) finding.supersedes = [...new Set([...finding.supersedes, ...updates.supersedes.map((s) => s.trim())])]
+    if (updates.impactOnOption) {
+      const optionResult = applyOptionChange(po, updates.impactOnOption.optionId, {
+        status: updates.impactOnOption.newStatus,
+        reason: updates.impactOnOption.reason,
+      })
+      if (!optionResult.success) {
+        return { success: false, error: `Finding update rejected: option update failed — ${optionResult.error}` }
+      }
+      finding.impactOnOption = updates.impactOnOption
+    }
+    finding.lifecycle = "EXTENDED"
+  }
+
+  finding.updatedAt = Date.now()
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
+  return { success: true, finding }
+}
+
+function applyOptionChange(
+  po: PrimaryObjective,
+  optionId: string,
+  changes: { status?: OptionStatus; result?: string; reason?: string; proofRef?: string },
+): { success: boolean; error?: string } {
+  po.options ??= []
+  const option = po.options.find((o) => o.id.toLowerCase() === optionId.trim().toLowerCase())
+  if (!option) {
+    return { success: false, error: `Option ${optionId} not found. Register it with action 'add_option' first.` }
+  }
+  const newStatus = changes.status
+  if (newStatus === "SUCCESSFUL") {
+    const proof = changes.proofRef?.trim() || option.proofRef?.trim() || ""
+    if (!proof) {
+      return { success: false, error: `Option ${option.id} cannot be SUCCESSFUL without proofRef.` }
+    }
+    const existing = po.options.find((o) => o.status === "SUCCESSFUL" && o.id !== option.id)
+    if (existing) {
+      return { success: false, error: `Option ${option.id} cannot be SUCCESSFUL: ${existing.id} already is (at most one per topic).` }
+    }
+    option.proofRef = proof
+  }
+  if (newStatus === "DISCARDED" && !(changes.reason?.trim() || option.reason?.trim() || "")) {
+    return { success: false, error: `Option ${option.id} cannot be DISCARDED without a reason (silent discard is prohibited).` }
+  }
+  if (changes.result?.trim()) option.result = changes.result.trim()
+  if (changes.reason?.trim()) option.reason = changes.reason.trim()
+  if (newStatus) option.status = newStatus
+  option.updatedAt = Date.now()
+
+  // F-5 invariant: SUCCESSFUL auto-cancels every open sibling in the same operation.
+  // Preserves DISCARDED options (and already SUCCESSFUL/CANCELLED ones) to avoid erasing their documented rationale.
+  if (newStatus === "SUCCESSFUL") {
+    for (const sibling of po.options) {
+      if (sibling.id === option.id) continue
+      if (sibling.status === "SUCCESSFUL" || sibling.status === "CANCELLED" || sibling.status === "DISCARDED") continue
+      sibling.status = "CANCELLED"
+      sibling.result = `Cancelled: ${option.id} reached SUCCESSFUL.`
+      sibling.updatedAt = Date.now()
+    }
+  }
+  return { success: true }
+}
+
+export function addOption(
+  sessionID: string,
+  statement: string,
+  status?: OptionStatus,
+  result?: string,
+): { success: boolean; error?: string; option?: Option } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}. Call 'set_primary' first.` }
+  }
+  const clean = statement.trim()
+  if (clean.length < 10) {
+    return { success: false, error: `Option statement must be a complete candidate description (>=10 chars, got ${clean.length}).` }
+  }
+  po.options ??= []
+  const now = Date.now()
+  const option: Option = {
+    id: nextOptionId(po.options),
+    statement: clean,
+    status: status ?? "PENDING",
+    result: result?.trim() ?? "",
+    createdAt: now,
+    updatedAt: now,
+  }
+  po.options.push(option)
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+  return { success: true, option }
+}
+
+export function updateOption(
+  sessionID: string,
+  optionId: string,
+  changes: { status?: OptionStatus; result?: string; reason?: string; proofRef?: string },
+): { success: boolean; error?: string; option?: Option } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const result = applyOptionChange(po, optionId, changes)
+  if (!result.success) return result
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
+  const option = (po.options ?? []).find((o) => o.id.toLowerCase() === optionId.trim().toLowerCase())
+  return { success: true, option }
+}
+
+export function addFingerprint(
+  sessionID: string,
+  input: { normalizedKey?: string; symptom?: string; soRef?: string; status?: string; fixRef?: string },
+): { success: boolean; error?: string; fingerprint?: Fingerprint } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}. Call 'set_primary' first.` }
+  }
+  const symptom = input.symptom?.trim()
+  if (!symptom) return { success: false, error: "Fingerprint requires a symptom description." }
+  const soRef = input.soRef?.trim()
+  if (!soRef) return { success: false, error: "Fingerprint requires the owning objective id (soRef, e.g. 'SO-2')." }
+  const fixRef = input.fixRef?.trim()
+  if (!fixRef) return { success: false, error: "Fingerprint requires the finding id that resolved the blocker (fixRef)." }
+  const key = input.normalizedKey?.trim() || normalizeFingerprintKey(symptom)
+  if (!key) return { success: false, error: "Fingerprint key is empty after normalization." }
+
+  po.fingerprints ??= []
+  const existing = po.fingerprints.find((fp) => fp.key === key)
+  if (existing) {
+    existing.symptom = symptom
+    existing.soRef = soRef
+    existing.status = input.status?.trim() || existing.status
+    existing.fixRef = fixRef
+  } else {
+    po.fingerprints.push({ key, symptom, soRef, status: input.status?.trim() ?? "resolved", fixRef, createdAt: Date.now() })
+  }
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
+  return { success: true, fingerprint: existing ?? po.fingerprints[po.fingerprints.length - 1] }
+}
+
+export function setDoDCriteria(
+  sessionID: string,
+  criteria: { id?: string; statement: string; verifiableBy?: string; satisfiedBy?: string[]; proofRef?: string }[],
+): { success: boolean; error?: string; dod?: DoDCriterion[] } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  po.dod ??= []
+  for (const item of criteria) {
+    const statement = item.statement?.trim()
+    if (!statement) continue
+    const existing = item.id ? po.dod.find((c) => c.id.toLowerCase() === item.id!.trim().toLowerCase()) : undefined
+    if (existing) {
+      existing.statement = statement
+      if (item.verifiableBy?.trim()) existing.verifiableBy = item.verifiableBy.trim()
+      if (item.satisfiedBy) existing.satisfiedBy = item.satisfiedBy.map((s) => s.trim())
+      if (item.proofRef !== undefined) existing.proofRef = item.proofRef?.trim() || undefined
+    } else {
+      po.dod.push({
+        id: item.id?.trim() || nextDoDCriterionId(po.dod),
+        statement,
+        verifiableBy: item.verifiableBy?.trim() ?? "",
+        satisfiedBy: (item.satisfiedBy ?? []).map((s) => s.trim()),
+        proofRef: item.proofRef?.trim() || undefined,
+      })
+    }
+  }
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
+  return { success: true, dod: po.dod }
+}
+
+// F-9: record a normalized read action against the active SO; repeat keys queue a warning.
+function recordToolAction(sessionID: string, tool: string, input: any): void {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) return
+  const active =
+    po.secondaries.find((s) => s.status === "exploring") ?? po.secondaries.find((s) => s.status === "pending")
+  if (!active) return
+
+  const normalizedKey = normalizeToolActionKey(tool, input)
+  active.actionLog ??= []
+  const entry = active.actionLog.find((e) => e.normalizedKey === normalizedKey)
+  if (entry) {
+    entry.count += 1
+    entry.lastAt = Date.now()
+    if (entry.count >= 2) {
+      const warnings = actionWarnings.get(sessionID) ?? []
+      const warning = `Repeated action on ${active.id}: ${normalizedKey} executed ${entry.count} times. Value-first check: does skipping it change the known conclusion? If not, stop repeating it.`
+      if (!warnings.includes(warning)) warnings.push(warning)
+      actionWarnings.set(sessionID, warnings)
+    }
+  } else {
+    active.actionLog.push({ kind: tool, normalizedKey, count: 1, lastAt: Date.now() })
+  }
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
+}
+
+function normalizeToolActionKey(tool: string, input: any): string {
+  const value = (key: string) => (typeof input?.[key] === "string" ? input[key] : "")
+  switch (tool) {
+    case "read":
+      return `read:${value("path")}`
+    case "list":
+      return `list:${value("path")}`
+    case "glob":
+      return `glob:${value("pattern")}`
+    case "grep":
+      return `grep:${value("pattern")}:${value("path")}`
+    case "websearch":
+      return `websearch:${value("query")}`
+    case "webfetch":
+      return `webfetch:${value("url")}`
+    default:
+      try {
+        return `${tool}:${JSON.stringify(input ?? {}).slice(0, 120)}`
+      } catch {
+        return tool
+      }
+  }
+}
+
+// F-10: session generator hook for one-shot /btw evaluations
+let sessionGenerator: ((input: { sessionID: string; prompt: string }) => Promise<{ text: string } | string>) | undefined
+
+// In-flight evaluation dedup: prevents concurrent duplicate calls for the same file in the same session
+const inFlightEvaluations = new Map<string, Set<string>>()
+
+export function setSessionGenerator(
+  gen: ((input: { sessionID: string; prompt: string }) => Promise<{ text: string } | string>) | undefined,
+): void {
+  sessionGenerator = gen
+}
+
+async function evaluateChangeDocumentationRelevance(sessionID: string, path: string): Promise<boolean> {
+  // If it's a test, mock, or lockfile, never require documentation
+  const { isEphemeralOrTestFile } = await import("./objectives-model.js")
+  if (isEphemeralOrTestFile(path)) return false
+
+  // If one-shot /btw generation is available, ask the model without contaminating session context
+  if (sessionGenerator) {
+    try {
+      const prompt = [
+        "You are an automated software architecture gatekeeper.",
+        `Question: Are the modifications to file "${path}" relevant to the project structure, features, public contracts, or behavior such that documentation should be updated?`,
+        "Answer strictly YES or NO followed by a brief reason.",
+      ].join("\n\n")
+
+      const res = await sessionGenerator({ sessionID, prompt })
+      const text = typeof res === "string" ? res : (res as any)?.text ?? ""
+      if (/^\s*YES\b/i.test(text.trim())) return true
+      if (/^\s*NO\b/i.test(text.trim())) return false
+    } catch {
+      // generator failure: fall back to heuristic
+    }
+  }
+
+  // Fallback: heuristic relevance detection
+  const { isRelevantProjectFile } = await import("./objectives-model.js")
+  return isRelevantProjectFile(path)
+}
+
+function trackTouchedFile(sessionID: string, path: string): void {
+  const po = sessionObjectives.get(sessionID)
+  if (!po || !path) return
+  po.touchedFiles ??= []
+  if (!po.touchedFiles.includes(path)) po.touchedFiles.push(path)
+  const active =
+    po.secondaries.find((s) => s.status === "exploring") ?? po.secondaries.find((s) => s.status === "pending")
+  if (active) {
+    active.touchedFiles ??= []
+    if (!active.touchedFiles.includes(path)) active.touchedFiles.push(path)
+  }
+
+  // OPTIMIZACIÓN ASIMÉTRICA:
+  // 1. Si el archivo YA está marcado como relevante en po.relevantDocumentableFiles,
+  //    permanece relevante durante toda la sesión. NO se vuelve a evaluar (costo cero).
+  // 2. Si aún NO está marcado como relevante, una modificación posterior puede cambiar su estado
+  //    (de no relevante a relevante). Solo se evita la llamada concurrente si ya hay una en curso.
+  const alreadyRelevant = po.relevantDocumentableFiles?.includes(path) ?? false
+  if (alreadyRelevant) {
+    po.updatedAt = Date.now()
+    persistSessionObjectives(sessionID)
+    return
+  }
+
+  // Evitar llamadas duplicadas concurrentes mientras se está evaluando el archivo
+  let sessionInFlight = inFlightEvaluations.get(sessionID)
+  if (!sessionInFlight) {
+    sessionInFlight = new Set<string>()
+    inFlightEvaluations.set(sessionID, sessionInFlight)
+  }
+
+  if (!sessionInFlight.has(path)) {
+    sessionInFlight.add(path)
+    void evaluateChangeDocumentationRelevance(sessionID, path)
+      .then((isRelevant) => {
+        if (isRelevant) {
+          const current = sessionObjectives.get(sessionID)
+          if (current) {
+            current.relevantDocumentableFiles ??= []
+            if (!current.relevantDocumentableFiles.includes(path)) {
+              current.relevantDocumentableFiles.push(path)
+              persistSessionObjectives(sessionID)
+            }
+          }
+        }
+      })
+      .finally(() => {
+        sessionInFlight?.delete(path)
+      })
+      .catch(() => {})
+  }
+
+  po.updatedAt = Date.now()
+  persistSessionObjectives(sessionID)
+}
+
+// F-6: plan pause / resume / checkpoint state machine.
+export function presentPlan(sessionID: string, reason?: string): { success: boolean; error?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const now = Date.now()
+  po.status = "presented_awaiting_confirmation"
+  po.phase = { paused: true, since: now, checkpointAt: po.phase?.checkpointAt, reason: reason?.trim() || undefined }
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+  return { success: true, po }
+}
+
+export function resumePlan(sessionID: string, note?: string): { success: boolean; error?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const now = Date.now()
+  if (po.status === "presented_awaiting_confirmation") po.status = "exploring"
+  po.phase = { ...po.phase, paused: false, reason: note?.trim() || po.phase?.reason }
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+  return { success: true, po }
+}
+
+export function makeCheckpoint(sessionID: string, note?: string): { success: boolean; error?: string; report?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const since = po.phase?.checkpointAt ?? 0
+  const completed: string[] = []
+  for (const so of po.secondaries) {
+    if (so.status === "resolved" && so.updatedAt > since) {
+      completed.push(`${so.id} (proof: ${(so.validationProof ?? "—").slice(0, 80)})`)
+    }
+    for (const t of so.children ?? []) {
+      if (t.status === "resolved" && t.updatedAt > since) completed.push(`${t.id}`)
+    }
+  }
+  const newFindings = (po.findings ?? []).filter((f) => f.createdAt > since).map((f) => f.id)
+  const dodEval = evaluateDoD(po)
+  const satisfied = dodEval.criteria.filter((c) => c.satisfied).length
+  const open = po.secondaries
+    .filter((s) => s.status === "pending" || s.status === "exploring" || s.status === "blocked")
+    .map((s) => `${s.id} [${s.status.toUpperCase()}]`)
+
+  const lines: string[] = [
+    "### Phase Checkpoint (derived from the objective tree only)",
+    `- PO: ${po.title} [${po.status.toUpperCase()}] — DoD: ${satisfied}/${dodEval.criteria.length} criterion(s) satisfied`,
+    `- Completed since last checkpoint (${since > 0 ? new Date(since).toISOString() : "start"}): ${completed.length > 0 ? completed.join(", ") : "(none)"}`,
+  ]
+  if (newFindings.length > 0) lines.push(`- New findings: ${newFindings.join(", ")}`)
+  lines.push(`- Open objectives: ${open.length > 0 ? open.join(", ") : "(none)"}`)
+  const next = nextConcreteAction(po)
+  if (next) lines.push(`**Next concrete action:** ${next}`)
+
+  const now = Date.now()
+  po.phase = { paused: true, since: now, checkpointAt: now, reason: note?.trim() || undefined }
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+
+  return {
+    success: true,
+    po,
+    report: `${lines.join("\n")}\nPAUSED: present this checkpoint to the user and call 'resume_plan' with their instruction to continue.`,
+  }
+}
+
+// F-1: post-compaction / resume sync — the persistent store wins over in-memory state.
+export async function syncSessionObjectives(sessionID: string): Promise<{ success: boolean; error?: string; report?: string; po?: PrimaryObjective }> {
+  if (!activeStore) {
+    const po = sessionObjectives.get(sessionID)
+    return {
+      success: true,
+      po,
+      report: "No persistent store available in this context; the in-memory tree is kept as-is.",
+    }
+  }
+  const doc = await activeStore.load(sessionID)
+  if (!doc) {
+    return {
+      success: true,
+      po: sessionObjectives.get(sessionID),
+      report: "No persisted document found for this session; nothing to hydrate.",
+    }
+  }
+  const inMem = sessionObjectives.get(sessionID)
+  const divergences: string[] = []
+  if (inMem) {
+    if (inMem.status !== doc.status) divergences.push(`PO status: memory=${inMem.status} store=${doc.status} (store wins)`)
+    const memById = new Map(inMem.secondaries.map((s) => [s.id.toLowerCase(), s]))
+    for (const so of doc.secondaries as SecondaryObjective[]) {
+      const m = memById.get(so.id.toLowerCase())
+      if (!m) divergences.push(`${so.id}: missing in memory (store wins)`)
+      else if (m.status !== so.status) divergences.push(`${so.id}: memory=${m.status} store=${so.status} (store wins)`)
+    }
+    for (const m of inMem.secondaries) {
+      if (!(doc.secondaries as SecondaryObjective[]).some((s) => s.id.toLowerCase() === m.id.toLowerCase())) {
+        divergences.push(`${m.id}: missing in store (dropped)`)
+      }
+    }
+  }
+  const repairs = repairDocumentInvariants(doc)
+  const po = doc as unknown as PrimaryObjective
+  sessionObjectives.set(sessionID, po)
+  persistSessionObjectives(sessionID)
+
+  // Pre-warm embeddings cache in background for all hydrated findings
+  if (Array.isArray(po.findings) && po.findings.length > 0) {
+    void warmUpFindingsEmbeddings(po.findings).catch(() => {})
+  }
+
+  const lines: string[] = [
+    `Hydrated from persistent store: ${doc.secondaries.length} SO(s), ${(doc.findings ?? []).length} finding(s), ${(doc.options ?? []).length} option(s), ${(doc.fingerprints ?? []).length} fingerprint(s).`,
+  ]
+  if (divergences.length > 0) lines.push(`Divergences detected (store won): ${divergences.join("; ")}`)
+  if (repairs.length > 0) lines.push(`Invariants repaired: ${repairs.join("; ")}`)
+  if (divergences.length === 0 && repairs.length === 0) lines.push("State coherent; no divergence detected.")
+
+  return { success: true, po, report: lines.join("\n") }
+}
+
+export function exportSession(sessionID: string, topicKey?: string): { success: boolean; error?: string; payload?: string; report?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  if (topicKey?.trim()) {
+    po.topicKey = topicKey.trim()
+    po.updatedAt = Date.now()
+    persistSessionObjectives(sessionID)
+  }
+  return {
+    success: true,
+    po,
+    payload: JSON.stringify({ version: 1, ...po }),
+    report: renderProjection(po),
+  }
+}
+
+export function importSession(
+  sessionID: string,
+  source: { topicKey?: string; tree?: string },
+): { success: boolean; error?: string; report?: string; po?: PrimaryObjective } {
+  let doc: Record<string, any> | undefined
+  if (source.tree?.trim()) {
+    try {
+      doc = parseDocument(JSON.parse(source.tree.trim()))
+    } catch {
+      return { success: false, error: "import_tree: 'tree' is not valid JSON." }
+    }
+  } else if (source.topicKey?.trim() && activeStore) {
+    // Synchronous wrapper: the store is async; import via the async path in the tool layer.
+    return { success: false, error: "import_tree with topicKey is handled asynchronously by the tool action." }
+  }
+  if (!doc) {
+    return { success: false, error: "import_tree: provide 'tree' (serialized JSON) or 'topicKey'." }
+  }
+  const repairs = repairDocumentInvariants(doc)
+  const po = doc as unknown as PrimaryObjective
+  sessionObjectives.set(sessionID, po)
+  persistSessionObjectives(sessionID)
+  const report = `Imported tree: ${doc.secondaries.length} SO(s), ${(doc.findings ?? []).length} finding(s), ${(doc.options ?? []).length} option(s).${repairs.length > 0 ? ` Repairs: ${repairs.join("; ")}` : ""}`
+  return { success: true, po, report }
+}
+
+// ---------- Rendering ----------
 
 export function renderObjectiveTree(po: PrimaryObjective): string {
   const lines: string[] = [
@@ -454,6 +1337,25 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
     }
   }
 
+  const activeFindings = (po.findings ?? []).filter((f) => f.lifecycle !== "SUBSUMED")
+  if (activeFindings.length > 0) {
+    lines.push(``, `**Findings:**`)
+    for (const f of activeFindings) {
+      const refs: string[] = []
+      if (f.seeAlso.length > 0) refs.push(`see also ${f.seeAlso.join(", ")}`)
+      if (f.lifecycle !== "NEW") refs.push(f.lifecycle)
+      lines.push(`- **${f.id}** [${f.soRef}] ${f.title} — ${f.result}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
+      lines.push(`  - *Next:* ${f.nextAction}`)
+    }
+  }
+
+  if ((po.options ?? []).length > 0) {
+    lines.push(``, `**Options:**`)
+    for (const o of po.options ?? []) {
+      lines.push(`- **${o.id}** [${o.status}] ${o.statement} — *Result:* ${o.result?.trim() || "—"}`)
+    }
+  }
+
   return lines.join("\n")
 }
 
@@ -482,7 +1384,7 @@ export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
     "- In '## Next Move', state the immediate active or pending secondary objective to be resumed.",
     "",
     "CRITICAL MANDATORY INSTRUCTION FOR POST-COMPACTION RESUMPTION:",
-    "Immediately after compaction finishes, when the session resumes, the VERY FIRST action the agent must perform is to read what has been accomplished so far in the objectives from this summary and call `objective_manage` to synchronize and update the active objectives before continuing execution.",
+    "Immediately after compaction finishes, when the session resumes, the VERY FIRST action the agent must perform is to read what has been accomplished so far in the objectives from this summary and call `objective_manage` to synchronize and update the active objectives before continuing execution. Call action 'sync' first: the tree is auto-persisted and the persistent store is the source of truth.",
     "",
     `[PO] ${po.title} [${po.status.toUpperCase()}]`,
     `Definition of Done: ${po.definitionOfDone || "Verified"}`,
@@ -507,8 +1409,26 @@ export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
       ? pending.flatMap((s) => objectiveLines(`- [${s.id}] [PENDING] ${s.title} (Rationale: ${s.rationale})`, s))
       : ["- (none)"]),
     "",
-    renderObjectiveTree(po),
   ]
+
+  const activeFindings = (po.findings ?? []).filter((f) => f.lifecycle !== "SUBSUMED")
+  if (activeFindings.length > 0) {
+    lines.push("### Findings (preserve IDs, evidence and next actions)")
+    for (const f of activeFindings) {
+      lines.push(`- [${f.id}] [${f.soRef}] ${f.title} (Evidence: ${f.evidence.type} ${f.evidence.source}; Result: ${f.result}; Next: ${f.nextAction})`)
+    }
+    lines.push("")
+  }
+
+  if ((po.options ?? []).length > 0) {
+    lines.push("### Options (preserve the live Result column)")
+    for (const o of po.options ?? []) {
+      lines.push(`- [${o.id}] [${o.status}] ${o.statement} (Result: ${o.result || "—"})`)
+    }
+    lines.push("")
+  }
+
+  lines.push(renderObjectiveTree(po))
   return lines.join("\n")
 }
 
@@ -542,20 +1462,26 @@ export function reconstructObjectivesFromMessages(
       if (action === "set_primary" || action === "init" || action === "set_objectives") {
         if (input.title && input.definitionOfDone) {
           const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
-          po = setPrimaryObjective(sessionID, input.title, input.definitionOfDone, initialSecondaries)
+          po = setPrimaryObjective(sessionID, input.title, input.definitionOfDone, initialSecondaries, {
+            topicKey: typeof input.topicKey === "string" ? input.topicKey : undefined,
+            dod: normalizeDoDInput(input.dodCriteria),
+          })
           if (Array.isArray(input.secondaries)) {
             for (let i = 0; i < input.secondaries.length; i++) {
               const s = input.secondaries[i]
               const explicitId = (typeof s?.id === "string" && s.id.trim()) ? s.id.trim() : `SO-${i + 1}`
               const sTitle = s?.title?.trim() || s?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
               const sRationale = s?.rationale?.trim() || s?.title?.trim() || "Planned subtask"
-              const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
+              const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
+                affectedResources: normalizeAffectedResources(s?.affectedResources),
+                preconditions: normalizePreconditions(s?.preconditions),
+              })
               if (s.status && s.status !== "pending") {
                 updateSecondaryObjective(sessionID, so.id, {
                   status: s.status,
                   blocker: s.blocker || undefined,
                   validationProof: s.validationProof || undefined,
-                })
+                }, { bypassGates: true })
               }
             }
           }
@@ -568,13 +1494,16 @@ export function reconstructObjectivesFromMessages(
           const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
           const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
           const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask"
-          const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
+          const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
+            affectedResources: normalizeAffectedResources(item?.affectedResources),
+            preconditions: normalizePreconditions(item?.preconditions),
+          })
           if (item.status && item.status !== "pending") {
             updateSecondaryObjective(sessionID, so.id, {
               status: item.status,
               blocker: item.blocker || undefined,
               validationProof: item.validationProof || undefined,
-            })
+            }, { bypassGates: true })
           }
         }
       } else if (action === "update_secondary" || action === "update_secondaries") {
@@ -589,7 +1518,7 @@ export function reconstructObjectivesFromMessages(
               rationale: item.rationale,
               blocker: item.blocker,
               validationProof: item.validationProof,
-            })
+            }, { bypassGates: true })
           }
         }
       } else if (action === "add_tertiary" || action === "add_tertaries") {
@@ -608,7 +1537,7 @@ export function reconstructObjectivesFromMessages(
               status: item.status,
               blocker: item.blocker || undefined,
               validationProof: item.validationProof || undefined,
-            })
+            }, { bypassGates: true })
           }
         }
       } else if (action === "update_tertiary" || action === "update_tertaries") {
@@ -624,11 +1553,11 @@ export function reconstructObjectivesFromMessages(
             rationale: typeof item.rationale === "string" ? item.rationale : undefined,
             blocker: item.blocker || undefined,
             validationProof: item.validationProof || undefined,
-          })
+          }, { bypassGates: true })
         }
       } else if (action === "complete_primary" || action === "resolve_primary" || action === "close_primary") {
         if (po) {
-          updatePrimaryObjective(sessionID, { status: "resolved", validationProof: input.validationProof })
+          updatePrimaryObjective(sessionID, { status: "resolved", validationProof: input.validationProof }, { bypassGates: true })
         }
       } else if (action === "update_primary") {
         if (po) {
@@ -637,8 +1566,68 @@ export function reconstructObjectivesFromMessages(
             title: input.title,
             definitionOfDone: input.definitionOfDone,
             validationProof: input.validationProof,
-          })
+            dod: normalizeDoDInput(input.dodCriteria) ?? po.dod,
+          }, { bypassGates: true })
         }
+      } else if (action === "add_finding") {
+        const added = addFinding(sessionID, {
+          soRef: input.soRef,
+          title: input.title,
+          evidence: input.evidence,
+          result: input.result,
+          nextAction: input.nextAction,
+          seeAlso: Array.isArray(input.seeAlso) ? input.seeAlso : undefined,
+          supersedes: Array.isArray(input.supersedes) ? input.supersedes : undefined,
+          spawnedBy: input.spawnedBy,
+        })
+        if (added.finding) po = sessionObjectives.get(sessionID)
+      } else if (action === "update_finding") {
+        if (input.findingId) {
+          updateFinding(sessionID, input.findingId, {
+            title: input.title,
+            result: input.result,
+            nextAction: input.nextAction,
+            evidence: input.evidence,
+            seeAlso: Array.isArray(input.seeAlso) ? input.seeAlso : undefined,
+            supersedes: Array.isArray(input.supersedes) ? input.supersedes : undefined,
+            subsumedBy: input.subsumedBy,
+          })
+          po = sessionObjectives.get(sessionID)
+        }
+      } else if (action === "add_option") {
+        addOption(sessionID, String(input.statement ?? ""), input.optionStatus, input.result)
+        po = sessionObjectives.get(sessionID)
+      } else if (action === "update_option") {
+        if (input.optionId) {
+          updateOption(sessionID, input.optionId, {
+            status: input.optionStatus,
+            result: input.result,
+            reason: input.reason,
+            proofRef: input.proofRef,
+          })
+          po = sessionObjectives.get(sessionID)
+        }
+      } else if (action === "add_fingerprint") {
+        addFingerprint(sessionID, {
+          normalizedKey: input.normalizedKey,
+          symptom: input.symptom,
+          soRef: input.soRef,
+          status: input.status,
+          fixRef: input.fixRef,
+        })
+        po = sessionObjectives.get(sessionID)
+      } else if (action === "update_dod" || action === "set_dod") {
+        const criteria = normalizeDoDInput(input.dodCriteria)
+        if (criteria) {
+          setDoDCriteria(sessionID, criteria)
+          po = sessionObjectives.get(sessionID)
+        }
+      } else if (action === "present_plan") {
+        presentPlan(sessionID, input.reason)
+        po = sessionObjectives.get(sessionID)
+      } else if (action === "resume_plan") {
+        resumePlan(sessionID, input.note)
+        po = sessionObjectives.get(sessionID)
       }
     }
   }
@@ -718,7 +1707,7 @@ export function reconstructObjectivesFromMessages(
             status,
             blocker,
             validationProof: proof,
-          })
+          }, { bypassGates: true })
         } else {
           pendingTertiaries.push({ id: rawId, title, rationale, blocker, proof, status })
         }
@@ -735,7 +1724,7 @@ export function reconstructObjectivesFromMessages(
             status: entry.status,
             blocker: entry.blocker,
             validationProof: entry.proof,
-          })
+          }, { bypassGates: true })
         }
       }
 
@@ -748,7 +1737,50 @@ export function reconstructObjectivesFromMessages(
   return po
 }
 
-// Tool Input Schema using Effect Schema
+function normalizeDoDInput(raw: any): DoDCriterion[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const criteria: DoDCriterion[] = []
+  let counter = 0
+  for (const item of raw) {
+    const statement = typeof item?.statement === "string" ? item.statement.trim() : ""
+    if (!statement) continue
+    counter += 1
+    criteria.push({
+      id: typeof item?.id === "string" && item.id.trim() ? item.id.trim() : `D${counter}`,
+      statement,
+      verifiableBy: typeof item?.verifiableBy === "string" ? item.verifiableBy.trim() : "",
+      satisfiedBy: Array.isArray(item?.satisfiedBy) ? item.satisfiedBy.map((s: any) => String(s).trim()) : [],
+      proofRef: typeof item?.proofRef === "string" && item.proofRef.trim() ? item.proofRef.trim() : undefined,
+    })
+  }
+  return criteria.length > 0 ? criteria : undefined
+}
+
+function normalizeAffectedResources(raw: any): AffectedResources | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const strArray = (value: any) => (Array.isArray(value) ? value.map((v: any) => String(v).trim()).filter(Boolean) : [])
+  const files = strArray(raw.files)
+  const envs = strArray(raw.envs)
+  const dbSchemas = strArray(raw.dbSchemas)
+  const services = strArray(raw.services)
+  if (files.length + envs.length + dbSchemas.length + services.length === 0) return undefined
+  return { files, envs, dbSchemas, services }
+}
+
+function normalizePreconditions(raw: any): Precondition[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const result: Precondition[] = []
+  for (const item of raw) {
+    const actionClass = typeof item?.actionClass === "string" ? item.actionClass.trim() : ""
+    if (!actionClass) continue
+    const requires = Array.isArray(item?.requires) ? item.requires.map((r: any) => String(r).trim()).filter(Boolean) : []
+    result.push({ actionClass, requires })
+  }
+  return result.length > 0 ? result : undefined
+}
+
+// ---------- Tool Input Schema using Effect Schema ----------
+
 const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("set_primary"),
   Schema.Literal("init"),
@@ -763,6 +1795,20 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("update_secondaries"),
   Schema.Literal("add_tertiary"),
   Schema.Literal("update_tertiary"),
+  Schema.Literal("add_finding"),
+  Schema.Literal("update_finding"),
+  Schema.Literal("search_findings"),
+  Schema.Literal("add_option"),
+  Schema.Literal("update_option"),
+  Schema.Literal("add_fingerprint"),
+  Schema.Literal("update_dod"),
+  Schema.Literal("export_tree"),
+  Schema.Literal("import_tree"),
+  Schema.Literal("sync"),
+  Schema.Literal("present_plan"),
+  Schema.Literal("resume_plan"),
+  Schema.Literal("checkpoint"),
+  Schema.Literal("audit"),
   Schema.Literal("list"),
 ])
 const SecondaryStatusSchema = Schema.Union([
@@ -773,6 +1819,53 @@ const SecondaryStatusSchema = Schema.Union([
   Schema.Literal("discarded"),
   Schema.Literal("cancelled"),
 ])
+const OptionStatusSchema = Schema.Union([
+  Schema.Literal("PENDING"),
+  Schema.Literal("EXPLORING"),
+  Schema.Literal("DISCARDED"),
+  Schema.Literal("SUCCESSFUL"),
+  Schema.Literal("CANCELLED"),
+])
+const FindingEvidenceTypeSchema = Schema.Union([
+  Schema.Literal("COMMAND_OUTPUT"),
+  Schema.Literal("QUERY_RESULT"),
+  Schema.Literal("LOG_EXCERPT"),
+  Schema.Literal("FILE_READ"),
+  Schema.Literal("SCREENSHOT"),
+])
+
+const DoDCriterionInputSchema = Schema.Struct({
+  id: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Criterion id (e.g. 'D1'); auto-assigned when omitted" })),
+  ),
+  statement: Schema.String.pipe(Schema.annotate({ description: "What must be true for this criterion" })),
+  verifiableBy: Schema.String.pipe(Schema.annotate({ description: "Specific command/query that proves it" })),
+  satisfiedBy: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.String)).pipe(Schema.annotate({ description: "SO ids that discharge the criterion" })),
+  ),
+  proofRef: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Concrete proof (command output, exit code, artifact). Mandatory before complete_primary" })),
+  ),
+})
+
+const PreconditionInputSchema = Schema.Struct({
+  actionClass: Schema.String.pipe(Schema.annotate({ description: "Class of gated action (e.g. 'pdn-write', 'local-test')" })),
+  requires: Schema.Array(Schema.String).pipe(Schema.annotate({ description: "Tokens/scripts/states required before the action counts toward proof" })),
+})
+
+const AffectedResourcesInputSchema = Schema.Struct({
+  files: Schema.optional(Schema.NullOr(Schema.Array(Schema.String)).pipe(Schema.annotate({ description: "Files in the blast radius" }))),
+  envs: Schema.optional(Schema.NullOr(Schema.Array(Schema.String)).pipe(Schema.annotate({ description: "Environments: LOCAL, LAB, PDN, ..." }))),
+  dbSchemas: Schema.optional(Schema.NullOr(Schema.Array(Schema.String)).pipe(Schema.annotate({ description: "Database schemas touched" }))),
+  services: Schema.optional(Schema.NullOr(Schema.Array(Schema.String)).pipe(Schema.annotate({ description: "Services touched" }))),
+})
+
+const FindingEvidenceInputSchema = Schema.Struct({
+  type: Schema.optional(
+    FindingEvidenceTypeSchema.pipe(Schema.annotate({ description: "Evidence type (defaults to FILE_READ)" })),
+  ),
+  source: Schema.String.pipe(Schema.annotate({ description: "Exact source: file+lines, command, SQL, log excerpt — no interpretation" })),
+})
 
 export const SecondaryInputItemSchema = Schema.Struct({
   id: Schema.optional(
@@ -797,20 +1890,38 @@ export const SecondaryInputItemSchema = Schema.Struct({
   validationProof: Schema.optional(
     Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Concrete test/command output proof. Mandatory when status='resolved'" })),
   ),
+  affectedResources: Schema.optional(
+    Schema.NullOr(AffectedResourcesInputSchema).pipe(Schema.annotate({ description: "Blast radius of this SO (files, envs, db schemas, services)" })),
+  ),
+  preconditions: Schema.optional(
+    Schema.NullOr(Schema.Array(PreconditionInputSchema)).pipe(
+      Schema.annotate({ description: "Declarative gates: actionClass -> required tokens/scripts before it counts toward proof" }),
+    ),
+  ),
+  justification: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Required when the SO title matches a resolved/discarded blocker fingerprint" }),
+    ),
+  ),
+  preconditionsMet: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.String)).pipe(
+      Schema.annotate({ description: "actionClass values acknowledged as met; mandatory to resolve an SO that declares preconditions" }),
+    ),
+  ),
 })
 
 export const ObjectiveInputSchema = Schema.Struct({
   action: ObjectiveActionSchema.pipe(
     Schema.annotate({
       description:
-        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary' (add one or multiple secondaries), 'update_secondary' (update status/rationale/proof of SOs), 'add_tertiary' (add a tertiary sub-objective under an SO: 'id' is the PARENT SO id, e.g. 'SO-2'), 'update_tertiary' (update status/rationale/proof of TOs: 'id' is the TO's own id, e.g. 'SO-2-T1'), or 'list'. An SO cannot be resolved while any of its tertiary sub-objectives is open.",
+        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary'/'update_secondary' (manage SOs), 'add_tertiary' (add a tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage TOs: 'id' is the TO's own id), 'add_finding'/'update_finding'/'search_findings' (epistemic findings F-NNN with typed evidence and search-before-write), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod' (decomposed Definition of Done criteria), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), or 'list'. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef.",
     }),
   ),
   title: Schema.optional(
     Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
-          "Title of the Primary Objective (when action='set_primary') or single Secondary Objective (when action='add_secondary')",
+          "Title of the Primary Objective (when action='set_primary'), a Secondary Objective (when action='add_secondary'), or a Finding (when action='add_finding'/'update_finding')",
       }),
     ),
   ),
@@ -869,17 +1980,909 @@ export const ObjectiveInputSchema = Schema.Struct({
       }),
     ),
   ),
+  topicKey: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({
+        description:
+          "Cross-session identity for the tree (e.g. 'outlook_bulk_triage'). Used by 'set_primary' (tag), 'export_tree' (register topic) and 'import_tree' (hydrate from topic)",
+      }),
+    ),
+  ),
+  dodCriteria: Schema.optional(
+    Schema.NullOr(Schema.Array(DoDCriterionInputSchema)).pipe(
+      Schema.annotate({
+        description:
+          "Decomposed Definition of Done criteria (statement + verifiableBy + proofRef). Use in 'set_primary' to establish, or in 'update_dod'/'update_primary' to upsert by id",
+      }),
+    ),
+  ),
+  evidence: Schema.optional(
+    Schema.NullOr(Schema.Union([FindingEvidenceInputSchema, Schema.String])).pipe(
+      Schema.annotate({
+        description:
+          "Typed evidence for a finding: { type: COMMAND_OUTPUT|QUERY_RESULT|LOG_EXCERPT|FILE_READ|SCREENSHOT, source } or a plain source string (treated as FILE_READ)",
+      }),
+    ),
+  ),
+  findingId: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Finding id (e.g. 'F-001') for 'update_finding'" }),
+    ),
+  ),
+  optionId: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Option id (e.g. 'OPT-1') for 'update_option', or the option affected by a finding's impactOnOption" }),
+    ),
+  ),
+  optionStatus: Schema.optional(
+    Schema.NullOr(OptionStatusSchema).pipe(
+      Schema.annotate({
+        description: "Option status: 'PENDING', 'EXPLORING', 'DISCARDED', 'SUCCESSFUL', 'CANCELLED' (for 'add_option'/'update_option' and finding impactOnOption)",
+      }),
+    ),
+  ),
+  statement: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Option candidate statement (for 'add_option')" }),
+    ),
+  ),
+  result: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({
+        description:
+          "Literal finding result (for 'add_finding'/'update_finding') or the current known state for an option (for 'add_option'/'update_option' — the live Result column)",
+      }),
+    ),
+  ),
+  nextAction: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "One concrete executable next action (for findings)" }),
+    ),
+  ),
+  soRef: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Owning objective of a finding/fingerprint: an SO id (e.g. 'SO-2') or 'PO'" }),
+    ),
+  ),
+  reason: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({
+        description: "Mandatory reason for DISCARDED options; optional reason for 'present_plan'",
+      }),
+    ),
+  ),
+  proofRef: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({
+        description: "Proof reference for SUCCESSFUL options and DoD criteria (command output, log, artifact)",
+      }),
+    ),
+  ),
+  seeAlso: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.String)).pipe(
+      Schema.annotate({ description: "Cross-referenced finding ids (e.g. ['F-002'])" }),
+    ),
+  ),
+  supersedes: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.String)).pipe(
+      Schema.annotate({ description: "Finding ids superseded by this one" }),
+    ),
+  ),
+  subsumedBy: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Finding id that subsumes this one (marks it SUBSUMED; for 'update_finding')" }),
+    ),
+  ),
+  spawnedBy: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Objective id that spawned this finding (e.g. 'SO-4')" }),
+    ),
+  ),
+  normalizedKey: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Normalized blocker key for 'add_fingerprint' (auto-computed from symptom when omitted)" }),
+    ),
+  ),
+  symptom: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Blocker symptom for 'add_fingerprint'" }),
+    ),
+  ),
+  fixRef: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Finding id that resolved the blocker (for 'add_fingerprint')" }),
+    ),
+  ),
+  query: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Search query for 'search_findings' (semantic/lexical match against existing findings)" }),
+    ),
+  ),
+  justification: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({
+        description: "Explicit justification required when opening an SO that matches a resolved/discarded blocker fingerprint",
+      }),
+    ),
+  ),
+  preconditionsMet: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.String)).pipe(
+      Schema.annotate({
+        description: "actionClass values acknowledged as met; mandatory to resolve an SO that declares preconditions",
+      }),
+    ),
+  ),
+  affectedResources: Schema.optional(
+    Schema.NullOr(AffectedResourcesInputSchema).pipe(
+      Schema.annotate({ description: "Blast radius of an SO (files, envs, db schemas, services)" }),
+    ),
+  ),
+  preconditions: Schema.optional(
+    Schema.NullOr(Schema.Array(PreconditionInputSchema)).pipe(
+      Schema.annotate({ description: "Declarative gates for an SO: actionClass -> required tokens/scripts" }),
+    ),
+  ),
+  tree: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Serialized tree document (JSON) for 'import_tree'" }),
+    ),
+  ),
+  note: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({ description: "Free-form note for 'resume_plan' (user's instruction) or 'checkpoint' (phase label)" }),
+    ),
+  ),
 })
 
 export const ObjectiveOutputSchema = Schema.Struct({
   success: Schema.Boolean,
   message: Schema.String,
   tree: Schema.String,
+  report: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Extended report: rendered projection, audit violations, sync/checkpoint reports" })),
+  ),
+  payload: Schema.optional(
+    Schema.String.pipe(Schema.annotate({ description: "Serialized tree document (JSON) for 'export_tree'" })),
+  ),
 })
+
+// ---------- Tool execution ----------
+
+type ToolResult = {
+  output: { success: boolean; message: string; tree: string; report?: string; payload?: string }
+  content: string
+}
+
+function withWarnings(sessionID: string, result: ToolResult): ToolResult {
+  const warnings = actionWarnings.get(sessionID)
+  if (!warnings || warnings.length === 0) return result
+  actionWarnings.delete(sessionID)
+  const prefix = `⚠️ Action warnings: ${warnings.join(" ")}\n`
+  return {
+    output: { ...result.output, message: `${prefix}${result.output.message}` },
+    content: `${prefix}${result.content}`,
+  }
+}
+
+function treeOf(sessionID: string): string {
+  const po = sessionObjectives.get(sessionID)
+  return po ? renderObjectiveTree(po) : ""
+}
+
+const PAUSED_MUTATING_ACTIONS = new Set([
+  "set_primary",
+  "init",
+  "set_objectives",
+  "update_primary",
+  "add_secondary",
+  "add_secondaries",
+  "update_secondary",
+  "update_secondaries",
+  "add_tertiary",
+  "update_tertiary",
+  "add_finding",
+  "update_finding",
+  "add_option",
+  "update_option",
+  "add_fingerprint",
+  "update_dod",
+  "import_tree",
+])
+
+const FROZEN_MESSAGE =
+  "Objective tree is FROZEN (status: presented_awaiting_confirmation). Present the plan to the user and call action 'resume_plan' with their explicit instruction before mutating the tree."
+
+function checkFingerprintCollision(po: PrimaryObjective, title: string, justification?: string): string | undefined {
+  const key = normalizeFingerprintKey(title)
+  if (!key) return undefined
+  const hit = (po.fingerprints ?? []).find(
+    (fp) => fp.key === key && (fp.status === "resolved" || fp.status === "discarded"),
+  )
+  if (!hit) return undefined
+  if (justification?.trim()) return undefined
+  return `SO title matches a known blocker fingerprint (${hit.key}) already ${hit.status} (fix: ${hit.fixRef}). Provide an explicit 'justification' explaining why this is a genuinely new investigation.`
+}
+
+async function executeObjectiveAction(input: any, sessionID: string): Promise<ToolResult> {
+  const rawAction = String(input.action || "").toLowerCase()
+  const po = sessionObjectives.get(sessionID)
+
+  // F-6: the plan-pause state machine freezes mutations until the user confirms.
+  if (po?.status === "presented_awaiting_confirmation" && PAUSED_MUTATING_ACTIONS.has(rawAction)) {
+    return {
+      output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
+      content: FROZEN_MESSAGE,
+    }
+  }
+
+  if (rawAction === "set_primary" || rawAction === "init" || rawAction === "set_objectives") {
+    const title = input.title?.trim()
+    const dod = input.definitionOfDone?.trim()
+    if (!title || !dod) {
+      return {
+        output: {
+          success: false,
+          message: "Both 'title' and 'definitionOfDone' are required for action 'set_primary'.",
+          tree: "",
+        },
+        content: "Missing required parameters for set_primary (title and definitionOfDone are mandatory).",
+      }
+    }
+    const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
+    const dodCriteria = normalizeDoDInput(input.dodCriteria)
+    const created = setPrimaryObjective(sessionID, title, dod, initialSecondaries, {
+      topicKey: typeof input.topicKey === "string" ? input.topicKey : undefined,
+      dod: dodCriteria,
+    })
+
+    // If secondary objectives were supplied in the same call, register them immediately
+    if (Array.isArray(input.secondaries) && input.secondaries.length > 0) {
+      for (let i = 0; i < input.secondaries.length; i++) {
+        const item = input.secondaries[i]
+        const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
+        const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
+        const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
+        const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
+          affectedResources: normalizeAffectedResources(item?.affectedResources),
+          preconditions: normalizePreconditions(item?.preconditions),
+        })
+        if (item.status && item.status !== "pending") {
+          updateSecondaryObjective(sessionID, so.id, {
+            status: item.status,
+            blocker: item.blocker || undefined,
+            validationProof: item.validationProof || undefined,
+          })
+        }
+      }
+    }
+
+    const tree = renderObjectiveTree(created)
+    return {
+      output: { success: true, message: `Primary Objective and secondaries established.`, tree },
+      content: tree,
+    }
+  }
+
+  if (
+    rawAction === "complete_primary" ||
+    rawAction === "resolve_primary" ||
+    rawAction === "close_primary" ||
+    rawAction === "update_primary"
+  ) {
+    const current = sessionObjectives.get(sessionID)
+    if (!current) {
+      return {
+        output: {
+          success: false,
+          message: "No active objective tree found. Call 'set_primary' first.",
+          tree: "",
+        },
+        content: "No active objective tree found. Call 'set_primary' first.",
+      }
+    }
+
+    // F-10: documentation gate — public-surface changes require a documentation objective.
+    const isComplete = rawAction === "complete_primary" || rawAction === "resolve_primary" || rawAction === "close_primary"
+    const allClosed =
+      current.secondaries.length > 0 &&
+      current.secondaries.every(
+        (s) => isClosedStatus(s.status) && (s.children ?? []).every((t) => isClosedStatus(t.status)),
+      )
+    if (isComplete && allClosed) {
+      // Prioritize files explicitly judged relevant by the one-shot /btw prompt or the universal detector
+      const evaluatedRelevant = current.relevantDocumentableFiles ?? []
+      const detectedRelevant = relevantProjectFiles(current.touchedFiles ?? [])
+      const relevant = [...new Set([...evaluatedRelevant, ...detectedRelevant])]
+      const hasDocsSO = current.secondaries.some((s) => /documentation|docs|readme|spec|changelog/i.test(s.title))
+
+      // Universal project rule: if relevant project files were modified and no documentation
+      // objective was ever recorded or evaluated, block complete_primary and auto-create the docs SO.
+      if (relevant.length > 0 && !hasDocsSO) {
+        const docsSO = addSecondaryObjective(
+          sessionID,
+          `Update documentation for modified project files: ${relevant.slice(0, 5).join(", ")}${relevant.length > 5 ? ` (+${relevant.length - 5} more)` : ""}`,
+          "Mandatory documentation objective (auto-created): project files were modified and require documentation evaluation or updates before closing the Primary Objective.",
+        )
+        const tree = treeOf(sessionID)
+        return {
+          output: {
+            success: false,
+            message: `Documentation gate: relevant project files were modified (${relevant.slice(0, 5).join(", ")}). Created ${docsSO.id} — evaluate and update documentation with concrete proof, then call complete_primary again.`,
+            tree,
+          },
+          content: tree,
+        }
+      }
+    }
+
+    const targetStatus = isComplete
+      ? "resolved"
+      : ((input.status as PrimaryObjectiveStatus) || "resolved")
+
+    const result = updatePrimaryObjective(sessionID, {
+      status: targetStatus,
+      title: input.title,
+      definitionOfDone: input.definitionOfDone,
+      validationProof: input.validationProof,
+      dod: normalizeDoDInput(input.dodCriteria) ?? current.dod,
+    })
+
+    if (!result.success) {
+      const tree = treeOf(sessionID)
+      return {
+        output: { success: false, message: result.error || "Failed to update Primary Objective.", tree },
+        content: `Error updating Primary Objective: ${result.error}`,
+      }
+    }
+
+    const tree = treeOf(sessionID)
+    return {
+      output: {
+        success: true,
+        message: `Primary Objective successfully marked as ${current.status.toUpperCase()}.`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "add_secondary" || rawAction === "add_secondaries") {
+    const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+      ? input.secondaries
+      : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, justification: input.justification }] : [])
+
+    if (items.length === 0) {
+      return {
+        output: {
+          success: false,
+          message: "At least one secondary objective is required for action 'add_secondary'.",
+          tree: "",
+        },
+        content: "Missing required parameters for add_secondary.",
+      }
+    }
+
+    // F-7: fingerprint collision — re-opening a known resolved/discarded blocker needs justification.
+    for (const item of items) {
+      const sTitle = item?.title?.trim() || item?.rationale?.trim() || "Subtask"
+      const collision = po ? checkFingerprintCollision(po, sTitle, item?.justification ?? input.justification) : undefined
+      if (collision) {
+        return {
+          output: { success: false, message: collision, tree: treeOf(sessionID) },
+          content: collision,
+        }
+      }
+    }
+
+    const addedIds: string[] = []
+    for (const item of items) {
+      const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
+      const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
+      const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
+      const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
+        affectedResources: normalizeAffectedResources(item?.affectedResources),
+        preconditions: normalizePreconditions(item?.preconditions),
+      })
+      addedIds.push(so.id)
+      if (item.status && item.status !== "pending") {
+        updateSecondaryObjective(sessionID, so.id, {
+          status: item.status,
+          blocker: item.blocker || undefined,
+          validationProof: item.validationProof || undefined,
+        }, { preconditionsMet: item?.preconditionsMet })
+      }
+    }
+
+    const tree = treeOf(sessionID)
+    return {
+      output: { success: true, message: `Added secondary objective(s): ${addedIds.join(", ")}.`, tree },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "update_secondary" || rawAction === "update_secondaries") {
+    const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+      ? input.secondaries
+      : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, preconditionsMet: input.preconditionsMet }] : [])
+
+    if (items.length === 0) {
+      return {
+        output: {
+          success: false,
+          message: "'id' (or 'secondaries' array with ids) is required for action 'update_secondary'.",
+          tree: "",
+        },
+        content: "Missing id for update_secondary.",
+      }
+    }
+
+    for (const item of items) {
+      const id = item?.id?.trim()
+      if (!id) {
+        return {
+          output: { success: false, message: "Missing 'id' in update item.", tree: "" },
+          content: "Missing id in update item.",
+        }
+      }
+      const result = updateSecondaryObjective(sessionID, id, {
+        status: item.status || undefined,
+        title: item.title?.trim() || undefined,
+        rationale: item.rationale?.trim() || undefined,
+        blocker: item.blocker || undefined,
+        validationProof: item.validationProof || undefined,
+        affectedResources: normalizeAffectedResources(item?.affectedResources),
+        preconditions: normalizePreconditions(item?.preconditions),
+      }, { preconditionsMet: item?.preconditionsMet ?? input.preconditionsMet })
+      if (!result.success) {
+        const tree = treeOf(sessionID)
+        return {
+          output: { success: false, message: result.error || `Update failed for ${id}.`, tree },
+          content: `Error updating ${id}: ${result.error}`,
+        }
+      }
+    }
+
+    const tree = treeOf(sessionID)
+    const current = sessionObjectives.get(sessionID)
+    const allResolvedOrDiscarded =
+      current &&
+      current.secondaries.length > 0 &&
+      current.secondaries.every(
+        (s) => isClosedStatus(s.status) && (s.children ?? []).every((t) => isClosedStatus(t.status)),
+      )
+
+    const completionNotice =
+      allResolvedOrDiscarded && current.status !== "resolved"
+        ? " All secondary objectives are resolved! Call objective_manage with action: 'complete_primary' to formally close the Primary Objective before presenting your final response."
+        : ""
+
+    return {
+      output: {
+        success: true,
+        message: `Secondary objective(s) successfully updated.${completionNotice}`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "add_tertiary" || rawAction === "add_tertaries") {
+    const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+      ? input.secondaries
+      : (input.id && (input.title || input.rationale)
+          ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }]
+          : [])
+
+    if (items.length === 0) {
+      return { output: { success: false, message: "add_tertiary requires a parent secondary objective id ('id', e.g. 'SO-2') and a title.", tree: "" }, content: "Missing required parameters for add_tertiary (parent SO id + title)." }
+    }
+
+    const addedIds: string[] = []
+    for (const item of items) {
+      const parentId = typeof item?.id === "string" ? item.id.trim() : ""
+      if (!parentId) {
+        return { output: { success: false, message: "Missing parent SO id in add_tertiary item.", tree: "" }, content: "Missing parent SO id for tertiary objective." }
+      }
+      const tTitle = item?.title?.trim() || item?.rationale?.trim() || "Tertiary sub-objective"
+      const tRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned tertiary subtask"
+      const added = addTertiaryObjective(sessionID, parentId, tTitle, tRationale)
+      if (!added.success || !added.objective) {
+        return { output: { success: false, message: added.error || `Failed to add tertiary objective under ${parentId}.`, tree: "" }, content: added.error || "Failed to add tertiary objective." }
+      }
+      addedIds.push(added.objective.id)
+      if (item.status && item.status !== "pending") {
+        updateTertiaryObjective(sessionID, added.objective.id, {
+          status: item.status,
+          blocker: item.blocker || undefined,
+          validationProof: item.validationProof || undefined,
+        })
+      }
+    }
+
+    const tree = treeOf(sessionID)
+    return { output: { success: true, message: `Added tertiary objective(s): ${addedIds.join(", ")}.`, tree }, content: tree }
+  }
+
+  if (rawAction === "update_tertiary" || rawAction === "update_tertaries") {
+    const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+      ? input.secondaries
+      : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+
+    if (items.length === 0) {
+      return { output: { success: false, message: "'id' (tertiary objective id, e.g. 'SO-2-T1') is required for action 'update_tertiary'.", tree: "" }, content: "Missing id for update_tertiary." }
+    }
+
+    for (const item of items) {
+      const tertiaryId = typeof item?.id === "string" ? item.id.trim() : ""
+      if (!tertiaryId) {
+        return { output: { success: false, message: "Missing 'id' in update_tertiary item.", tree: "" }, content: "Missing id in update_tertiary item." }
+      }
+      const result = updateTertiaryObjective(sessionID, tertiaryId, {
+        status: item.status || undefined,
+        title: item.title?.trim() || undefined,
+        rationale: item.rationale?.trim() || undefined,
+        blocker: item.blocker || undefined,
+        validationProof: item.validationProof || undefined,
+      })
+      if (!result.success) {
+        const tree = treeOf(sessionID)
+        return { output: { success: false, message: result.error || `Update failed for ${tertiaryId}.`, tree }, content: `Error updating ${tertiaryId}: ${result.error}` }
+      }
+    }
+
+    const tree = treeOf(sessionID)
+    const current = sessionObjectives.get(sessionID)
+    // Nudge when an SO's entire tertiary set just closed: that is the moment its parent can be resolved.
+    const closureNudges: string[] = []
+    for (const so of current?.secondaries ?? []) {
+      if (!so.children || so.children.length === 0) continue
+      if (isClosedStatus(so.status)) continue
+      if (so.children.every((t) => isClosedStatus(t.status))) {
+        closureNudges.push(`All tertiary objectives under ${so.id} are closed — mark ${so.id} as resolved with validation proof to close it.`)
+      }
+    }
+
+    return { output: { success: true, message: `Tertiary objective(s) successfully updated.${closureNudges.join(" ")}`, tree }, content: tree }
+  }
+
+  if (rawAction === "add_finding") {
+    const added = addFinding(sessionID, {
+      soRef: input.soRef,
+      title: input.title,
+      evidence: input.evidence,
+      result: input.result,
+      nextAction: input.nextAction,
+      impactOnOption:
+        input.optionId && input.optionStatus
+          ? { optionId: input.optionId, newStatus: input.optionStatus, reason: input.reason ?? "" }
+          : undefined,
+      seeAlso: Array.isArray(input.seeAlso) ? input.seeAlso : undefined,
+      supersedes: Array.isArray(input.supersedes) ? input.supersedes : undefined,
+      spawnedBy: input.spawnedBy,
+    })
+    if (!added.success) {
+      return {
+        output: { success: false, message: added.error || "Failed to add finding.", tree: treeOf(sessionID) },
+        content: added.error || "Failed to add finding.",
+      }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: {
+        success: true,
+        message: `Finding ${added.finding!.id} registered${added.warning ? ` — ${added.warning}` : ""}.`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "update_finding") {
+    if (!input.findingId?.trim()) {
+      return { output: { success: false, message: "'findingId' is required for action 'update_finding'.", tree: "" }, content: "Missing findingId." }
+    }
+    const updated = updateFinding(sessionID, input.findingId.trim(), {
+      title: input.title,
+      result: input.result,
+      nextAction: input.nextAction,
+      evidence: input.evidence,
+      seeAlso: Array.isArray(input.seeAlso) ? input.seeAlso : undefined,
+      supersedes: Array.isArray(input.supersedes) ? input.supersedes : undefined,
+      subsumedBy: input.subsumedBy,
+      impactOnOption:
+        input.optionId && input.optionStatus
+          ? { optionId: input.optionId, newStatus: input.optionStatus, reason: input.reason ?? "" }
+          : undefined,
+    })
+    if (!updated.success) {
+      return {
+        output: { success: false, message: updated.error || "Failed to update finding.", tree: treeOf(sessionID) },
+        content: updated.error || "Failed to update finding.",
+      }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: {
+        success: true,
+        message: `Finding ${updated.finding!.id} ${updated.finding!.lifecycle === "SUBSUMED" ? "subsumed" : "extended in place"}.`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "search_findings") {
+    const query = input.query?.trim()
+    if (!query) {
+      return { output: { success: false, message: "'query' is required for action 'search_findings'.", tree: "" }, content: "Missing query." }
+    }
+    const current = sessionObjectives.get(sessionID)
+    const hits = searchFindings(current?.findings ?? [], query)
+    const lines: string[] = [
+      "Search-before-write contract: score >= 0.68 => NOT new (extend the existing finding); 0.55–0.68 => warn + forced seeAlso; < 0.55 => genuinely new.",
+    ]
+    if (hits.length === 0) {
+      lines.push("No matches above 0.1 — the finding is genuinely new.")
+    } else {
+      for (const hit of hits.slice(0, 5)) {
+        lines.push(`- ${hit.findingId} (score ${hit.score}): ${hit.snippet}`)
+      }
+    }
+    const report = lines.join("\n")
+    return {
+      output: { success: true, message: report, tree: treeOf(sessionID), report },
+      content: report,
+    }
+  }
+
+  if (rawAction === "add_option") {
+    const statement = input.statement?.trim()
+    if (!statement) {
+      return { output: { success: false, message: "'statement' is required for action 'add_option'.", tree: "" }, content: "Missing statement." }
+    }
+    const added = addOption(sessionID, statement, input.optionStatus, input.result)
+    if (!added.success) {
+      return {
+        output: { success: false, message: added.error || "Failed to add option.", tree: treeOf(sessionID) },
+        content: added.error || "Failed to add option.",
+      }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: { success: true, message: `Option ${added.option!.id} registered [${added.option!.status}].`, tree },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "update_option") {
+    if (!input.optionId?.trim()) {
+      return { output: { success: false, message: "'optionId' is required for action 'update_option'.", tree: "" }, content: "Missing optionId." }
+    }
+    const updated = updateOption(sessionID, input.optionId.trim(), {
+      status: input.optionStatus,
+      result: input.result,
+      reason: input.reason,
+      proofRef: input.proofRef,
+    })
+    if (!updated.success) {
+      return {
+        output: { success: false, message: updated.error || "Failed to update option.", tree: treeOf(sessionID) },
+        content: updated.error || "Failed to update option.",
+      }
+    }
+    const tree = treeOf(sessionID)
+    const cancelled = (sessionObjectives.get(sessionID)?.options ?? []).filter(
+      (o) => o.status === "CANCELLED" && o.id !== updated.option!.id,
+    )
+    const notice =
+      updated.option!.status === "SUCCESSFUL" && cancelled.length > 0
+        ? ` Siblings auto-cancelled: ${cancelled.map((o) => o.id).join(", ")}.`
+        : ""
+    return {
+      output: {
+        success: true,
+        message: `Option ${updated.option!.id} updated [${updated.option!.status}].${notice}`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "add_fingerprint") {
+    const added = addFingerprint(sessionID, {
+      normalizedKey: input.normalizedKey,
+      symptom: input.symptom,
+      soRef: input.soRef,
+      status: input.status,
+      fixRef: input.fixRef,
+    })
+    if (!added.success) {
+      return {
+        output: { success: false, message: added.error || "Failed to add fingerprint.", tree: treeOf(sessionID) },
+        content: added.error || "Failed to add fingerprint.",
+      }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: {
+        success: true,
+        message: `Fingerprint registered: ${added.fingerprint!.key} (fix: ${added.fingerprint!.fixRef}). Future sessions can look up this blocker in one step.`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "update_dod" || rawAction === "set_dod") {
+    const criteria = normalizeDoDInput(input.dodCriteria)
+    if (!criteria) {
+      return {
+        output: { success: false, message: "'dodCriteria' (array of { statement, verifiableBy, proofRef? }) is required for action 'update_dod'.", tree: "" },
+        content: "Missing dodCriteria.",
+      }
+    }
+    const result = setDoDCriteria(sessionID, criteria)
+    if (!result.success) {
+      return { output: { success: false, message: result.error || "Failed to update DoD.", tree: "" }, content: result.error || "Failed to update DoD." }
+    }
+    const tree = treeOf(sessionID)
+    const satisfied = evaluateDoD(sessionObjectives.get(sessionID)!).criteria.filter((c) => c.satisfied).length
+    return {
+      output: {
+        success: true,
+        message: `DoD criteria updated: ${satisfied}/${result.dod!.length} satisfied.`,
+        tree,
+      },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "export_tree") {
+    const exported = exportSession(sessionID, input.topicKey)
+    if (!exported.success) {
+      return { output: { success: false, message: exported.error || "Failed to export tree.", tree: "" }, content: exported.error || "Failed to export tree." }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: {
+        success: true,
+        message: `Tree exported${input.topicKey ? ` under topic '${input.topicKey}'` : ""}. The report contains the auto-rendered EXPLORATION projection; the payload contains the serialized document.`,
+        tree,
+        report: exported.report,
+        payload: exported.payload,
+      },
+      content: exported.report ?? tree,
+    }
+  }
+
+  if (rawAction === "import_tree") {
+    if (input.topicKey?.trim() && activeStore) {
+      const doc = await activeStore.loadByTopic(input.topicKey.trim())
+      if (!doc) {
+        return {
+          output: { success: false, message: `No persisted tree found for topic '${input.topicKey}'.`, tree: "" },
+          content: `No persisted tree found for topic '${input.topicKey}'.`,
+        }
+      }
+      const repairs = repairDocumentInvariants(doc)
+      const po = doc as unknown as PrimaryObjective
+      sessionObjectives.set(sessionID, po)
+      persistSessionObjectives(sessionID)
+      const tree = treeOf(sessionID)
+      return {
+        output: {
+          success: true,
+          message: `Imported tree from topic '${input.topicKey}': ${doc.secondaries.length} SO(s), ${(doc.findings ?? []).length} finding(s), ${(doc.options ?? []).length} option(s).${repairs.length > 0 ? ` Repairs: ${repairs.join("; ")}` : ""}`,
+          tree,
+        },
+        content: tree,
+      }
+    }
+    const imported = importSession(sessionID, { tree: input.tree })
+    if (!imported.success) {
+      return { output: { success: false, message: imported.error || "Failed to import tree.", tree: "" }, content: imported.error || "Failed to import tree." }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: { success: true, message: imported.report || "Tree imported.", tree },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "sync") {
+    const synced = await syncSessionObjectives(sessionID)
+    if (!synced.success) {
+      return { output: { success: false, message: synced.error || "Sync failed.", tree: "" }, content: synced.error || "Sync failed." }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: { success: true, message: synced.report || "Synced.", tree, report: synced.report },
+      content: tree,
+    }
+  }
+
+  if (rawAction === "present_plan") {
+    const presented = presentPlan(sessionID, input.reason)
+    if (!presented.success) {
+      return { output: { success: false, message: presented.error || "Failed to present plan.", tree: "" }, content: presented.error || "Failed to present plan." }
+    }
+    const tree = treeOf(sessionID)
+    const message = "Plan presented. The tree is FROZEN until the user explicitly confirms. Present the plan to the user and call action 'resume_plan' with their instruction to continue."
+    return { output: { success: true, message, tree }, content: tree }
+  }
+
+  if (rawAction === "resume_plan") {
+    const resumed = resumePlan(sessionID, input.note)
+    if (!resumed.success) {
+      return { output: { success: false, message: resumed.error || "Failed to resume plan.", tree: "" }, content: resumed.error || "Failed to resume plan." }
+    }
+    const tree = treeOf(sessionID)
+    const message = `Plan resumed${input.note ? ` — user instruction: ${input.note}` : ""}. Continue execution.`
+    return { output: { success: true, message, tree }, content: tree }
+  }
+
+  if (rawAction === "checkpoint") {
+    const checkpoint = makeCheckpoint(sessionID, input.note)
+    if (!checkpoint.success) {
+      return { output: { success: false, message: checkpoint.error || "Checkpoint failed.", tree: "" }, content: checkpoint.error || "Checkpoint failed." }
+    }
+    const tree = treeOf(sessionID)
+    return {
+      output: { success: true, message: checkpoint.report || "Checkpoint recorded.", tree, report: checkpoint.report },
+      content: checkpoint.report ?? tree,
+    }
+  }
+
+  if (rawAction === "audit") {
+    const current = sessionObjectives.get(sessionID)
+    if (!current) {
+      return { output: { success: false, message: "No active objective tree found. Call 'set_primary' first.", tree: "" }, content: "No active objective tree found." }
+    }
+    const audit = runComplianceAudit(current)
+    const report = audit.pass
+      ? "Compliance audit: PASS — no violations."
+      : `Compliance audit: FAIL — ${audit.violations.join(" | ")}`
+    return {
+      output: {
+        success: audit.pass,
+        message: report,
+        tree: treeOf(sessionID),
+        report,
+      },
+      content: report,
+    }
+  }
+
+  // Default: list
+  const tree = po
+    ? renderObjectiveTree(po)
+    : "No objective tree defined yet. Call objective_manage with action 'set_primary' first."
+  return {
+    output: { success: true, message: "Objective tree retrieved.", tree },
+    content: tree,
+  }
+}
 
 export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugin.define({
   id: "hierarchical-objectives",
   async setup(ctx) {
+    // 0. Wire the persistent store when the context exposes a JSON KV storage domain (F-1).
+    const storage = (ctx as any).storage
+    if (storage && typeof storage.get === "function" && typeof storage.set === "function" && typeof storage.remove === "function") {
+      setObjectivesStore(createObjectivesStore(storage))
+    }
+
+    // Optional: Auto-configure semantic embeddings if OPENCODE_OBJECTIVES_EMBEDDINGS is enabled
+    // and LM Studio is running locally. Falls back silently to the lexical scorer.
+    void autoConfigureEmbeddingsScorer().catch(() => {})
+
+    // Wire one-shot session.generate hook (used for /btw-style documentation relevance checks)
+    if (typeof (ctx as any).session?.generate === "function") {
+      setSessionGenerator(async ({ sessionID, prompt }) => {
+        return (ctx as any).session.generate({ sessionID, prompt })
+      })
+    }
+
     // 1. Register the objective_manage tool via transform
     if (typeof ctx.tool?.transform === "function") {
       await ctx.tool.transform((editor) => {
@@ -887,304 +2890,15 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
           name: "objective_manage",
           options: { codemode: false },
           description:
-            "Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call. Tertiary sub-objectives are first-class children of a secondary objective (only when an SO proves too large): add them with action 'add_tertiary' ('id' = parent SO, e.g. 'SO-2') and manage them with 'update_tertiary' ('id' = TO id, e.g. 'SO-2-T1'); no SO can be resolved while any of its tertiary sub-objectives is open, and the PO cannot close until every SO and TO is closed (no shortcuts). Update the objective list immediately—even mid-execution—whenever new objectives emerge, the user intervenes or corrects direction, or a required step turns out missing. Also register a documentation-update secondary objective whenever any objective makes relevant repository modifications. Mandatory: call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
+            "Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call. Tertiary sub-objectives are first-class children of a secondary objective (only when an SO proves too large): add them with action 'add_tertiary' ('id' = parent SO, e.g. 'SO-2') and manage them with 'update_tertiary' ('id' = TO id, e.g. 'SO-2-T1'); no SO can be resolved while any of its tertiary sub-objectives is open, and the PO cannot close until every SO and TO is closed (no shortcuts). Epistemic layer: register findings with typed evidence ('add_finding' — search-before-write enforced, extend with 'update_finding'), manage multi-candidate options with a live Result column ('add_option'/'update_option' — at most one SUCCESSFUL, auto-cancel siblings), decompose the Definition of Done into verifiable criteria ('update_dod' — every criterion needs proofRef before complete_primary), register blocker fingerprints ('add_fingerprint'), and run the compliance audit on demand ('audit'). Cross-session: the tree is auto-persisted; call 'sync' after compaction/resume, 'export_tree' for the serialized document + rendered EXPLORATION projection, 'import_tree' to hydrate from a topic. Plan pause: 'present_plan' freezes the tree until the user confirms ('resume_plan'); 'checkpoint' derives a phase report from the tree only and pauses until the user's instruction. Update the objective list immediately—even mid-execution—whenever new objectives emerge, the user intervenes or corrects direction, or a required step turns out missing. Also register a documentation-update secondary objective whenever any objective makes relevant repository modifications (auto-created when public-surface files change). Mandatory: call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
           input: ObjectiveInputSchema,
           output: ObjectiveOutputSchema,
           execute: async (input: any, toolCtx: any) => {
             const sessionID = (toolCtx as any)?.sessionID || "default-session"
-            const rawAction = String(input.action || "").toLowerCase()
-
-            if (rawAction === "set_primary" || rawAction === "init" || rawAction === "set_objectives") {
-              const title = input.title?.trim()
-              const dod = input.definitionOfDone?.trim()
-              if (!title || !dod) {
-                return {
-                  output: {
-                    success: false,
-                    message: "Both 'title' and 'definitionOfDone' are required for action 'set_primary'.",
-                    tree: "",
-                  },
-                  content: "Missing required parameters for set_primary (title and definitionOfDone are mandatory).",
-                }
-              }
-              const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
-              const po = setPrimaryObjective(sessionID, title, dod, initialSecondaries)
-
-              // If secondary objectives were supplied in the same call, register them immediately
-              if (Array.isArray(input.secondaries) && input.secondaries.length > 0) {
-                for (let i = 0; i < input.secondaries.length; i++) {
-                  const item = input.secondaries[i]
-                  const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
-                  const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
-                  const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
-                  const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
-                  if (item.status && item.status !== "pending") {
-                    updateSecondaryObjective(sessionID, so.id, {
-                      status: item.status,
-                      blocker: item.blocker || undefined,
-                      validationProof: item.validationProof || undefined,
-                    })
-                  }
-                }
-              }
-
-              const tree = renderObjectiveTree(po)
-              return {
-                output: { success: true, message: `Primary Objective and secondaries established.`, tree },
-                content: tree,
-              }
-            }
-
-            if (
-              rawAction === "complete_primary" ||
-              rawAction === "resolve_primary" ||
-              rawAction === "close_primary" ||
-              rawAction === "update_primary"
-            ) {
-              const po = sessionObjectives.get(sessionID)
-              if (!po) {
-                return {
-                  output: {
-                    success: false,
-                    message: "No active objective tree found. Call 'set_primary' first.",
-                    tree: "",
-                  },
-                  content: "No active objective tree found. Call 'set_primary' first.",
-                }
-              }
-
-              const targetStatus =
-                rawAction === "complete_primary" || rawAction === "resolve_primary" || rawAction === "close_primary"
-                  ? "resolved"
-                  : (input.status || "resolved")
-
-              const result = updatePrimaryObjective(sessionID, {
-                status: targetStatus,
-                title: input.title,
-                definitionOfDone: input.definitionOfDone,
-                validationProof: input.validationProof,
-              })
-
-              if (!result.success) {
-                const tree = renderObjectiveTree(po)
-                return {
-                  output: { success: false, message: result.error || "Failed to update Primary Objective.", tree },
-                  content: `Error updating Primary Objective: ${result.error}`,
-                }
-              }
-
-              const tree = renderObjectiveTree(po)
-              return {
-                output: {
-                  success: true,
-                  message: `Primary Objective successfully marked as ${po.status.toUpperCase()}.`,
-                  tree,
-                },
-                content: tree,
-              }
-            }
-
-            if (rawAction === "add_secondary" || rawAction === "add_secondaries") {
-              const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
-                ? input.secondaries
-                : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
-
-              if (items.length === 0) {
-                return {
-                  output: {
-                    success: false,
-                    message: "At least one secondary objective is required for action 'add_secondary'.",
-                    tree: "",
-                  },
-                  content: "Missing required parameters for add_secondary.",
-                }
-              }
-
-              const addedIds: string[] = []
-              for (const item of items) {
-                const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
-                const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
-                const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
-                const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId)
-                addedIds.push(so.id)
-                if (item.status && item.status !== "pending") {
-                  updateSecondaryObjective(sessionID, so.id, {
-                    status: item.status,
-                    blocker: item.blocker || undefined,
-                    validationProof: item.validationProof || undefined,
-                  })
-                }
-              }
-
-              const po = sessionObjectives.get(sessionID)!
-              const tree = renderObjectiveTree(po)
-              return {
-                output: { success: true, message: `Added secondary objective(s): ${addedIds.join(", ")}.`, tree },
-                content: tree,
-              }
-            }
-
-            if (rawAction === "update_secondary" || rawAction === "update_secondaries") {
-              const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
-                ? input.secondaries
-                : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
-
-              if (items.length === 0) {
-                return {
-                  output: {
-                    success: false,
-                    message: "'id' (or 'secondaries' array with ids) is required for action 'update_secondary'.",
-                    tree: "",
-                  },
-                  content: "Missing id for update_secondary.",
-                }
-              }
-
-              for (const item of items) {
-                const id = item?.id?.trim()
-                if (!id) {
-                  return {
-                    output: { success: false, message: "Missing 'id' in update item.", tree: "" },
-                    content: "Missing id in update item.",
-                  }
-                }
-                const result = updateSecondaryObjective(sessionID, id, {
-                  status: item.status || undefined,
-                  title: item.title?.trim() || undefined,
-                  rationale: item.rationale?.trim() || undefined,
-                  blocker: item.blocker || undefined,
-                  validationProof: item.validationProof || undefined,
-                })
-                if (!result.success) {
-                  const po = sessionObjectives.get(sessionID)
-                  const tree = po ? renderObjectiveTree(po) : ""
-                  return {
-                    output: { success: false, message: result.error || `Update failed for ${id}.`, tree },
-                    content: `Error updating ${id}: ${result.error}`,
-                  }
-                }
-              }
-
-              const po = sessionObjectives.get(sessionID)
-              const tree = po ? renderObjectiveTree(po) : ""
-              const isClosedStatus = (status: SecondaryObjectiveStatus) => status === "resolved" || status === "discarded" || status === "cancelled"
-              // No-shortcuts closure rule: an SO only counts when its tertiary sub-objectives are closed too.
-              const allResolvedOrDiscarded =
-                po &&
-                po.secondaries.length > 0 &&
-                po.secondaries.every(
-                  (s) => isClosedStatus(s.status) && (s.children ?? []).every((t) => isClosedStatus(t.status)),
-                )
-
-              const completionNotice =
-                allResolvedOrDiscarded && po.status !== "resolved"
-                  ? " All secondary objectives are resolved! Call objective_manage with action: 'complete_primary' to formally close the Primary Objective before presenting your final response."
-                  : ""
-
-              return {
-                output: {
-                  success: true,
-                  message: `Secondary objective(s) successfully updated.${completionNotice}`,
-                  tree,
-                },
-                content: tree,
-              }
-            }
-
-            if (rawAction === "add_tertiary" || rawAction === "add_tertaries") {
-              const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
-                ? input.secondaries
-                : (input.id && (input.title || input.rationale)
-                    ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }]
-                    : [])
-
-              if (items.length === 0) {
-                return {
-                  output: { success: false, message: "add_tertiary requires a parent secondary objective id ('id', e.g. 'SO-2') and a title.", tree: "" },
-                  content: "Missing required parameters for add_tertiary (parent SO id + title).",
-                }
-              }
-
-              const addedIds: string[] = []
-              for (const item of items) {
-                const parentId = typeof item?.id === "string" ? item.id.trim() : ""
-                if (!parentId) {
-                  return { output: { success: false, message: "Missing parent SO id in add_tertiary item.", tree: "" }, content: "Missing parent SO id for tertiary objective." }
-                }
-                const tTitle = item?.title?.trim() || item?.rationale?.trim() || "Tertiary sub-objective"
-                const tRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned tertiary subtask"
-                const added = addTertiaryObjective(sessionID, parentId, tTitle, tRationale)
-                if (!added.success || !added.objective) {
-                  return { output: { success: false, message: added.error || `Failed to add tertiary objective under ${parentId}.`, tree: "" }, content: added.error || "Failed to add tertiary objective." }
-                }
-                addedIds.push(added.objective.id)
-                if (item.status && item.status !== "pending") {
-                  updateTertiaryObjective(sessionID, added.objective.id, {
-                    status: item.status,
-                    blocker: item.blocker || undefined,
-                    validationProof: item.validationProof || undefined,
-                  })
-                }
-              }
-
-              const po = sessionObjectives.get(sessionID)!
-              const tree = renderObjectiveTree(po)
-              return { output: { success: true, message: `Added tertiary objective(s): ${addedIds.join(", ")}.`, tree }, content: tree }
-            }
-
-            if (rawAction === "update_tertiary" || rawAction === "update_tertaries") {
-              const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
-                ? input.secondaries
-                : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
-
-              if (items.length === 0) {
-                return { output: { success: false, message: "'id' (tertiary objective id, e.g. 'SO-2-T1') is required for action 'update_tertiary'.", tree: "" }, content: "Missing id for update_tertiary." }
-              }
-
-              for (const item of items) {
-                const tertiaryId = typeof item?.id === "string" ? item.id.trim() : ""
-                if (!tertiaryId) {
-                  return { output: { success: false, message: "Missing 'id' in update_tertiary item.", tree: "" }, content: "Missing id in update_tertiary item." }
-                }
-                const result = updateTertiaryObjective(sessionID, tertiaryId, {
-                  status: item.status || undefined,
-                  title: item.title?.trim() || undefined,
-                  rationale: item.rationale?.trim() || undefined,
-                  blocker: item.blocker || undefined,
-                  validationProof: item.validationProof || undefined,
-                })
-                if (!result.success) {
-                  const po = sessionObjectives.get(sessionID)
-                  const tree = po ? renderObjectiveTree(po) : ""
-                  return { output: { success: false, message: result.error || `Update failed for ${tertiaryId}.`, tree }, content: `Error updating ${tertiaryId}: ${result.error}` }
-                }
-              }
-
-              const po = sessionObjectives.get(sessionID)
-              const tree = po ? renderObjectiveTree(po) : ""
-              // Nudge when an SO's entire tertiary set just closed: that is the moment its parent can be resolved.
-              const isClosedStatus = (status: SecondaryObjectiveStatus) => status === "resolved" || status === "discarded" || status === "cancelled"
-              const closureNudges: string[] = []
-              for (const so of po?.secondaries ?? []) {
-                if (!so.children || so.children.length === 0) continue
-                if (isClosedStatus(so.status)) continue
-                if (so.children.every((t) => isClosedStatus(t.status))) {
-                  closureNudges.push(`All tertiary objectives under ${so.id} are closed — mark ${so.id} as resolved with validation proof to close it.`)
-                }
-              }
-
-              return { output: { success: true, message: `Tertiary objective(s) successfully updated.${closureNudges.join(" ")}`, tree }, content: tree }
-            }
-
-            // Default: list
-            const po = sessionObjectives.get(sessionID)
-            const tree = po
-              ? renderObjectiveTree(po)
-              : "No objective tree defined yet. Call objective_manage with action 'set_primary' first."
-            return {
-              output: { success: true, message: "Objective tree retrieved.", tree },
-              content: tree,
-            }
+            // F-1: hydrate from the persistent store before acting (in-memory first).
+            await hydrateSessionObjectives(sessionID)
+            const result = await executeObjectiveAction(input, sessionID)
+            return withWarnings(sessionID, result)
           },
         })
       })
@@ -1223,6 +2937,9 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
 
       if (!po) return
 
+      // F-1: persist the tree (and its rendered projection) before compaction so the
+      // post-compaction resume hydrates from the store instead of an LLM summary.
+      persistSessionObjectives(sessionID)
       postCompactionSessions.add(sessionID)
       event.system.push({
         type: "text",
@@ -1235,10 +2952,8 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       const sessionID = event.sessionID
       if (!sessionID) return
 
-      let po = sessionObjectives.get(sessionID)
-      if (!po && Array.isArray(event.messages)) {
-        po = reconstructObjectivesFromMessages(sessionID, event.messages)
-      }
+      // F-1: hydrate (in-memory -> persistent store -> message reconstruction).
+      let po = await hydrateSessionObjectives(sessionID, event.messages)
 
       // Backward compatibility check
       if (!po) {
@@ -1285,6 +3000,9 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         consecutiveReadCounts.set(sessionID, currentCount)
 
         if (currentCount >= MAX_CONSECUTIVE_READS) {
+          // Reset on throw to break the permanent deadlock: a subsequent read attempt
+          // gets a fresh cycle rather than failing at 6, 7, 8... forever.
+          consecutiveReadCounts.delete(sessionID)
           throw new Error(
             `⚠️ Anti-Loop Warning: You have executed ${currentCount} consecutive inspection/read-only operations without taking action or updating objectives. Synthesize your findings and focus your next step on concrete validation or execution.`,
           )
@@ -1298,6 +3016,17 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     await ctx.tool.hook("execute.after", async (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+
+      // F-9: track normalized read actions per active SO (anti-loop, value-first).
+      if (READONLY_TOOLS.has(event.tool) && event.tool !== "question") {
+        recordToolAction(sessionID, event.tool, event.input)
+      }
+
+      // F-10: track files modified via edit/write for documentation-surface detection.
+      if (event.tool === "edit" || event.tool === "write") {
+        const path = typeof (event.input as any)?.path === "string" ? (event.input as any).path : ""
+        if (path) trackTouchedFile(sessionID, path)
+      }
 
       // Compatibility: If legacy todowrite tool is called, sync with secondary objectives
       if (event.tool === "todowrite") {
