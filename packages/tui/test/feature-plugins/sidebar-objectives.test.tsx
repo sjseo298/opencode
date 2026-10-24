@@ -479,4 +479,39 @@ describe("SidebarObjectives TUI component", () => {
     // DISCARDED sibling was preserved when OPT-2 became SUCCESSFUL
     expect(po?.options?.find((o) => o.id === "OPT-1")?.status).toBe("DISCARDED")
   })
+
+  test("parses compaction checkpoint with Markdown summary format (no leading dash, bolded SOs)", () => {
+    const sid = "test-session-checkpoint-markdown"
+    const messages = [
+      {
+        type: "user",
+        content: [
+          "<conversation-checkpoint>",
+          "<summary>",
+          "## Objective",
+          "Improve OpenCode's Protocolo de Objetivos",
+          "",
+          "## Work State",
+          "### Completed",
+          "- **SO-1 [RESOLVED]** Recon current objective_manage implementation",
+          "- **SO-2 [RESOLVED]** Design data model and API surface",
+          "### Active",
+          "- **SO-3 [EXPLORING]** Implement cross-session persistence",
+          "</summary>",
+          "</conversation-checkpoint>",
+        ].join("\n"),
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.title).toBe("Improve OpenCode's Protocolo de Objetivos")
+    expect(po?.secondaries.length).toBe(3)
+    expect(po?.secondaries[0].id).toBe("SO-1")
+    expect(po?.secondaries[0].status).toBe("resolved")
+    expect(po?.secondaries[1].id).toBe("SO-2")
+    expect(po?.secondaries[1].status).toBe("resolved")
+    expect(po?.secondaries[2].id).toBe("SO-3")
+    expect(po?.secondaries[2].status).toBe("exploring")
+  })
 })

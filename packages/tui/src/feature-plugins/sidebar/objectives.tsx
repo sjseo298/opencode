@@ -536,7 +536,7 @@ export function extractObjectivesFromMessages(
       if (poMatch) {
         poTitle = poMatch[1].trim()
       } else {
-        const objMatch = text.match(/## Objective\s*\n+-\s*([^\n]+)/i)
+        const objMatch = text.match(/## Objective\s*\n+(?:-\s*)?([^\n]+)/i)
         if (objMatch) poTitle = objMatch[1].trim()
       }
 
@@ -545,15 +545,49 @@ export function extractObjectivesFromMessages(
 
       if (poTitle) {
         const secondaries: SecondaryObjectiveView[] = []
-        // Matches plain secondary ids (SO-N) and tertiary sub-objective ids (SO-N-TM).
-        const soRegex = /-\s*\[(SO-\d+(?:-T\d+)?)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/gi
         const pendingTertiaries: { id: string; title: string; rationale: string; blocker?: string; proof?: string; status: ObjectiveStatus }[] = []
-        let match: RegExpExecArray | null
-        while ((match = soRegex.exec(text)) !== null) {
-          const id = match[1].toUpperCase()
-          const rawStatus = match[2].toLowerCase()
-          const title = match[3].trim()
-          const extra = match[4] || ""
+
+        // Parse line by line to support all compaction formats reliably:
+        // 1. - [SO-1] [RESOLVED] Title (Details)
+        // 2. - **SO-1 [RESOLVED]** Title
+        // 3. - **SO-1** [RESOLVED] Title
+        for (const line of text.split("\n")) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith("-")) continue
+
+          let id = ""
+          let rawStatus = "pending"
+          let title = ""
+          let extra = ""
+
+          // Pattern 1: - [SO-1] [RESOLVED] Title (Extra)
+          let m = trimmed.match(/^-\s*\[(SO-\d+(?:-T\d+)?)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/i)
+          if (m) {
+            id = m[1].toUpperCase()
+            rawStatus = m[2].toLowerCase()
+            title = m[3].trim()
+            extra = m[4] || ""
+          } else {
+            // Pattern 2: - **SO-1 [RESOLVED]** Title
+            m = trimmed.match(/^-\s*\*\*(SO-\d+(?:-T\d+)?)\s*\[([A-Z_]+)\]\*\*\s*[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
+            if (m) {
+              id = m[1].toUpperCase()
+              rawStatus = m[2].toLowerCase()
+              title = m[3].trim()
+              extra = m[4] || ""
+            } else {
+              // Pattern 3: - **SO-1** [RESOLVED] Title
+              m = trimmed.match(/^-\s*\*\*(SO-\d+(?:-T\d+)?)\*\*\s*\[([A-Z_]+)\]\s*[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
+              if (m) {
+                id = m[1].toUpperCase()
+                rawStatus = m[2].toLowerCase()
+                title = m[3].trim()
+                extra = m[4] || ""
+              }
+            }
+          }
+
+          if (!id) continue
 
           let rationale = "Preserved from session checkpoint"
           let blocker: string | undefined
