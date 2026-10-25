@@ -1655,6 +1655,21 @@ def action_sync_fork() -> None:
     """Sync fork (origin) only + install deps + build."""
     console.print("\n[bold]Sync de fork (origin) — sync + install + build...[/]")
 
+    repo_dir = SCRIPT_DIR.parent
+    try:
+        subprocess.run(["git", "-C", str(repo_dir), "fetch", "origin"], capture_output=True)
+        res = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-list", "--count", "HEAD..origin/dev"],
+            capture_output=True,
+            text=True,
+        )
+        origin_count = int(res.stdout.strip() or "0")
+        if origin_count == 0:
+            console.print("[green]⚡ [Fast-Exit] El fork ya está al día con origin/dev. No hay cambios nuevos.[/]")
+            return
+    except Exception:
+        pass
+
     build_script = str(SCRIPT_DIR.parent / "build.sh")
     result = subprocess.run(["bash", build_script, "--sync-mode=fork"])
     if result.returncode != 0:
