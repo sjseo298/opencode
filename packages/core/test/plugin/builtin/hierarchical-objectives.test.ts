@@ -1448,6 +1448,81 @@ describe("hierarchical-objectives plugin", () => {
       setSessionGenerator(undefined)
     })
 
+    test("queryIsolatedLlamaCppRelevance queries llama.cpp with id_slot: 1 and isolated prompt without session transcript", async () => {
+      let requestBody: any = null
+      using server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url)
+          if (url.pathname === "/slots") {
+            return Response.json([
+              { id: 0, is_processing: false },
+              { id: 1, is_processing: false },
+            ])
+          }
+          if (url.pathname === "/v1/chat/completions") {
+            return req.json().then((body) => {
+              requestBody = body
+              return Response.json({
+                choices: [{ message: { content: "YES - architectural contract" } }],
+              })
+            })
+          }
+          return new Response("not found", { status: 404 })
+        },
+      })
+
+      const origBaseUrl = process.env.OPENCODE_LLAMACPP_BASE_URL
+      process.env.OPENCODE_LLAMACPP_BASE_URL = `${server.url.origin}/v1`
+
+      const { queryIsolatedLlamaCppRelevance } = await import("../../../src/plugin/builtin/hierarchical-objectives.js")
+      const result = await queryIsolatedLlamaCppRelevance("src/api/server.ts", { force: true })
+
+      expect(result).toBe(true)
+      expect(requestBody).not.toBeNull()
+      expect(requestBody.id_slot).toBe(1)
+      expect(requestBody.stream).toBe(false)
+      expect(requestBody.max_tokens).toBe(5)
+      expect(requestBody.messages.length).toBe(1)
+      expect(requestBody.messages[0].content).toContain("src/api/server.ts")
+
+      if (origBaseUrl !== undefined) {
+        process.env.OPENCODE_LLAMACPP_BASE_URL = origBaseUrl
+      } else {
+        delete process.env.OPENCODE_LLAMACPP_BASE_URL
+      }
+    })
+
+    test("autoConfigureEmbeddingsScorer auto-enables embeddings when LM Studio server is available", async () => {
+      using server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url)
+          if (url.pathname === "/v1/models") {
+            return Response.json({
+              data: [{ id: "text-embedding-nomic-embed-text-v1.5" }],
+            })
+          }
+          if (url.pathname === "/v1/embeddings") {
+            return Response.json({
+              data: [{ embedding: [0.1, 0.2, 0.3] }],
+            })
+          }
+          return new Response("not found", { status: 404 })
+        },
+      })
+
+      const { autoConfigureEmbeddingsScorer } = await import("../../../src/plugin/builtin/objectives-embeddings.js")
+      const enabled = await autoConfigureEmbeddingsScorer({ baseUrl: server.url.origin })
+      expect(enabled).toBe(true)
+
+      // When explicitly disabled, remains inactive
+      process.env.OPENCODE_OBJECTIVES_EMBEDDINGS = "false"
+      const disabled = await autoConfigureEmbeddingsScorer({ baseUrl: server.url.origin })
+      expect(disabled).toBe(false)
+      delete process.env.OPENCODE_OBJECTIVES_EMBEDDINGS
+    })
+
     // ---------- Cross-session persistence (F-1) ----------
 
     describe("persistence round-trip", () => {

@@ -1,6 +1,5 @@
-// Optional Semantic Embeddings Scorer for Findings (F-7).
-// Connects to local LM Studio (http://127.0.0.1:1234) or any OpenAI-compatible embeddings endpoint.
-// Opt-in via OPENCODE_OBJECTIVES_EMBEDDINGS=true (or explicit enableLmStudioEmbeddings).
+// Enabled by default via local LM Studio (http://127.0.0.1:1234) or any OpenAI-compatible embeddings endpoint.
+// Opt-out via OPENCODE_OBJECTIVES_EMBEDDINGS=false (or explicit opts.enabled = false).
 // Falls back seamlessly to the default lexical scorer if LM Studio is unreachable or inactive.
 
 import type { Finding, FindingScorer } from "./objectives-model.js"
@@ -223,8 +222,8 @@ export async function isLmStudioAvailable(baseUrl?: string): Promise<boolean> {
  * If LM Studio is not active or disabled by env, keeps the default lexical scorer.
  */
 export async function autoConfigureEmbeddingsScorer(opts?: { enabled?: boolean; baseUrl?: string }): Promise<boolean> {
-  const explicit = opts?.enabled ?? (process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "true" || process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "1")
-  if (!explicit) {
+  const disabled = opts?.enabled === false || process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "false" || process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "0"
+  if (disabled) {
     setFindingScorer(undefined)
     return false
   }

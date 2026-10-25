@@ -166,7 +166,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented. The tool auto-creates this documentation objective when it detects public-surface file changes and no documentation objective exists.",
   "7. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "8. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
-  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
+  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Leaving open objectives in the graphical interface when concluding is strictly unacceptable. You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
   "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. DELEGATION CANDIDACY RULE: every secondary and tertiary objective is a candidate to be resolved by a subagent; before executing each one, validate whether delegation pays off given slot availability (`max_subagents = total_slots - 1`)—delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists, which protects your primary session's context; execute it in the main thread instead when the task is small or tightly coupled with other objectives, or when no subagent slot is available. CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
   "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
   "12. Findings (F-NNN): every durable discovery is registered with `action: 'add_finding'` the moment it is made (checkpoint immediately, before the next step), with typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
@@ -236,10 +236,10 @@ export function setPrimaryObjective(
   const now = Date.now()
   const po: PrimaryObjective = {
     title: title.trim(),
-    status: existing?.status ?? "exploring",
+    status: "exploring",
     definitionOfDone: definitionOfDone.trim(),
     secondaries: initialSecondaries !== undefined ? initialSecondaries : (existing?.secondaries ?? []),
-    validationProof: existing?.validationProof,
+    validationProof: undefined,
     topicKey: extra?.topicKey?.trim() || existing?.topicKey,
     dod: extra?.dod ?? existing?.dod,
     findings: existing?.findings ?? [],
@@ -1106,12 +1106,83 @@ export function setSessionGenerator(
   sessionGenerator = gen
 }
 
+// Mutex & rate-limiting guards for one-shot relevance evaluation to protect llama.cpp slots & KV cache
+let isLlamaCppRelevanceInFlight = false
+let lastLlamaCppRelevanceAt = 0
+const RELEVANCE_EVALUATION_COOLDOWN_MS = 3_000
+
+function resolveLlamaCppOrigin(): string {
+  const env =
+    process.env.OPENCODE_LLAMACPP_BASE_URL ||
+    process.env.LLAMACPP_BASE_URL ||
+    process.env.LLAMACPP_URL
+  if (env) return env.replace(/\/+$/, "")
+  return "http://127.0.0.1:9999"
+}
+
+export async function queryIsolatedLlamaCppRelevance(path: string, options?: { force?: boolean }): Promise<boolean | undefined> {
+  const now = Date.now()
+  if (!options?.force && (isLlamaCppRelevanceInFlight || now - lastLlamaCppRelevanceAt < RELEVANCE_EVALUATION_COOLDOWN_MS)) {
+    return undefined // Fallback to heuristic to prevent slot thrashing & request bursts
+  }
+
+  isLlamaCppRelevanceInFlight = true
+  lastLlamaCppRelevanceAt = now
+
+  try {
+    const origin = resolveLlamaCppOrigin()
+    // 1. Inspect slots: verify slot 1 is idle and we have at least 2 slots
+    const slotsUrl = origin.endsWith("/v1") ? `${origin.slice(0, -3)}/slots` : `${origin}/slots`
+    try {
+      const slotsRes = await fetch(slotsUrl, { signal: AbortSignal.timeout(1000) })
+      if (slotsRes.ok) {
+        const slots = (await slotsRes.json()) as any[]
+        if (Array.isArray(slots)) {
+          // If server has only 1 slot, or slot 1 is currently busy, DO NOT send one-shot!
+          if (slots.length < 2) return undefined
+          if (slots[1]?.is_processing === true) return undefined
+        }
+      }
+    } catch {
+      // /slots probe failed or not supported; continue cautiously
+    }
+
+    // 2. Send isolated one-shot (<60 tokens, stream: false, max_tokens: 5, id_slot: 1)
+    const completionsUrl = origin.endsWith("/v1") ? `${origin}/chat/completions` : `${origin}/v1/chat/completions`
+    const prompt = `File: "${path}"\nDoes this file modify public APIs, system architecture, configuration schemas, or CLI behavior that strictly requires updating project documentation? Answer strictly YES or NO.`
+
+    const res = await fetch(completionsUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 5,
+        temperature: 0.0,
+        stream: false,
+        id_slot: 1, // Explicitly pin to slot 1 so Slot 0's KV cache is 100% protected!
+      }),
+      signal: AbortSignal.timeout(2500),
+    })
+
+    if (!res.ok) return undefined
+    const json = (await res.json()) as any
+    const text = json?.choices?.[0]?.message?.content ?? ""
+    if (/^\s*YES\b/i.test(text.trim())) return true
+    if (/^\s*NO\b/i.test(text.trim())) return false
+    return undefined
+  } catch {
+    return undefined
+  } finally {
+    isLlamaCppRelevanceInFlight = false
+  }
+}
+
 async function evaluateChangeDocumentationRelevance(sessionID: string, path: string): Promise<boolean> {
   // If it's a test, mock, or lockfile, never require documentation
   const { isEphemeralOrTestFile } = await import("./objectives-model.js")
   if (isEphemeralOrTestFile(path)) return false
 
-  // If one-shot /btw generation is available, ask the model without contaminating session context
+  // If mock/custom sessionGenerator was provided (e.g. tests)
   if (sessionGenerator) {
     try {
       const prompt = [
@@ -1126,6 +1197,12 @@ async function evaluateChangeDocumentationRelevance(sessionID: string, path: str
       if (/^\s*NO\b/i.test(text.trim())) return false
     } catch {
       // generator failure: fall back to heuristic
+    }
+  } else {
+    // Opción B: Evaluación one-shot aislada y protegida en llamacpp (id_slot: 1, <60 tokens, sin transcript de sesión)
+    const isolatedResult = await queryIsolatedLlamaCppRelevance(path)
+    if (isolatedResult !== undefined) {
+      return isolatedResult
     }
   }
 
@@ -2949,12 +3026,9 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     // and LM Studio is running locally. Falls back silently to the lexical scorer.
     void autoConfigureEmbeddingsScorer().catch(() => {})
 
-    // Wire one-shot session.generate hook (used for /btw-style documentation relevance checks)
-    if (typeof (ctx as any).session?.generate === "function") {
-      setSessionGenerator(async ({ sessionID, prompt }) => {
-        return (ctx as any).session.generate({ sessionID, prompt })
-      })
-    }
+    // Note: Do NOT wire session.generate to sessionGenerator.
+    // session.generate drags the full conversation transcript (~80k tokens) and corrupts llama.cpp slots/cache.
+    // Instead, queryIsolatedLlamaCppRelevance executes isolated one-shots (<60 tokens) explicitly pinned to id_slot: 1.
 
     // 1. Register the objective_manage tool via transform
     if (typeof ctx.tool?.transform === "function") {

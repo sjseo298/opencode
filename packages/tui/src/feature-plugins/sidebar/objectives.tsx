@@ -707,6 +707,21 @@ export function extractObjectivesFromMessages(
     }
   }
 
+  // Auto-cierre de seguridad en la UI:
+  // Si todos los objetivos secundarios y terciarios ya están cerrados ('resolved', 'discarded', 'cancelled')
+  // el PO no debe permanecer abierto en la barra lateral aunque el agente haya omitido llamar a complete_primary.
+  if (po && po.status !== "resolved") {
+    const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
+    const allChildrenClosed =
+      po.secondaries.length > 0 &&
+      po.secondaries.every(
+        (s) => isClosed(s.status) && (s.children ?? []).every((t) => isClosed(t.status)),
+      )
+    if (allChildrenClosed) {
+      po.status = "resolved"
+    }
+  }
+
   return po
 }
 

@@ -532,6 +532,52 @@
             "output": 65536
           }
         },
+        "gguf/DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q4_K_M.gguf": {
+          "id": "gguf/DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q4_K_M.gguf",
+          "author": "DavidAU",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        },
+        "gguf/DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q5_K_M.gguf": {
+          "id": "gguf/DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q5_K_M.gguf",
+          "name": "[VT]L: [gguf] DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q5_K_M.gguf",
+          "author": "DavidAU",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 196608,
+            "output": 65536
+          }
+        },
         "gguf/DavidAU/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-Q4_K_M.gguf": {
           "id": "gguf/DavidAU/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-Q4_K_M.gguf",
           "name": "[VT]L: [gguf] DavidAU/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-Q4_K_M.gguf",
@@ -1262,8 +1308,8 @@
             ]
           },
           "limit": {
-            "context": 183296,
-            "output": 65536
+            "context": 262144,
+            "output": 131072
           }
         },
         "gguf/unsloth/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf": {
@@ -1490,5 +1536,6 @@
         }
       }
     }
-  }
+  },
+  "model": "llamacpp/gguf/DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q4_K_M.gguf"
 }
