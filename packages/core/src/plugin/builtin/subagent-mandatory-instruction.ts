@@ -270,6 +270,22 @@ export const Plugin = OpenCodePlugin.define({
     await ctx.session.hook("context", async (event) => {
       if (!event.sessionID) return
       if (!(await isSubagentSession(event.sessionID))) {
+        // Para modelos locales que no sean llamacpp (ej. esca, mlx), preservar la invariancia
+        // estricta del prefijo en la descripción de herramientas para evitar cache misses en cada turno.
+        const session = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined)
+        const modelId = session?.model?.id?.toLowerCase() ?? ""
+        const isMlxOrEsca =
+          modelId.startsWith("esca/") ||
+          modelId.startsWith("escha/") ||
+          modelId.startsWith("mlx/") ||
+          modelId.includes("escha") ||
+          modelId.includes("esca") ||
+          modelId.includes("mlx")
+
+        if (isMlxOrEsca) {
+          return
+        }
+
         if (!customOrchestratorGuide && (event as any).tools?.subagent?.description) {
           const desc: string = (event as any).tools.subagent.description
           const markerIdx = desc.indexOf("## Subagent Delegation & Concurrency Policy:")

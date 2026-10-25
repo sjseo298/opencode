@@ -1205,6 +1205,22 @@ async function evaluateChangeDocumentationRelevance(sessionID: string, path: str
   const { isEphemeralOrTestFile } = await import("./objectives-model.js")
   if (isEphemeralOrTestFile(path)) return false
 
+  // Si el modelo activo pertenece a esca / mlx (o modelos locales sin slots separados),
+  // se asume directamente relevante cualquier archivo no efímero/test sin realizar ninguna llamada HTTP one-shot.
+  // Esto protege la memoria Metal de MLX y previene la evicción del LRUPromptCache (10 secuencias max).
+  const sessionModel = sessionModelMap.get(sessionID) ?? ""
+  const isMlxOrEsca =
+    sessionModel.startsWith("esca/") ||
+    sessionModel.startsWith("escha/") ||
+    sessionModel.startsWith("mlx/") ||
+    sessionModel.toLowerCase().includes("escha") ||
+    sessionModel.toLowerCase().includes("esca") ||
+    sessionModel.toLowerCase().includes("mlx")
+
+  if (isMlxOrEsca) {
+    return true
+  }
+
   // If mock/custom sessionGenerator was provided (e.g. tests)
   if (sessionGenerator) {
     try {
@@ -1223,8 +1239,8 @@ async function evaluateChangeDocumentationRelevance(sessionID: string, path: str
     }
   } else {
     // Opción B: Evaluación one-shot aislada y protegida en llamacpp (id_slot: 1, <60 tokens, con modelo activo)
-    const sessionModel = sessionModelMap.get(sessionID)
-    const isolatedResult = await queryIsolatedLlamaCppRelevance(path, { model: sessionModel })
+    // Solo se invoca para backends de llamacpp donde id_slot 1 aísla la petición del slot 0.
+    const isolatedResult = await queryIsolatedLlamaCppRelevance(path, { model: sessionModel || undefined })
     if (isolatedResult !== undefined) {
       return isolatedResult
     }

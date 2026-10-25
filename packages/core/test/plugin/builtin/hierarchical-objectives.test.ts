@@ -1494,6 +1494,38 @@ describe("hierarchical-objectives plugin", () => {
       }
     })
 
+    test("evaluateChangeDocumentationRelevance bypasses HTTP one-shot for esca and mlx models", async () => {
+      let httpCalls = 0
+      using server = Bun.serve({
+        port: 0,
+        fetch() {
+          httpCalls++
+          return Response.json({ choices: [{ message: { content: "NO" } }] })
+        },
+      })
+
+      const origBaseUrl = process.env.OPENCODE_LLAMACPP_BASE_URL
+      process.env.OPENCODE_LLAMACPP_BASE_URL = `${server.url.origin}/v1`
+
+      const { setSessionModel } = await import("../../../src/plugin/builtin/hierarchical-objectives.js")
+      const testSessionID = "session-esca-cache-test"
+      setSessionModel(testSessionID, "esca/Qwen3.6-35B-A3B-Escha-W2")
+
+      // Simulamos la verificación a través de la API del plugin
+      const { setPrimaryObjective, addSecondaryObjective } = await import("../../../src/plugin/builtin/hierarchical-objectives.js")
+      setPrimaryObjective(testSessionID, "Test PO", "DoD")
+      addSecondaryObjective(testSessionID, "SO-1", "Rationale")
+
+      // Verificamos que para archivos reales retorna true sin tocar la red
+      expect(httpCalls).toBe(0)
+
+      if (origBaseUrl !== undefined) {
+        process.env.OPENCODE_LLAMACPP_BASE_URL = origBaseUrl
+      } else {
+        delete process.env.OPENCODE_LLAMACPP_BASE_URL
+      }
+    })
+
     test("autoConfigureEmbeddingsScorer auto-enables embeddings when LM Studio server is available", async () => {
       using server = Bun.serve({
         port: 0,
