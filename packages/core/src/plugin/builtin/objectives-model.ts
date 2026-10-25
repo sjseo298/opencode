@@ -35,6 +35,7 @@ export interface Finding {
   result: string // literal finding, without interpretation
   impactOnOption?: FindingImpact
   nextAction: string // one concrete executable action
+  delegation?: { mode: "main" | "subagent"; justification: string }
   seeAlso: string[]
   supersedes: string[]
   spawnedBy?: string
@@ -139,7 +140,12 @@ export function nextDoDCriterionId(criteria: DoDCriterion[]): string {
 
 // ---------- Anti-placeholder validation ----------
 
-const PLACEHOLDER_PATTERN = /<[^>\n]+>|\b(TBD|TODO|FIXME|N\/A|TBA|PLACEHOLDER|XXX+|LOREM)\b/i
+const CASE_INSENSITIVE_PLACEHOLDER = /<[^>\n]+>|\b(TBD|FIXME|N\/A|TBA|PLACEHOLDER|XXX+|LOREM)\b/i
+const CASE_SENSITIVE_PLACEHOLDER = /\bTODO\b|\bTodo\s*:/
+
+const PLACEHOLDER_PATTERN = {
+  test: (s: string) => CASE_INSENSITIVE_PLACEHOLDER.test(s) || CASE_SENSITIVE_PLACEHOLDER.test(s),
+}
 
 export function isPlaceholder(text: string): boolean {
   const trimmed = text.trim()
@@ -191,6 +197,7 @@ export interface AuditObjectiveLike {
   status: string
   blocker?: string
   validationProof?: string
+  delegation?: { mode?: string; justification?: string }
   children?: AuditObjectiveLike[]
 }
 
@@ -213,8 +220,22 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
     }
     if (obj.status === "blocked") {
       const blocker = obj.blocker?.trim() ?? ""
-      if (UNVALIDATED_CAUSE_PATTERN.test(blocker) && !ARTIFACT_PATTERN.test(blocker)) {
+      if (!blocker) {
+        violations.push(`${obj.id}: status is 'blocked' but no blocker symptom or reason provided`)
+      } else if (UNVALIDATED_CAUSE_PATTERN.test(blocker) && !ARTIFACT_PATTERN.test(blocker)) {
         violations.push(`${obj.id}: blocker declares an unvalidated root cause ("${blocker.slice(0, 80)}")`)
+      }
+    }
+    if (obj.delegation) {
+      const mode = obj.delegation.mode
+      const just = obj.delegation.justification?.trim() ?? ""
+      if (mode !== "main" && mode !== "subagent") {
+        violations.push(`${obj.id}: delegation mode must be 'main' or 'subagent'`)
+      }
+      if (just.length < 10) {
+        violations.push(`${obj.id}: delegation justification must be >= 10 characters (got ${just.length})`)
+      } else if (PLACEHOLDER_PATTERN.test(just)) {
+        violations.push(`${obj.id}: delegation justification looks like a placeholder: "${just}"`)
       }
     }
     for (const child of obj.children ?? []) checkObjective(child)
@@ -243,6 +264,18 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
       evidenceSource: finding.evidence.source,
     })
     for (const v of fieldViolations) violations.push(`${finding.id}: ${v}`)
+    if (finding.delegation) {
+      const mode = finding.delegation.mode
+      const just = finding.delegation.justification?.trim() ?? ""
+      if (mode !== "main" && mode !== "subagent") {
+        violations.push(`${finding.id}: delegation mode must be 'main' or 'subagent'`)
+      }
+      if (just.length < 10) {
+        violations.push(`${finding.id}: delegation justification must be >= 10 characters (got ${just.length})`)
+      } else if (PLACEHOLDER_PATTERN.test(just)) {
+        violations.push(`${finding.id}: delegation justification looks like a placeholder: "${just}"`)
+      }
+    }
   }
 
   return { pass: violations.length === 0, violations }

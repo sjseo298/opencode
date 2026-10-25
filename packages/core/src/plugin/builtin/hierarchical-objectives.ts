@@ -56,11 +56,17 @@ export type PrimaryObjectiveStatus =
   | "resolved"
   | "presented_awaiting_confirmation"
 
+export interface DelegationAssessment {
+  mode: "main" | "subagent"
+  justification: string
+}
+
 export interface TertiaryObjective {
   id: string // "SO-1-T2" etc. — hierarchical child of its parent Secondary Objective
   title: string
   status: SecondaryObjectiveStatus
   rationale: string // Why this tertiary sub-objective is necessary to close its parent SO
+  delegation?: DelegationAssessment // Assessment of whether this sub-objective is delegated or executed in the main thread
   blocker?: string // Concrete symptom, obstacle, or root cause if blocked
   validationProof?: string // Verifiable test output, exit code, or command evidence
   createdAt: number
@@ -72,6 +78,7 @@ export interface SecondaryObjective {
   title: string
   status: SecondaryObjectiveStatus
   rationale: string // Why this SO is necessary to advance or unblock the PO
+  delegation?: DelegationAssessment // Assessment of whether this SO is delegated to a subagent or executed in the main thread
   blocker?: string // Concrete symptom, obstacle, or root cause if blocked
   validationProof?: string // Verifiable test output, exit code, or command evidence
   children?: TertiaryObjective[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
@@ -160,20 +167,20 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "ORDER OF OPERATIONS (PLAN FIRST, EXECUTE SECOND): You MUST construct the objective plan FIRST via `objective_manage` before executing code modifications, running mutating tasks, or attempting fixes. Never execute first and document objectives after the fact.",
   "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
   "2. Decompose the task into initial **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
-  "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]` to register the complete initial plan immediately before taking action.",
+  "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]`. MANDATORY PLAN PRESENTATION & APPROVAL: You MUST present the initial plan to the user for review and refinement before executing mutating tasks (either by passing `presentPlan: true` in `set_primary` or immediately calling `action: 'present_plan'`). The tree FREEZES in status `presented_awaiting_confirmation`. Present the plan clearly in your response, pause your turn, and wait for confirmation or adjustments (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves or adjusts, call `action: 'resume_plan'` with their instructions to begin execution.",
   "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: whenever you discover new secondary or tertiary objectives, WHENEVER the user intervenes and changes or corrects direction, scope, or approach, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
   "5. Tertiary Objectives (Conditional Decomposition): A Secondary Objective may be decomposed into tertiary sub-objectives ONLY when it proves too large to execute as a single unit (broad scope, multiple independent steps, or high context cost). Do NOT pre-create tertiary objectives for small secondaries. They are FIRST-CLASS children of their parent SO: register them with `objective_manage` (`action: 'add_tertiary'`, passing the parent SO id in `id`, e.g. `SO-2`, plus title and rationale) and manage them with `action: 'update_tertiary'` using each tertiary's own id (e.g. `SO-2-T1`). They inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy. CLOSURE RULE (NO SHORTCUTS): a secondary objective can only be resolved when ALL of its tertiary objectives are closed (resolved/discarded/cancelled), and the Primary Objective can only be completed when EVERY secondary objective — including all of their tertiary objectives — is closed; the tool rejects both shortcuts.",
   "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented. The tool auto-creates this documentation objective when it detects public-surface file changes and no documentation objective exists.",
   "7. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "8. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
-  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Leaving open objectives in the graphical interface when concluding is strictly unacceptable. You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
-  "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. DELEGATION CANDIDACY RULE: every secondary and tertiary objective is a candidate to be resolved by a subagent; before executing each one, validate whether delegation pays off given slot availability (`max_subagents = total_slots - 1`)—delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists, which protects your primary session's context; execute it in the main thread instead when the task is small or tightly coupled with other objectives, or when no subagent slot is available. CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
+  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Leaving open objectives in the graphical interface when concluding is strictly unacceptable (status `presented_awaiting_confirmation` is the only approved paused state). You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
+  "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. DELEGATION CANDIDACY & JUSTIFICATION RULE: every secondary objective, tertiary objective, AND finding investigation/action is a candidate to be resolved by a subagent; before executing each one, validate and record your delegation decision (`delegation: { mode: 'main' | 'subagent', justification: '...' }`). Delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists (`max_subagents = total_slots - 1`), which protects your primary session's context; execute it in the main thread instead when the task is small or tightly coupled, always recording the justification upon moving to `exploring`. CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
   "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
-  "12. Findings (F-NNN): every durable discovery is registered with `action: 'add_finding'` the moment it is made (checkpoint immediately, before the next step), with typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
+  "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
   "13. Options: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. When a finding changes the root cause, update the affected Option BEFORE writing any other artifact.",
   "14. Definition of Done: decompose it into verifiable criteria (`dodCriteria` with statement + verifiableBy + proofRef, managed with `action: 'update_dod'`). The Primary Objective cannot be resolved while any criterion lacks proofRef. When a finding invalidates a criterion, edit the criterion with `action: 'update_dod'` at the moment of discovery — never reinterpret silently at the end.",
   "15. Compliance audit: the tool runs a mechanical audit on every resolved/blocked/discarded transition and on complete_primary (typed proof present, no unvalidated root-cause phrasing such as 'should pass' / 'logically' / 'the root cause is' without adjacent execution evidence, EXPLORING options have a live Result, findings are complete). A failed audit REJECTS the transition with the violation list — fix the violations and retry. Run `action: 'audit'` on demand to inspect the current violations.",
-  "16. Plan pause & checkpoints: before multi-step work present the plan with `action: 'present_plan'` — the tree FREEZES until the user explicitly confirms, then resume with `action: 'resume_plan'` carrying the user's instruction. After each significant phase call `action: 'checkpoint'`: the report is derived ONLY from the objective tree (no parallel mental model), and the tree pauses until the user's next instruction.",
+  "16. Plan pause & checkpoints: before multi-step work present the plan with `action: 'present_plan'` (or `presentPlan: true` on `set_primary`) — the tree FREEZES until the user explicitly confirms, then resume with `action: 'resume_plan'` carrying the user's instruction. After each significant phase call `action: 'checkpoint'`: the report is derived ONLY from the objective tree (no parallel mental model), and the tree pauses until the user's next instruction.",
   "17. Blocker fingerprints & anti-loop: when a finding resolves a blocker, register its fingerprint with `action: 'add_fingerprint'` so future sessions answer 'did we solve this before?' in a lookup instead of re-analysis. The tool tracks repeated read actions per SO and warns on duplicates; opening an SO whose title matches a resolved/discarded fingerprint requires an explicit `justification`.",
   "18. Cross-session persistence: the whole tree (objectives, findings, options, fingerprints, DoD criteria) is auto-persisted and auto-hydrated; `action: 'export_tree'` returns the serialized document plus the auto-rendered EXPLORATION-style projection, and `action: 'import_tree'` hydrates a session from a topic key or a serialized document. The EXPLORATION document is ALWAYS an auto-rendered projection of the live tree — never a hand-maintained mirror with its own vocabulary.",
 ].join("\n")
@@ -326,7 +333,7 @@ export function addSecondaryObjective(
   title: string,
   rationale: string,
   explicitId?: string,
-  extra?: { affectedResources?: AffectedResources; preconditions?: Precondition[] },
+  extra?: { affectedResources?: AffectedResources; preconditions?: Precondition[]; delegation?: DelegationAssessment },
 ): SecondaryObjective {
   let po = sessionObjectives.get(sessionID)
   const now = Date.now()
@@ -352,6 +359,7 @@ export function addSecondaryObjective(
     if (existing) {
       if (title.trim()) existing.title = title.trim()
       if (rationale.trim()) existing.rationale = rationale.trim()
+      if (extra?.delegation) existing.delegation = extra.delegation
       if (extra?.affectedResources) existing.affectedResources = extra.affectedResources
       if (extra?.preconditions) existing.preconditions = extra.preconditions
       existing.updatedAt = now
@@ -365,6 +373,7 @@ export function addSecondaryObjective(
   )
   if (existingByTitle) {
     if (rationale.trim()) existingByTitle.rationale = rationale.trim()
+    if (extra?.delegation) existingByTitle.delegation = extra.delegation
     if (extra?.affectedResources) existingByTitle.affectedResources = extra.affectedResources
     if (extra?.preconditions) existingByTitle.preconditions = extra.preconditions
     existingByTitle.updatedAt = now
@@ -390,6 +399,7 @@ export function addSecondaryObjective(
     title: title.trim(),
     status: "pending",
     rationale: rationale.trim(),
+    delegation: extra?.delegation,
     affectedResources: extra?.affectedResources,
     preconditions: extra?.preconditions,
     createdAt: now,
@@ -419,6 +429,7 @@ export function updateSecondaryObjective(
     status?: SecondaryObjectiveStatus
     title?: string
     rationale?: string
+    delegation?: DelegationAssessment
     blocker?: string
     validationProof?: string
     affectedResources?: AffectedResources
@@ -520,6 +531,7 @@ export function updateSecondaryObjective(
   if (updates.title !== undefined) target.title = updates.title.trim()
   if (updates.rationale !== undefined) target.rationale = updates.rationale.trim()
   if (updates.blocker !== undefined) target.blocker = updates.blocker?.trim() || undefined
+  if (updates.delegation !== undefined) target.delegation = updates.delegation
   if (updates.affectedResources !== undefined) target.affectedResources = updates.affectedResources
   if (updates.preconditions !== undefined) target.preconditions = updates.preconditions
   if (updates.validationProof !== undefined && updates.status !== "resolved") {
@@ -558,6 +570,7 @@ export function addTertiaryObjective(
   title: string,
   rationale: string,
   explicitId?: string,
+  extra?: { delegation?: DelegationAssessment },
 ): { success: boolean; error?: string; objective?: TertiaryObjective } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
@@ -581,6 +594,7 @@ export function addTertiaryObjective(
     if (existing) {
       if (title.trim()) existing.title = title.trim()
       if (rationale.trim()) existing.rationale = rationale.trim()
+      if (extra?.delegation) existing.delegation = extra.delegation
       existing.updatedAt = now
       persistSessionObjectives(sessionID)
       return { success: true, objective: existing }
@@ -590,6 +604,7 @@ export function addTertiaryObjective(
   const existingByTitle = parent.children.find((t) => t.title.toLowerCase() === title.trim().toLowerCase())
   if (existingByTitle) {
     if (rationale.trim()) existingByTitle.rationale = rationale.trim()
+    if (extra?.delegation) existingByTitle.delegation = extra.delegation
     existingByTitle.updatedAt = now
     persistSessionObjectives(sessionID)
     return { success: true, objective: existingByTitle }
@@ -614,6 +629,7 @@ export function addTertiaryObjective(
     title: title.trim(),
     status: "pending",
     rationale: rationale.trim(),
+    delegation: extra?.delegation,
     createdAt: now,
     updatedAt: now,
   }
@@ -646,6 +662,7 @@ export function updateTertiaryObjective(
     status?: SecondaryObjectiveStatus
     title?: string
     rationale?: string
+    delegation?: DelegationAssessment
     blocker?: string
     validationProof?: string
   },
@@ -698,6 +715,7 @@ export function updateTertiaryObjective(
   if (updates.status !== undefined) target.status = updates.status
   if (updates.title !== undefined) target.title = updates.title.trim()
   if (updates.rationale !== undefined) target.rationale = updates.rationale.trim()
+  if (updates.delegation !== undefined) target.delegation = updates.delegation
   if (updates.blocker !== undefined) target.blocker = updates.blocker?.trim() || undefined
   if (updates.validationProof !== undefined && updates.status !== "resolved") {
     target.validationProof = updates.validationProof?.trim() || undefined
@@ -751,6 +769,7 @@ export function addFinding(
     evidence?: any
     result?: string
     nextAction?: string
+    delegation?: DelegationAssessment
     impactOnOption?: { optionId: string; newStatus: OptionStatus; reason: string }
     seeAlso?: string[]
     supersedes?: string[]
@@ -815,6 +834,7 @@ export function addFinding(
     result: input.result!.trim(),
     impactOnOption: input.impactOnOption,
     nextAction: input.nextAction!.trim(),
+    delegation: input.delegation,
     seeAlso: top && top.score >= SEARCH_NOVEL_THRESHOLD ? [top.findingId, ...(input.seeAlso ?? [])] : (input.seeAlso ?? []),
     supersedes: input.supersedes ?? [],
     spawnedBy: input.spawnedBy,
@@ -841,6 +861,7 @@ export function updateFinding(
     title?: string
     result?: string
     nextAction?: string
+    delegation?: DelegationAssessment
     evidence?: any
     seeAlso?: string[]
     supersedes?: string[]
@@ -865,6 +886,7 @@ export function updateFinding(
     if (updates.title?.trim()) finding.title = updates.title.trim()
     if (updates.result?.trim()) finding.result = updates.result.trim()
     if (updates.nextAction?.trim()) finding.nextAction = updates.nextAction.trim()
+    if (updates.delegation !== undefined) finding.delegation = updates.delegation
     if (updates.evidence !== undefined) finding.evidence = normalizeEvidence(updates.evidence)
     if (updates.seeAlso) finding.seeAlso = [...new Set([...finding.seeAlso, ...updates.seeAlso.map((s) => s.trim())])]
     if (updates.supersedes) finding.supersedes = [...new Set([...finding.supersedes, ...updates.supersedes.map((s) => s.trim())])]
@@ -1495,6 +1517,9 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       const statusBadge = `[${so.status.toUpperCase()}]`
       lines.push(`- **${so.id}** ${statusBadge} ${so.title}`)
       lines.push(`  - *Rationale:* ${so.rationale}`)
+      if (so.delegation) {
+        lines.push(`  - 🤖 *Delegation (${so.delegation.mode}):* ${so.delegation.justification}`)
+      }
       if (so.blocker) {
         lines.push(`  - ⚠️ *Blocker:* ${so.blocker}`)
       }
@@ -1506,6 +1531,9 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
         const tertiaryBadge = `[${t.status.toUpperCase()}]`
         lines.push(`  - **${t.id}** ${tertiaryBadge} ${t.title}`)
         lines.push(`    - *Rationale:* ${t.rationale}`)
+        if (t.delegation) {
+          lines.push(`    - 🤖 *Delegation (${t.delegation.mode}):* ${t.delegation.justification}`)
+        }
         if (t.blocker) {
           lines.push(`    - ⚠️ *Blocker:* ${t.blocker}`)
         }
@@ -1524,6 +1552,9 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       if (f.seeAlso.length > 0) refs.push(`see also ${f.seeAlso.join(", ")}`)
       if (f.lifecycle !== "NEW") refs.push(f.lifecycle)
       lines.push(`- **${f.id}** [${f.soRef}] ${f.title} — ${f.result}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
+      if (f.delegation) {
+        lines.push(`  - 🤖 *Delegation (${f.delegation.mode}):* ${f.delegation.justification}`)
+      }
       lines.push(`  - *Next:* ${f.nextAction}`)
     }
   }
@@ -2063,6 +2094,15 @@ const FindingEvidenceInputSchema = Schema.Struct({
   source: Schema.String.pipe(Schema.annotate({ description: "Exact source: file+lines, command, SQL, log excerpt — no interpretation" })),
 })
 
+export const DelegationInputSchema = Schema.Struct({
+  mode: Schema.Union([Schema.Literal("main"), Schema.Literal("subagent")]).pipe(
+    Schema.annotate({ description: "Execution target: 'main' (primary session thread) or 'subagent' (delegated child session)" }),
+  ),
+  justification: Schema.String.pipe(
+    Schema.annotate({ description: "Concrete justification for the delegation choice (why main thread vs subagent given context and slots)" }),
+  ),
+})
+
 export const SecondaryInputItemSchema = Schema.Struct({
   id: Schema.optional(
     Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Identifier if updating existing SO (e.g. 'SO-1')" })),
@@ -2072,6 +2112,11 @@ export const SecondaryInputItemSchema = Schema.Struct({
   ),
   rationale: Schema.optional(
     Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Why this SO is necessary to advance or unblock the PO" })),
+  ),
+  delegation: Schema.optional(
+    Schema.NullOr(DelegationInputSchema).pipe(
+      Schema.annotate({ description: "Assessment of subagent delegation vs main-thread execution" }),
+    ),
   ),
   status: Schema.optional(
     Schema.NullOr(SecondaryStatusSchema).pipe(
@@ -2328,6 +2373,22 @@ export const ObjectiveInputSchema = Schema.Struct({
       Schema.annotate({ description: "Free-form note for 'resume_plan' (user's instruction) or 'checkpoint' (phase label)" }),
     ),
   ),
+  delegation: Schema.optional(
+    Schema.NullOr(DelegationInputSchema).pipe(
+      Schema.annotate({
+        description:
+          "Assessment of subagent delegation vs main-thread execution (for single update_secondary/add_secondary/update_tertiary)",
+      }),
+    ),
+  ),
+  presentPlan: Schema.optional(
+    Schema.NullOr(Schema.Boolean).pipe(
+      Schema.annotate({
+        description:
+          "When true on 'set_primary', immediately freezes the tree (status: presented_awaiting_confirmation) to present the plan for user approval before execution",
+      }),
+    ),
+  ),
 })
 
 export const ObjectiveOutputSchema = Schema.Struct({
@@ -2441,14 +2502,27 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
           affectedResources: normalizeAffectedResources(item?.affectedResources),
           preconditions: normalizePreconditions(item?.preconditions),
+          delegation: item?.delegation,
         })
         if (item.status && item.status !== "pending") {
           updateSecondaryObjective(sessionID, so.id, {
             status: item.status,
+            delegation: item.delegation,
             blocker: item.blocker || undefined,
             validationProof: item.validationProof || undefined,
           })
         }
+      }
+    }
+
+    if (input.presentPlan === true || input.pauseForConfirmation === true) {
+      presentPlan(sessionID, input.reason)
+      const frozenTree = treeOf(sessionID)
+      const message =
+        "Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval. Present the plan to the user and call action 'resume_plan' once confirmed."
+      return {
+        output: { success: true, message, tree: frozenTree },
+        content: frozenTree,
       }
     }
 
@@ -2561,7 +2635,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   if (rawAction === "add_secondary" || rawAction === "add_secondaries") {
     const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
       ? input.secondaries
-      : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, justification: input.justification }] : [])
+      : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, justification: input.justification }] : [])
 
     if (items.length === 0) {
       return {
@@ -2594,11 +2668,13 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
         affectedResources: normalizeAffectedResources(item?.affectedResources),
         preconditions: normalizePreconditions(item?.preconditions),
+        delegation: item?.delegation ?? input.delegation,
       })
       addedIds.push(so.id)
       if (item.status && item.status !== "pending") {
         updateSecondaryObjective(sessionID, so.id, {
           status: item.status,
+          delegation: item.delegation ?? input.delegation,
           blocker: item.blocker || undefined,
           validationProof: item.validationProof || undefined,
         }, { preconditionsMet: item?.preconditionsMet })
@@ -2619,7 +2695,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   if (rawAction === "update_secondary" || rawAction === "update_secondaries") {
     const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
       ? input.secondaries
-      : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, preconditionsMet: input.preconditionsMet }] : [])
+      : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, preconditionsMet: input.preconditionsMet }] : [])
 
     if (items.length === 0) {
       return {
@@ -2644,6 +2720,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         status: item.status || undefined,
         title: item.title?.trim() || undefined,
         rationale: item.rationale?.trim() || undefined,
+        delegation: item.delegation ?? input.delegation,
         blocker: item.blocker || undefined,
         validationProof: item.validationProof || undefined,
         affectedResources: normalizeAffectedResources(item?.affectedResources),
@@ -2690,7 +2767,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
       ? input.secondaries
       : (input.id && (input.title || input.rationale)
-          ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }]
+          ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof }]
           : [])
 
     if (items.length === 0) {
@@ -2705,7 +2782,9 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
       const tTitle = item?.title?.trim() || item?.rationale?.trim() || "Tertiary sub-objective"
       const tRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned tertiary subtask"
-      const added = addTertiaryObjective(sessionID, parentId, tTitle, tRationale)
+      const added = addTertiaryObjective(sessionID, parentId, tTitle, tRationale, undefined, {
+        delegation: item.delegation ?? input.delegation,
+      })
       if (!added.success || !added.objective) {
         return { output: { success: false, message: added.error || `Failed to add tertiary objective under ${parentId}.`, tree: "" }, content: added.error || "Failed to add tertiary objective." }
       }
@@ -2713,6 +2792,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       if (item.status && item.status !== "pending") {
         updateTertiaryObjective(sessionID, added.objective.id, {
           status: item.status,
+          delegation: item.delegation ?? input.delegation,
           blocker: item.blocker || undefined,
           validationProof: item.validationProof || undefined,
         })
@@ -2730,7 +2810,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   if (rawAction === "update_tertiary" || rawAction === "update_tertaries") {
     const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
       ? input.secondaries
-      : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+      : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof }] : [])
 
     if (items.length === 0) {
       return { output: { success: false, message: "'id' (tertiary objective id, e.g. 'SO-2-T1') is required for action 'update_tertiary'.", tree: "" }, content: "Missing id for update_tertiary." }
@@ -2745,6 +2825,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         status: item.status || undefined,
         title: item.title?.trim() || undefined,
         rationale: item.rationale?.trim() || undefined,
+        delegation: item.delegation ?? input.delegation,
         blocker: item.blocker || undefined,
         validationProof: item.validationProof || undefined,
       })
@@ -2776,6 +2857,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       evidence: input.evidence,
       result: input.result,
       nextAction: input.nextAction,
+      delegation: input.delegation,
       impactOnOption:
         input.optionId && input.optionStatus
           ? { optionId: input.optionId, newStatus: input.optionStatus, reason: input.reason ?? "" }
@@ -2809,6 +2891,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       title: input.title,
       result: input.result,
       nextAction: input.nextAction,
+      delegation: input.delegation,
       evidence: input.evidence,
       seeAlso: Array.isArray(input.seeAlso) ? input.seeAlso : undefined,
       supersedes: Array.isArray(input.supersedes) ? input.supersedes : undefined,

@@ -905,6 +905,10 @@ describe("hierarchical-objectives plugin", () => {
       expect(todoResult.success).toBe(false)
       expect(todoResult.error).toContain("placeholder")
 
+      // Spanish "todo" (meaning everything/all) is not flagged as a placeholder
+      const spanishResult = addFinding(sid, makeFindingInput({ result: "Se revisó todo el código y no falló" }))
+      expect(spanishResult.success).toBe(true)
+
       const noSource = addFinding(sid, makeFindingInput({ evidence: { type: "FILE_READ", source: "" } }))
       expect(noSource.success).toBe(false)
       expect(noSource.error).toContain("evidence")
@@ -1749,6 +1753,126 @@ describe("hierarchical-objectives plugin", () => {
       expect(res.poReopened).toBe(true)
       expect(so1.status).toBe("exploring")
       expect(po.status).toBe("exploring")
+    })
+
+    // ---------- Plan Presentation & Delegation Assessment ----------
+
+    test("set_primary with presentPlan: true immediately freezes the tree awaiting user confirmation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("present-plan-init")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Build Refactored Architecture",
+          definitionOfDone: "All components pass integration tests",
+          presentPlan: true,
+          reason: "Requesting user review of initial architectural blueprint",
+          secondaries: [
+            { title: "Design DB schema", rationale: "Foundation for data storage" },
+            { title: "Create API endpoints", rationale: "Public interface" },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      expect(res.output.message).toContain("presented_awaiting_confirmation")
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("presented_awaiting_confirmation")
+      expect(po.secondaries.length).toBe(2)
+
+      // Tree is frozen: mutating actions are rejected until resume_plan
+      const mutate = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring" },
+        { sessionID: sid },
+      )
+      expect(mutate.output.success).toBe(false)
+      expect(mutate.output.message).toContain("FROZEN")
+
+      // Resuming unfreezes mutation
+      const resume = await tool.execute(
+        { action: "resume_plan", note: "Plan approved by user" },
+        { sessionID: sid },
+      )
+      expect(resume.output.success).toBe(true)
+      expect(po.status).toBe("exploring")
+    })
+
+    test("delegation assessment is supported across secondary objectives, tertiary objectives, and findings", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("delegation-tree")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Optimize Query Engine",
+          definitionOfDone: "Latency < 50ms",
+          secondaries: [
+            {
+              id: "SO-1",
+              title: "Analyze Slow Logs",
+              rationale: "Discover slow queries",
+              delegation: { mode: "subagent", justification: "Log analysis is context-heavy and read-only" },
+            },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Add tertiary with delegation
+      const addTertiary = await tool.execute(
+        {
+          action: "add_tertiary",
+          id: "SO-1",
+          title: "Extract regex patterns",
+          rationale: "Parse log lines",
+          delegation: { mode: "main", justification: "Small regex script, faster in primary session" },
+        },
+        { sessionID: sid },
+      )
+      expect(addTertiary.output.success).toBe(true)
+
+      // Add finding with delegation
+      const addFindingRes = await tool.execute(
+        {
+          action: "add_finding",
+          soRef: "SO-1",
+          title: "Full table scan observed on accounts table",
+          evidence: { type: "COMMAND_OUTPUT", source: "EXPLAIN ANALYZE SELECT * FROM accounts WHERE email = 'a'" },
+          result: "Sequential scan over 2M rows taking 120ms without index",
+          nextAction: "Add index on accounts(email) column",
+          delegation: { mode: "main", justification: "Index migration executed directly in main thread" },
+        },
+        { sessionID: sid },
+      )
+      expect(addFindingRes.output.success).toBe(true)
+
+      // Verify rendering of delegation in the tree
+      const listRes = await tool.execute({ action: "list" }, { sessionID: sid })
+      expect(listRes.content).toContain("*Delegation (subagent):* Log analysis is context-heavy and read-only")
+      expect(listRes.content).toContain("*Delegation (main):* Small regex script, faster in primary session")
+      expect(listRes.content).toContain("*Delegation (main):* Index migration executed directly in main thread")
+    })
+
+    test("compliance audit validates delegation justification syntax", () => {
+      const docInvalid = {
+        secondaries: [
+          {
+            id: "SO-1",
+            title: "Task with bad delegation",
+            status: "exploring",
+            rationale: "Work",
+            delegation: { mode: "invalid" as any, justification: "short" },
+          },
+        ],
+      }
+      const auditRes = runComplianceAudit(docInvalid as any)
+      expect(auditRes.pass).toBe(false)
+      expect(auditRes.violations.some((v) => v.includes("delegation mode"))).toBe(true)
+      expect(auditRes.violations.some((v) => v.includes("delegation justification"))).toBe(true)
     })
   })
 
