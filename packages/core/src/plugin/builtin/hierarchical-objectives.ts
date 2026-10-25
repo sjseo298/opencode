@@ -1110,6 +1110,15 @@ export function setSessionGenerator(
 let isLlamaCppRelevanceInFlight = false
 let lastLlamaCppRelevanceAt = 0
 const RELEVANCE_EVALUATION_COOLDOWN_MS = 3_000
+const sessionModelMap = new Map<string, string>()
+
+export function setSessionModel(sessionID: string, modelID: string) {
+  if (sessionID && modelID) sessionModelMap.set(sessionID, modelID)
+}
+
+export function getSessionModel(sessionID: string): string | undefined {
+  return sessionModelMap.get(sessionID)
+}
 
 function resolveLlamaCppOrigin(): string {
   const env =
@@ -1120,7 +1129,7 @@ function resolveLlamaCppOrigin(): string {
   return "http://127.0.0.1:9999"
 }
 
-export async function queryIsolatedLlamaCppRelevance(path: string, options?: { force?: boolean }): Promise<boolean | undefined> {
+export async function queryIsolatedLlamaCppRelevance(path: string, options?: { force?: boolean; model?: string }): Promise<boolean | undefined> {
   const now = Date.now()
   if (!options?.force && (isLlamaCppRelevanceInFlight || now - lastLlamaCppRelevanceAt < RELEVANCE_EVALUATION_COOLDOWN_MS)) {
     return undefined // Fallback to heuristic to prevent slot thrashing & request bursts
@@ -1147,6 +1156,19 @@ export async function queryIsolatedLlamaCppRelevance(path: string, options?: { f
       // /slots probe failed or not supported; continue cautiously
     }
 
+    // Resolve model name if not provided
+    let modelName = options?.model
+    if (!modelName) {
+      try {
+        const statusUrl = origin.endsWith("/v1") ? `${origin.slice(0, -3)}/status` : `${origin}/status`
+        const statusRes = await fetch(statusUrl, { signal: AbortSignal.timeout(800) })
+        if (statusRes.ok) {
+          const statusJson = (await statusRes.json()) as any
+          modelName = statusJson?.model?.modelID || statusJson?.model?.name || statusJson?.active_model
+        }
+      } catch {}
+    }
+
     // 2. Send isolated one-shot (<60 tokens, stream: false, max_tokens: 5, id_slot: 1)
     const completionsUrl = origin.endsWith("/v1") ? `${origin}/chat/completions` : `${origin}/v1/chat/completions`
     const prompt = `File: "${path}"\nDoes this file modify public APIs, system architecture, configuration schemas, or CLI behavior that strictly requires updating project documentation? Answer strictly YES or NO.`
@@ -1155,6 +1177,7 @@ export async function queryIsolatedLlamaCppRelevance(path: string, options?: { f
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        ...(modelName ? { model: modelName } : {}),
         messages: [{ role: "user", content: prompt }],
         max_tokens: 5,
         temperature: 0.0,
@@ -1199,8 +1222,9 @@ async function evaluateChangeDocumentationRelevance(sessionID: string, path: str
       // generator failure: fall back to heuristic
     }
   } else {
-    // Opción B: Evaluación one-shot aislada y protegida en llamacpp (id_slot: 1, <60 tokens, sin transcript de sesión)
-    const isolatedResult = await queryIsolatedLlamaCppRelevance(path)
+    // Opción B: Evaluación one-shot aislada y protegida en llamacpp (id_slot: 1, <60 tokens, con modelo activo)
+    const sessionModel = sessionModelMap.get(sessionID)
+    const isolatedResult = await queryIsolatedLlamaCppRelevance(path, { model: sessionModel })
     if (isolatedResult !== undefined) {
       return isolatedResult
     }
@@ -3098,6 +3122,13 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     await ctx.session.hook("context", async (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+
+      if (typeof (ctx.session as any)?.get === "function") {
+        const session = await (ctx.session as any).get({ sessionID }).catch(() => undefined)
+        if (session?.model?.id) {
+          sessionModelMap.set(sessionID, session.model.id)
+        }
+      }
 
       // F-1: hydrate (in-memory -> persistent store -> message reconstruction).
       let po = await hydrateSessionObjectives(sessionID, event.messages)

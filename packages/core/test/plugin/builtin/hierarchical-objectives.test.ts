@@ -1476,10 +1476,11 @@ describe("hierarchical-objectives plugin", () => {
       process.env.OPENCODE_LLAMACPP_BASE_URL = `${server.url.origin}/v1`
 
       const { queryIsolatedLlamaCppRelevance } = await import("../../../src/plugin/builtin/hierarchical-objectives.js")
-      const result = await queryIsolatedLlamaCppRelevance("src/api/server.ts", { force: true })
+      const result = await queryIsolatedLlamaCppRelevance("src/api/server.ts", { force: true, model: "llamacpp/qwen3.8-test" })
 
       expect(result).toBe(true)
       expect(requestBody).not.toBeNull()
+      expect(requestBody.model).toBe("llamacpp/qwen3.8-test")
       expect(requestBody.id_slot).toBe(1)
       expect(requestBody.stream).toBe(false)
       expect(requestBody.max_tokens).toBe(5)
