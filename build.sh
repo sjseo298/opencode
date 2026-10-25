@@ -47,6 +47,52 @@ configure_path() {
   echo "✅ PATH configured. Run 'source $config_file' or open a new terminal to use 'opencodeplus'."
 }
 
+# ── ensure bun version ─────────────────────────────────────────────
+# Checks if upstream requires a newer version of bun (via packageManager in package.json)
+# and performs a cold upgrade before dependency installation or agent execution.
+ensure_bun_version() {
+  local target_ref="${1:-upstream/dev}"
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "⚠️  Bun no está instalado en el sistema."
+    return 0
+  fi
+
+  local current_bun
+  current_bun="$(bun --version 2>/dev/null | tr -d 'v' || echo "")"
+  if [[ -z "$current_bun" ]]; then
+    return 0
+  fi
+
+  # Extract packageManager from target_ref package.json if available
+  local pkg_manager
+  pkg_manager="$(git -C "$REPO_ROOT" show "${target_ref}:package.json" 2>/dev/null | grep -E '"packageManager"' | head -n 1 || true)"
+  if [[ -z "$pkg_manager" ]]; then
+    return 0
+  fi
+
+  # Expected format: "packageManager": "bun@1.4.4"
+  local required_bun
+  required_bun="$(echo "$pkg_manager" | sed -E 's/.*"bun@([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?).*/\1/')"
+  if [[ -z "$required_bun" || "$required_bun" == "$pkg_manager" ]]; then
+    return 0
+  fi
+
+  # Compare semver versions
+  if [ "$(printf '%s\n' "$required_bun" "$current_bun" | sort -V | head -n1)" != "$required_bun" ]; then
+    echo "⬆️  Upstream requiere Bun >= $required_bun (actual: $current_bun). Actualizando Bun en frío..."
+    if command -v brew >/dev/null 2>&1 && brew list bun >/dev/null 2>&1; then
+      echo "  Ejecutando: brew upgrade bun"
+      brew upgrade bun || bun upgrade || true
+    else
+      echo "  Ejecutando: bun upgrade"
+      bun upgrade || true
+    fi
+    local new_bun
+    new_bun="$(bun --version 2>/dev/null || echo "$current_bun")"
+    echo "✅ Bun actualizado a: $new_bun"
+  fi
+}
+
 # ── ensure scripts are executable ───────────────────────────────────
 ensure_scripts_executable() {
   local script="$REPO_ROOT/scripts/opencodeplus"
@@ -134,6 +180,9 @@ sync_repo() {
     git fetch origin
     git fetch upstream
 
+    # Verify if upstream requires a newer Bun version before proceeding
+    ensure_bun_version "upstream/dev"
+
     # Stash local changes so merges can proceed
     if ! git stash push -m "build-sync: temporary stash" --include-untracked 2>/dev/null; then
       echo "⚠️  No local changes to stash."
@@ -203,6 +252,7 @@ sync_repo() {
 install_deps() {
   echo "📦  Installing dependencies (this may take a few minutes)..."
   cd "$REPO_ROOT"
+  ensure_bun_version "HEAD"
   if ! bun install; then
     echo "⚠️  bun install failed with exit code $?" >&2
     exit 1

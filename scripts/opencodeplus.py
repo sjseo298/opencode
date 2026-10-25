@@ -1749,6 +1749,74 @@ def action_sync_path() -> None:
 
 # ── upstream commit detection and LLM summarization ──────────────────────
 
+def ensure_bun_version(target_ref: str = "upstream/dev") -> None:
+    """Check if upstream requires a newer version of bun and perform cold upgrade before running tools or builds."""
+    import shutil
+    bun_bin = shutil.which("bun")
+    if not bun_bin:
+        return
+
+    try:
+        current_res = subprocess.run([bun_bin, "--version"], capture_output=True, text=True, timeout=5)
+        current_bun = current_res.stdout.strip().lstrip("v")
+        if not current_bun:
+            return
+    except Exception:
+        return
+
+    repo_dir = SCRIPT_DIR.parent
+    try:
+        pkg_res = subprocess.run(
+            ["git", "-C", str(repo_dir), "show", f"{target_ref}:package.json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if pkg_res.returncode != 0:
+            return
+        pkg_data = json.loads(pkg_res.stdout)
+        pkg_mgr = pkg_data.get("packageManager", "")
+        # Format example: "bun@1.4.4"
+        if not pkg_mgr.startswith("bun@"):
+            return
+        required_bun = pkg_mgr.split("bun@", 1)[1].strip()
+
+        # Parse semver tuples for basic comparison
+        def parse_v(v_str: str) -> list[int]:
+            clean = v_str.split("-")[0].split("+")[0]
+            parts = []
+            for p in clean.split("."):
+                if p.isdigit():
+                    parts.append(int(p))
+                else:
+                    parts.append(0)
+            return parts
+
+        if parse_v(required_bun) > parse_v(current_bun):
+            console.print(
+                f"[yellow]⬆️  Upstream requiere Bun >= {required_bun} (instalado: {current_bun}). Actualizando Bun en frío antes de continuar...[/]"
+            )
+            brew_bin = shutil.which("brew")
+            upgraded = False
+            if brew_bin:
+                brew_check = subprocess.run([brew_bin, "list", "bun"], capture_output=True, text=True)
+                if brew_check.returncode == 0:
+                    console.print("[dim]Ejecutando: brew upgrade bun[/]")
+                    up_res = subprocess.run([brew_bin, "upgrade", "bun"])
+                    upgraded = up_res.returncode == 0
+
+            if not upgraded:
+                console.print("[dim]Ejecutando: bun upgrade[/]")
+                subprocess.run([bun_bin, "upgrade"])
+
+            # Verify new version
+            new_res = subprocess.run([bun_bin, "--version"], capture_output=True, text=True, timeout=5)
+            new_bun = new_res.stdout.strip().lstrip("v")
+            console.print(f"[green]✓ Bun listo: {new_bun}[/]")
+    except Exception as e:
+        console.print(f"[dim]Note: No se pudo verificar versión de Bun: {e}[/]")
+
+
 def fetch_upstream_commits() -> Optional[str]:
     """Fetch upstream and return commits in upstream/dev not in HEAD."""
     try:
@@ -1757,6 +1825,7 @@ def fetch_upstream_commits() -> Optional[str]:
             ["git", "-C", str(repo_dir), "fetch", "upstream"],
             capture_output=True,
         )
+        ensure_bun_version("upstream/dev")
         result = subprocess.run(
             ["git", "-C", str(repo_dir), "log", "HEAD..upstream/dev", "--oneline", "--no-merges"],
             capture_output=True,

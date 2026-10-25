@@ -48,6 +48,7 @@ nix run github:anomalyco/opencode  # Nix
 Cuando se ejecuta sin `--skip-sync`, el script:
 
 - Ejecuta `git fetch upstream` para obtener los últimos cambios del repositorio original.
+- Comprueba si el `package.json` de upstream exige una versión de Bun más reciente que la instalada, ejecutando una actualización en frío (`brew upgrade bun` / `bun upgrade`) antes de tocar procesos o dependencias.
 - Fusiona automáticamente los cambios con `git merge upstream/dev --no-edit`.
 - Verifica si existen commits locales propios y los empuja a `origin/dev` automáticamente. Esto permite que el fork público se mantenga actualizado con tus modificaciones sin necesidad de acciones manuales.
 
