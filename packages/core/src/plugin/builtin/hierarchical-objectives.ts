@@ -1012,7 +1012,7 @@ export function addFingerprint(
 
 export function setDoDCriteria(
   sessionID: string,
-  criteria: { id?: string; statement: string; verifiableBy?: string; satisfiedBy?: string[]; proofRef?: string }[],
+  criteria: { id?: string; statement?: string; verifiableBy?: string; satisfiedBy?: string[]; proofRef?: string }[],
 ): { success: boolean; error?: string; dod?: DoDCriterion[] } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
@@ -1021,16 +1021,17 @@ export function setDoDCriteria(
   po.dod ??= []
   for (const item of criteria) {
     const statement = item.statement?.trim()
-    if (!statement) continue
-    const existing = item.id ? po.dod.find((c) => c.id.toLowerCase() === item.id!.trim().toLowerCase()) : undefined
+    const cleanId = item.id?.trim()
+    const existing = cleanId ? po.dod.find((c) => c.id.toLowerCase() === cleanId.toLowerCase()) : undefined
     if (existing) {
-      existing.statement = statement
+      if (statement) existing.statement = statement
       if (item.verifiableBy?.trim()) existing.verifiableBy = item.verifiableBy.trim()
       if (item.satisfiedBy) existing.satisfiedBy = item.satisfiedBy.map((s) => s.trim())
       if (item.proofRef !== undefined) existing.proofRef = item.proofRef?.trim() || undefined
     } else {
+      if (!statement) continue
       po.dod.push({
-        id: item.id?.trim() || nextDoDCriterionId(po.dod),
+        id: cleanId || nextDoDCriterionId(po.dod),
         statement,
         verifiableBy: item.verifiableBy?.trim() ?? "",
         satisfiedBy: (item.satisfiedBy ?? []).map((s) => s.trim()),
@@ -1915,20 +1916,33 @@ export function reconstructObjectivesFromMessages(
   return po
 }
 
-function normalizeDoDInput(raw: any): DoDCriterion[] | undefined {
+function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[]): DoDCriterion[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined
   const criteria: DoDCriterion[] = []
   let counter = 0
   for (const item of raw) {
-    const statement = typeof item?.statement === "string" ? item.statement.trim() : ""
+    const rawId = typeof item?.id === "string" && item.id.trim() ? item.id.trim() : undefined
+    const existing = rawId && existingDod ? existingDod.find((c) => c.id.toLowerCase() === rawId.toLowerCase()) : undefined
+    const statement = typeof item?.statement === "string" && item.statement.trim() ? item.statement.trim() : existing?.statement
     if (!statement) continue
     counter += 1
+    const verifiableBy =
+      typeof item?.verifiableBy === "string" && item.verifiableBy.trim()
+        ? item.verifiableBy.trim()
+        : (existing?.verifiableBy ?? "")
+    const satisfiedBy = Array.isArray(item?.satisfiedBy)
+      ? item.satisfiedBy.map((s: any) => String(s).trim())
+      : (existing?.satisfiedBy ?? [])
+    const proofRef =
+      typeof item?.proofRef === "string" && item.proofRef.trim()
+        ? item.proofRef.trim()
+        : existing?.proofRef
     criteria.push({
-      id: typeof item?.id === "string" && item.id.trim() ? item.id.trim() : `D${counter}`,
+      id: rawId || existing?.id || `D${counter}`,
       statement,
-      verifiableBy: typeof item?.verifiableBy === "string" ? item.verifiableBy.trim() : "",
-      satisfiedBy: Array.isArray(item?.satisfiedBy) ? item.satisfiedBy.map((s: any) => String(s).trim()) : [],
-      proofRef: typeof item?.proofRef === "string" && item.proofRef.trim() ? item.proofRef.trim() : undefined,
+      verifiableBy,
+      satisfiedBy,
+      proofRef,
     })
   }
   return criteria.length > 0 ? criteria : undefined
@@ -2016,8 +2030,12 @@ const DoDCriterionInputSchema = Schema.Struct({
   id: Schema.optional(
     Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Criterion id (e.g. 'D1'); auto-assigned when omitted" })),
   ),
-  statement: Schema.String.pipe(Schema.annotate({ description: "What must be true for this criterion" })),
-  verifiableBy: Schema.String.pipe(Schema.annotate({ description: "Specific command/query that proves it" })),
+  statement: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "What must be true for this criterion" })),
+  ),
+  verifiableBy: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(Schema.annotate({ description: "Specific command/query that proves it" })),
+  ),
   satisfiedBy: Schema.optional(
     Schema.NullOr(Schema.Array(Schema.String)).pipe(Schema.annotate({ description: "SO ids that discharge the criterion" })),
   ),
@@ -2497,12 +2515,28 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       ? "resolved"
       : ((input.status as PrimaryObjectiveStatus) || "resolved")
 
+    // Si se invoca complete_primary con validationProof y dodCriteria en la misma llamada,
+    // o si el agente pasa dodCriteria con proofRef, asegurar que se apliquen al DoD antes de evaluar las compuertas de cierre.
+    let updatedDod = normalizeDoDInput(input.dodCriteria, current.dod) ?? current.dod
+    if (isComplete && input.validationProof && Array.isArray(updatedDod)) {
+      // Si el agente proporciona dodCriteria en complete_primary (ej. actualizando o confirmando criterios),
+      // o si hay criterios que carecen de proofRef pero se provee un validationProof explícito para el PO,
+      // asociar el validationProof a los criterios del DoD que no tengan prueba.
+      if (Array.isArray(input.dodCriteria) && input.dodCriteria.length > 0) {
+        for (const crit of updatedDod) {
+          if (!crit.proofRef || crit.proofRef.trim().length === 0) {
+            crit.proofRef = input.validationProof.trim()
+          }
+        }
+      }
+    }
+
     const result = updatePrimaryObjective(sessionID, {
       status: targetStatus,
       title: input.title,
       definitionOfDone: input.definitionOfDone,
       validationProof: input.validationProof,
-      dod: normalizeDoDInput(input.dodCriteria) ?? current.dod,
+      dod: updatedDod,
     })
 
     if (!result.success) {
@@ -2904,10 +2938,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   }
 
   if (rawAction === "update_dod" || rawAction === "set_dod") {
-    const criteria = normalizeDoDInput(input.dodCriteria)
+    const po = sessionObjectives.get(sessionID)
+    const criteria = normalizeDoDInput(input.dodCriteria, po?.dod)
     if (!criteria) {
       return {
-        output: { success: false, message: "'dodCriteria' (array of { statement, verifiableBy, proofRef? }) is required for action 'update_dod'.", tree: "" },
+        output: { success: false, message: "'dodCriteria' (array of { statement?, verifiableBy?, proofRef? }) is required for action 'update_dod'.", tree: "" },
         content: "Missing dodCriteria.",
       }
     }
