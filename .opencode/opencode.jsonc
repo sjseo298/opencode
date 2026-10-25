@@ -26,7 +26,6 @@
     }
   },
   "tools": {
-    "github-triage": false,
-    "github-pr-search": false
-  }
+    "github-pr-search": false,
+  },
 }

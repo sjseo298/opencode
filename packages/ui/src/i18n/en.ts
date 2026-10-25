@@ -75,12 +75,15 @@ const source = {
   "ui.sessionTurn.retry.attemptWaiting.other": "Attempt {{attempt}} - retrying in {{count}}s",
   "ui.sessionTurn.retry.attemptRetryingNow": "Attempt {{attempt}} - retrying",
   "ui.sessionTurn.retry.geminiHot": "gemini is way too hot right now",
+  "ui.sessionTurn.freeLimit.title": "You've used today's free messages.",
+  "ui.sessionTurn.freeLimit.lineReset": "You've used today's free messages. They reset at {{time}}.",
   "ui.sessionTurn.error.freeUsageExceeded": "Free usage exceeded",
   "ui.sessionTurn.error.addCredits": "Add credits",
 
   "dialog.usageExceeded.freeTier.title": "Free limit reached",
   "dialog.usageExceeded.freeTier.description":
     "Subscribe to OpenCode Go for reliable access to the best open-source models for $10/month.",
+  "dialog.usageExceeded.freeTier.reset": "Your free messages reset at {{time}}.",
   "dialog.usageExceeded.freeTier.actionLabel": "Subscribe",
   "dialog.usageExceeded.accountRateLimit.title": "Go limit reached",
   "dialog.usageExceeded.accountRateLimit.description":
@@ -249,6 +252,7 @@ const source = {
   "ui.message.voice": "Voice",
   "ui.message.deletePending": "Delete",
   "ui.message.copyResponse": "Copy response",
+  "ui.message.copyOutput": "Copy output",
   "ui.message.copied": "Copied",
   "ui.message.thought": "Thought",
   "ui.message.duration.seconds": "{{count}}s",
