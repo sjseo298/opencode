@@ -508,12 +508,17 @@ Decomposes acceptance criteria into verifiable rows:
 {
   "action": "update_dod",
   "dodCriteria": [
-    { "statement": "All regression tests pass", "verifiableBy": "bun test", "proofRef": "51 passed, exit 0" },
-    { "statement": "No new compiler errors", "verifiableBy": "bun run check", "proofRef": "34/34 tasks successful" }
+    { "id": "D1", "statement": "All regression tests pass", "verifiableBy": "bun test", "satisfiedBy": ["SO-1"], "proofRef": "51 passed, exit 0" },
+    { "id": "D2", "statement": "No new compiler errors", "verifiableBy": "bun run check", "satisfiedBy": ["SO-2"], "proofRef": "34/34 tasks successful" }
   ]
 }
 ```
-Gate: `complete_primary` will reject closure until **every** declared criterion has a `proofRef` and `verifiableBy`.
+Gate & Schema Rules:
+- The exact property name for proof is strictly `proofRef` (do not invent aliases like `validationProof` or `evidence`).
+- If an agent sends unrecognized keys, `update_dod` issues an instructive warning clarifying the schema.
+- Defensive parsing extracts `proofRef` and `satisfiedBy` if inadvertently collapsed into `verifiableBy` or `statement`.
+- On `complete_primary`, criteria referencing resolved SOs via `satisfiedBy` automatically inherit proof verification without requiring duplicate input.
+- `complete_primary` will reject closure until **every** declared criterion has a `proofRef` and `verifiableBy`.
 
 #### Action 10: `add_fingerprint` (Blocker Memory, F-7)
 Records canonical blocker signatures so future sessions can look them up instead of re-analyzing:

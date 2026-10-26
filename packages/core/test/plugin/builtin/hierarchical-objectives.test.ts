@@ -1181,6 +1181,127 @@ describe("hierarchical-objectives plugin", () => {
       expect(getObjectives(sid)!.status).toBe("resolved")
     })
 
+    test("update_dod extracts embedded proofRef and satisfiedBy from verifiableBy text", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-embedded-proof")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Verify migration",
+          definitionOfDone: "Migration complete",
+          dodCriteria: [{ id: "D1", statement: "Clean DB plan", verifiableBy: "dry-run script" }],
+        },
+        { sessionID: sid },
+      )
+
+      // Simular lo que enviaba el modelo colapsando satisfiedBy y proofRef dentro de verifiableBy
+      const r = await tool.execute(
+        {
+          action: "update_dod",
+          dodCriteria: [
+            {
+              id: "D1",
+              statement: "Clean DB plan",
+              verifiableBy: "dry-run script; satisfiedBy: [SO-1]; proofRef: clean plan verified exit 0",
+            },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(r.output.success).toBe(true)
+      expect(r.output.message).toContain("1/1 satisfied")
+      const po = getObjectives(sid)!
+      expect(po.dod![0].proofRef).toBe("clean plan verified exit 0")
+      expect(po.dod![0].satisfiedBy).toEqual(["SO-1"])
+    })
+
+    test("update_dod warns on unexpected properties and explains allowed schema", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-warn-properties")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Feature",
+          definitionOfDone: "Done",
+        },
+        { sessionID: sid },
+      )
+
+      // El agente envía por error 'validationProof' en vez de 'proofRef'
+      const r = await tool.execute(
+        {
+          action: "update_dod",
+          dodCriteria: [
+            {
+              id: "D1",
+              statement: "Feature works",
+              verifiableBy: "bun test",
+              validationProof: "exit code 0",
+            } as any,
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(r.output.success).toBe(true)
+      // Debe advertir sobre la propiedad inesperada y explicar que debe usarse 'proofRef'
+      expect(r.output.message).toContain("Unexpected property")
+      expect(r.output.message).toContain("'validationProof'")
+      expect(r.output.message).toContain("proofRef")
+    })
+
+    test("complete_primary infers proofRef from resolved SO listed in satisfiedBy", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-infer-satisfiedBy")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Fix bug",
+          definitionOfDone: "Bug fixed and verified",
+          dodCriteria: [
+            { id: "D1", statement: "Bug verified fixed", verifiableBy: "bun test", satisfiedBy: ["SO-1"] },
+          ],
+        },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        { action: "add_secondary", title: "Write regression test", rationale: "Ensure fix sticks" },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Quick local test" },
+        },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "bun test -> 1 passed, exit 0",
+        },
+        { sessionID: sid },
+      )
+
+      // Cierre del Primary Objective sin haber tenido que duplicar manualmente proofRef en D1
+      const done = await tool.execute(
+        { action: "complete_primary" },
+        { sessionID: sid },
+      )
+      expect(done.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("resolved")
+      expect(po.dod![0].proofRef).toContain("SO-1: bun test -> 1 passed, exit 0")
+    })
+
     test("evaluateDoD: explicit criteria need proofRef and verifiableBy; legacy falls back to PO proof", () => {
       const explicit = evaluateDoD({
         dod: [

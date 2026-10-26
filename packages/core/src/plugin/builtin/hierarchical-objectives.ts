@@ -180,7 +180,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
   "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
   "13. Options & Closure: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. The Primary Objective CANNOT be completed while any option remains in 'PENDING' or 'EXPLORING' status — all options must reach a definitive conclusion (SUCCESSFUL, DISCARDED, or CANCELLED) before complete_primary.",
-  "14. Definition of Done: decompose it into verifiable criteria (`dodCriteria` with statement + verifiableBy + proofRef, managed with `action: 'update_dod'`). The Primary Objective cannot be resolved while any criterion lacks proofRef. When a finding invalidates a criterion, edit the criterion with `action: 'update_dod'` at the moment of discovery — never reinterpret silently at the end.",
+  "14. Definition of Done: decompose it into verifiable criteria (array of objects in 'dodCriteria' with separate fields { id, statement, verifiableBy, satisfiedBy, proofRef }, managed with action: 'update_dod'). The Primary Objective cannot be resolved while any criterion lacks proofRef. The exact property name for proof is strictly 'proofRef'. When a finding invalidates a criterion, edit the criterion with action: 'update_dod' at the moment of discovery — never reinterpret silently at the end.",
   "15. Compliance audit: the tool runs a mechanical audit on every resolved/blocked/discarded transition and on complete_primary (typed proof present, no unvalidated root-cause phrasing such as 'should pass' / 'logically' / 'the root cause is' without adjacent execution evidence, EXPLORING options have a live Result, findings are complete). A failed audit REJECTS the transition with the violation list — fix the violations and retry. Run `action: 'audit'` on demand to inspect the current violations.",
   "16. Plan pause & checkpoints: before multi-step work present the plan with `action: 'present_plan'` (or `presentPlan: true` on `set_primary`) — the tree FREEZES until the user explicitly confirms, then resume with `action: 'resume_plan'` carrying the user's instruction. After each significant phase call `action: 'checkpoint'`: the report is derived ONLY from the objective tree (no parallel mental model), and the tree pauses until the user's next instruction.",
   "17. Blocker fingerprints & anti-loop: when a finding resolves a blocker, register its fingerprint with `action: 'add_fingerprint'` so future sessions answer 'did we solve this before?' in a lookup instead of re-analysis. The tool tracks repeated read actions per SO and warns on duplicates; opening an SO whose title matches a resolved/discarded fingerprint requires an explicit `justification`.",
@@ -2107,27 +2107,83 @@ export function reconstructObjectivesFromMessages(
   return po
 }
 
+const ALLOWED_DOD_CRITERION_KEYS = new Set(["id", "statement", "verifiableBy", "satisfiedBy", "proofRef"])
+
+function checkUnexpectedDoDKeys(raw: any): string[] {
+  const warnings: string[] = []
+  const list = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? [raw] : []
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue
+    const keys = Object.keys(item)
+    const unexpected = keys.filter((k) => !ALLOWED_DOD_CRITERION_KEYS.has(k))
+    if (unexpected.length > 0) {
+      warnings.push(
+        `Unexpected property/properties ${unexpected.map((u) => `'${u}'`).join(", ")} found on criterion${item.id ? ` ${item.id}` : ""}. Allowed properties are strictly: 'id', 'statement', 'verifiableBy', 'satisfiedBy', 'proofRef'. Note: proof for DoD criteria must be provided using the key 'proofRef'.`,
+      )
+    }
+  }
+  return warnings
+}
+
 function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[]): DoDCriterion[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  if (!raw) return undefined
+  const list = Array.isArray(raw) ? raw : typeof raw === "object" ? [raw] : []
+  if (list.length === 0) return undefined
   const criteria: DoDCriterion[] = []
   let counter = 0
-  for (const item of raw) {
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue
     const rawId = typeof item?.id === "string" && item.id.trim() ? item.id.trim() : undefined
     const existing = rawId && existingDod ? existingDod.find((c) => c.id.toLowerCase() === rawId.toLowerCase()) : undefined
     const statement = typeof item?.statement === "string" && item.statement.trim() ? item.statement.trim() : existing?.statement
     if (!statement) continue
     counter += 1
-    const verifiableBy =
+
+    let verifiableBy =
       typeof item?.verifiableBy === "string" && item.verifiableBy.trim()
         ? item.verifiableBy.trim()
         : (existing?.verifiableBy ?? "")
-    const satisfiedBy = Array.isArray(item?.satisfiedBy)
-      ? item.satisfiedBy.map((s: any) => String(s).trim())
-      : (existing?.satisfiedBy ?? [])
-    const proofRef =
-      typeof item?.proofRef === "string" && item.proofRef.trim()
-        ? item.proofRef.trim()
-        : existing?.proofRef
+
+    let satisfiedBy: string[] = []
+    if (Array.isArray(item?.satisfiedBy)) {
+      satisfiedBy = item.satisfiedBy.map((s: any) => String(s).trim()).filter(Boolean)
+    } else if (typeof item?.satisfiedBy === "string" && item.satisfiedBy.trim()) {
+      satisfiedBy = item.satisfiedBy.split(/[,\s]+/).map((s: string) => s.trim()).filter(Boolean)
+    } else if (existing?.satisfiedBy) {
+      satisfiedBy = existing.satisfiedBy
+    }
+
+    let proofRef: string | undefined = undefined
+    if (typeof item?.proofRef === "string" && item.proofRef.trim()) {
+      proofRef = item.proofRef.trim()
+    } else {
+      // Defensive extraction: check if proofRef was embedded in verifiableBy or statement
+      const searchTexts = [verifiableBy, statement]
+      for (const text of searchTexts) {
+        const match = text.match(/(?:proofRef|proof_ref)\s*[:=]\s*([^;\n]+)/i)
+        if (match && match[1]?.trim()) {
+          proofRef = match[1].trim()
+          break
+        }
+      }
+      if (!proofRef) {
+        proofRef = existing?.proofRef
+      }
+    }
+
+    // Defensive extraction: check if satisfiedBy was embedded in verifiableBy or statement
+    if (satisfiedBy.length === 0) {
+      const searchTexts = [verifiableBy, statement]
+      for (const text of searchTexts) {
+        const match = text.match(/(?:satisfiedBy|satisfied_by)\s*[:=]\s*(\[[^\]]+\]|[^;\n]+)/i)
+        if (match && match[1]?.trim()) {
+          const rawList = match[1].trim().replace(/^\[|\]$/g, "")
+          satisfiedBy = rawList.split(/[,\s]+/).map((s: string) => s.trim()).filter(Boolean)
+          break
+        }
+      }
+    }
+
     criteria.push({
       id: rawId || existing?.id || `D${counter}`,
       statement,
@@ -2393,7 +2449,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Array(DoDCriterionInputSchema)).pipe(
       Schema.annotate({
         description:
-          "Decomposed Definition of Done criteria (statement + verifiableBy + proofRef). Use in 'set_primary' to establish, or in 'update_dod'/'update_primary' to upsert by id",
+          "Decomposed Definition of Done criteria as an array of objects ({ id, statement, verifiableBy, satisfiedBy, proofRef }). Each field must be a separate property in the object. Use in 'set_primary' to establish, or in 'update_dod'/'update_primary' to upsert by id",
       }),
     ),
   ),
@@ -2764,14 +2820,27 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     // Si se invoca complete_primary con validationProof y dodCriteria en la misma llamada,
     // o si el agente pasa dodCriteria con proofRef, asegurar que se apliquen al DoD antes de evaluar las compuertas de cierre.
     let updatedDod = normalizeDoDInput(input.dodCriteria, current.dod) ?? current.dod
-    if (isComplete && input.validationProof && Array.isArray(updatedDod)) {
+    if (isComplete && Array.isArray(updatedDod)) {
       // Si el agente proporciona dodCriteria en complete_primary (ej. actualizando o confirmando criterios),
       // o si hay criterios que carecen de proofRef pero se provee un validationProof explícito para el PO,
       // asociar el validationProof a los criterios del DoD que no tengan prueba.
-      if (Array.isArray(input.dodCriteria) && input.dodCriteria.length > 0) {
+      if (Array.isArray(input.dodCriteria) && input.dodCriteria.length > 0 && typeof input.validationProof === "string" && input.validationProof.trim()) {
         for (const crit of updatedDod) {
           if (!crit.proofRef || crit.proofRef.trim().length === 0) {
             crit.proofRef = input.validationProof.trim()
+          }
+        }
+      }
+      // Si hay criterios con satisfiedBy explícito hacia SOs resueltos con validationProof, inferir la prueba
+      for (const crit of updatedDod) {
+        if (!crit.proofRef || crit.proofRef.trim().length === 0) {
+          if (Array.isArray(crit.satisfiedBy) && crit.satisfiedBy.length > 0) {
+            const matchingProofs = current.secondaries
+              .filter((s) => crit.satisfiedBy.includes(s.id) && s.status === "resolved" && s.validationProof?.trim())
+              .map((s) => `${s.id}: ${s.validationProof!.trim()}`)
+            if (matchingProofs.length > 0) {
+              crit.proofRef = matchingProofs.join("; ")
+            }
           }
         }
       }
@@ -3254,11 +3323,18 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 
   if (rawAction === "update_dod" || rawAction === "set_dod") {
     const po = sessionObjectives.get(sessionID)
+    const unexpectedKeyWarnings = checkUnexpectedDoDKeys(input.dodCriteria)
     const criteria = normalizeDoDInput(input.dodCriteria, po?.dod)
     if (!criteria) {
+      const guidance =
+        "Required format for 'dodCriteria': an array of objects matching { id?: string, statement: string, verifiableBy?: string, proofRef?: string, satisfiedBy?: string[] }. The exact key for proof is strictly 'proofRef' (do not use other property names)."
+      const errorMsg =
+        unexpectedKeyWarnings.length > 0
+          ? `'dodCriteria' failed to parse. ${unexpectedKeyWarnings.join(" ")} ${guidance}`
+          : `'dodCriteria' (array of { statement, verifiableBy?, proofRef?, satisfiedBy? }) is required for action 'update_dod'. ${guidance}`
       return {
-        output: { success: false, message: "'dodCriteria' (array of { statement?, verifiableBy?, proofRef? }) is required for action 'update_dod'.", tree: "" },
-        content: "Missing dodCriteria.",
+        output: { success: false, message: errorMsg, tree: "" },
+        content: errorMsg,
       }
     }
     const result = setDoDCriteria(sessionID, criteria)
@@ -3266,11 +3342,24 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       return { output: { success: false, message: result.error || "Failed to update DoD.", tree: "" }, content: result.error || "Failed to update DoD." }
     }
     const tree = treeOf(sessionID)
-    const satisfied = evaluateDoD(sessionObjectives.get(sessionID)!).criteria.filter((c) => c.satisfied).length
+    const unsatisfiedCriteria = (result.dod || []).filter((c) => !c.proofRef || !c.proofRef.trim())
+    const satisfied = (result.dod || []).length - unsatisfiedCriteria.length
+
+    const notes: string[] = []
+    if (unexpectedKeyWarnings.length > 0) {
+      notes.push(...unexpectedKeyWarnings)
+    }
+    if (unsatisfiedCriteria.length > 0) {
+      notes.push(
+        `Note: ${unsatisfiedCriteria.length} criterion(s) [${unsatisfiedCriteria.map((c) => c.id).join(", ")}] still lack 'proofRef'. Before closing the Primary Objective, ensure each criterion has a concrete 'proofRef' string registered.`
+      )
+    }
+
+    const message = `DoD criteria updated: ${satisfied}/${result.dod!.length} satisfied.${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`
     return {
       output: {
         success: true,
-        message: `DoD criteria updated: ${satisfied}/${result.dod!.length} satisfied.`,
+        message,
         tree,
       },
       content: tree,
