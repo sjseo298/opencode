@@ -9,11 +9,17 @@ export type ObjectiveStatus =
   | "discarded"
   | "cancelled"
 
+export interface DelegationView {
+  mode: "main" | "subagent"
+  justification?: string
+}
+
 export interface TertiaryObjectiveView {
   id: string // "SO-1-T2" etc. — child of its parent Secondary Objective
   title: string
   status: ObjectiveStatus
   rationale: string
+  delegation?: DelegationView
   blocker?: string
   validationProof?: string
 }
@@ -23,8 +29,10 @@ export interface SecondaryObjectiveView {
   title: string
   status: ObjectiveStatus
   rationale: string
+  delegation?: DelegationView
   blocker?: string
   validationProof?: string
+  affectedResources?: { files?: string[]; services?: string[]; envs?: string[]; dbSchemas?: string[] }
   children?: TertiaryObjectiveView[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
 }
 
@@ -51,6 +59,7 @@ export interface FindingView {
   result: string
   soRef?: string
   evidenceType?: string
+  delegation?: DelegationView
 }
 
 export interface OptionView {
@@ -61,6 +70,14 @@ export interface OptionView {
   reason?: string
 }
 
+export interface FingerprintView {
+  key: string
+  symptom: string
+  soRef?: string
+  status?: string
+  fixRef?: string
+}
+
 export interface PrimaryObjectiveView {
   title: string
   status: PrimaryObjectiveStatus
@@ -69,6 +86,7 @@ export interface PrimaryObjectiveView {
   dodCriteria?: DoDCriterionView[]
   findings?: FindingView[]
   options?: OptionView[]
+  fingerprints?: FingerprintView[]
   checkpointNote?: string
 }
 
@@ -150,6 +168,7 @@ export function extractObjectivesFromMessages(
         dodCriteria: rawDod ? [...rawDod] : undefined,
         findings: Array.isArray(raw.findings) ? [...raw.findings] : undefined,
         options: Array.isArray(raw.options) ? [...raw.options] : undefined,
+        fingerprints: Array.isArray(raw.fingerprints) ? [...raw.fingerprints] : undefined,
         checkpointNote: typeof raw.checkpointNote === "string" ? raw.checkpointNote : undefined,
       }
     }
@@ -217,7 +236,7 @@ export function extractObjectivesFromMessages(
           }
           const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
             ? input.secondaries
-            : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+            : (input.title || input.rationale ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources }] : [])
 
           for (const item of items) {
             const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
@@ -232,6 +251,8 @@ export function extractObjectivesFromMessages(
               existing.title = sTitle
               if (item?.status) existing.status = item.status
               if (item?.rationale) existing.rationale = item.rationale
+              if (item?.delegation !== undefined) existing.delegation = item.delegation
+              if (item?.affectedResources !== undefined) existing.affectedResources = item.affectedResources
               if (item?.blocker !== undefined) existing.blocker = item.blocker || undefined
               if (item?.validationProof !== undefined) existing.validationProof = item.validationProof || undefined
             } else {
@@ -252,6 +273,8 @@ export function extractObjectivesFromMessages(
                 title: sTitle,
                 status: item?.status || "pending",
                 rationale: item?.rationale || "",
+                delegation: item?.delegation,
+                affectedResources: item?.affectedResources,
                 blocker: item?.blocker || undefined,
                 validationProof: item?.validationProof || undefined,
               })
@@ -267,7 +290,7 @@ export function extractObjectivesFromMessages(
           if (po) {
             const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
               ? input.secondaries
-              : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+              : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources }] : [])
 
             for (const item of items) {
               const targetId = String(item?.id || "").toLowerCase()
@@ -277,6 +300,8 @@ export function extractObjectivesFromMessages(
                 if (item.status) target.status = item.status
                 if (item.title) target.title = item.title
                 if (item.rationale) target.rationale = item.rationale
+                if (item.delegation !== undefined) target.delegation = item.delegation
+                if (item.affectedResources !== undefined) target.affectedResources = item.affectedResources
                 if (item.blocker !== undefined) target.blocker = item.blocker
                 if (item.validationProof !== undefined) target.validationProof = item.validationProof
 
@@ -301,7 +326,7 @@ export function extractObjectivesFromMessages(
           }
           const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
             ? input.secondaries
-            : (input.id && (input.title || input.rationale) ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, blocker: input.blocker, validationProof: input.validationProof }] : [])
+            : (input.id && (input.title || input.rationale) ? [{ id: input.id, title: input.title, rationale: input.rationale, status: input.status, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof }] : [])
 
           for (const item of items) {
             const parentId = typeof item?.id === "string" && item.id.trim() ? item.id.trim() : ""
@@ -316,6 +341,7 @@ export function extractObjectivesFromMessages(
             if (existing) {
               if (item?.status) existing.status = item.status
               if (item?.rationale) existing.rationale = item.rationale
+              if (item?.delegation !== undefined) existing.delegation = item.delegation
               if (item?.blocker !== undefined) existing.blocker = item.blocker || undefined
               if (item?.validationProof !== undefined) existing.validationProof = item.validationProof || undefined
             } else {
@@ -333,6 +359,7 @@ export function extractObjectivesFromMessages(
                 title: tTitle,
                 status: item?.status || "pending",
                 rationale: item?.rationale || "",
+                delegation: item?.delegation,
                 blocker: item?.blocker || undefined,
                 validationProof: item?.validationProof || undefined,
               })
@@ -351,7 +378,7 @@ export function extractObjectivesFromMessages(
           if (!po) continue
           const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
             ? input.secondaries
-            : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, blocker: input.blocker, validationProof: input.validationProof }] : [])
+            : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof }] : [])
 
           for (const item of items) {
             const targetId = typeof item?.id === "string" ? item.id.trim().toLowerCase() : ""
@@ -365,6 +392,7 @@ export function extractObjectivesFromMessages(
               if (item.status) target.status = item.status
               if (item.title) target.title = item.title
               if (item.rationale) target.rationale = item.rationale
+              if (item.delegation !== undefined) target.delegation = item.delegation
               if (item.blocker !== undefined) target.blocker = item.blocker
               if (item.validationProof !== undefined) target.validationProof = item.validationProof
 
@@ -401,6 +429,7 @@ export function extractObjectivesFromMessages(
           if (existing) {
             if (input.title?.trim()) existing.title = input.title.trim()
             if (input.result?.trim()) existing.result = input.result.trim()
+            if (input.delegation !== undefined) existing.delegation = input.delegation
           } else {
             po.findings.push({
               id: explicitId || nextFindingIdView(po.findings),
@@ -408,6 +437,7 @@ export function extractObjectivesFromMessages(
               lifecycle: "NEW",
               result: input.result?.trim() ?? "",
               soRef: typeof input.soRef === "string" && input.soRef.trim() ? input.soRef.trim() : undefined,
+              delegation: input.delegation,
               evidenceType:
                 input.evidence && typeof input.evidence === "object" && typeof input.evidence.type === "string"
                   ? input.evidence.type
@@ -426,6 +456,7 @@ export function extractObjectivesFromMessages(
                 target.lifecycle = "EXTENDED"
                 if (input.title?.trim()) target.title = input.title.trim()
                 if (input.result?.trim()) target.result = input.result.trim()
+                if (input.delegation !== undefined) target.delegation = input.delegation
               }
             }
           }
@@ -492,6 +523,26 @@ export function extractObjectivesFromMessages(
                   po.dodCriteria.push(c)
                 }
               }
+            }
+          }
+        } else if (action === "add_fingerprint") {
+          if (po && input.symptom) {
+            po.fingerprints ??= []
+            const key = input.normalizedKey || input.symptom
+            const existing = po.fingerprints.find((fp) => fp.key === key)
+            if (existing) {
+              existing.symptom = input.symptom
+              if (input.soRef) existing.soRef = input.soRef
+              if (input.status) existing.status = input.status
+              if (input.fixRef) existing.fixRef = input.fixRef
+            } else {
+              po.fingerprints.push({
+                key,
+                symptom: input.symptom,
+                soRef: input.soRef,
+                status: input.status || "resolved",
+                fixRef: input.fixRef,
+              })
             }
           }
         } else if (action === "present_plan") {
@@ -862,7 +913,11 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                             {badge().symbol}
                           </text>
                           <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
-                            <span style={{ fg: theme.text.muted }}>{so.id}:</span> {so.title}
+                            <span style={{ fg: theme.text.muted }}>{so.id}</span>
+                            <Show when={so.delegation}>
+                              <span style={{ fg: so.delegation!.mode === "subagent" ? theme.text.feedback.warning.base : theme.text.muted }}> [{so.delegation!.mode}]</span>
+                            </Show>
+                            <span style={{ fg: theme.text.muted }}>:</span> {so.title}
                           </text>
                         </box>
 
@@ -893,6 +948,15 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                           </box>
                         </Show>
 
+                        {/* Scope / Affected Resources */}
+                        <Show when={so.affectedResources?.files && so.affectedResources.files.length > 0}>
+                          <box paddingLeft={4}>
+                            <text fg={theme.text.muted} wrapMode="word">
+                              🎯 Scope: {so.affectedResources!.files!.join(", ")}
+                            </text>
+                          </box>
+                        </Show>
+
                         {/* Tertiary Sub-Objectives (children of this secondary, same pattern as SOs under the PO) */}
                         <Show when={(so.children ?? []).length > 0}>
                           <box paddingLeft={4} gap={0}>
@@ -906,7 +970,11 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                                         {badge().symbol}
                                       </text>
                                       <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
-                                        <span style={{ fg: theme.text.muted }}>{to.id}:</span> {to.title}
+                                        <span style={{ fg: theme.text.muted }}>{to.id}</span>
+                                        <Show when={to.delegation}>
+                                          <span style={{ fg: to.delegation!.mode === "subagent" ? theme.text.feedback.warning.base : theme.text.muted }}> [{to.delegation!.mode}]</span>
+                                        </Show>
+                                        <span style={{ fg: theme.text.muted }}>:</span> {to.title}
                                       </text>
                                     </box>
 
@@ -962,7 +1030,11 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                           {badge().symbol}
                         </text>
                         <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
-                          <span style={{ fg: theme.text.muted }}>{f.id}:</span> {f.title}
+                          <span style={{ fg: theme.text.muted }}>{f.id}</span>
+                          <Show when={f.delegation}>
+                            <span style={{ fg: f.delegation!.mode === "subagent" ? theme.text.feedback.warning.base : theme.text.muted }}> [{f.delegation!.mode}]</span>
+                          </Show>
+                          <span style={{ fg: theme.text.muted }}>:</span> {f.title}
                           {f.result ? (
                             <span style={{ fg: theme.text.muted }}> — {f.result}</span>
                           ) : null}
@@ -995,6 +1067,28 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                       </box>
                     )
                   }}
+                </For>
+              </box>
+            </Show>
+
+            {/* Blocker Fingerprints */}
+            <Show when={(po().fingerprints ?? []).length > 0}>
+              <box paddingTop={1} gap={0}>
+                <text fg={theme.text.muted}>Fingerprints ({(po().fingerprints ?? []).length})</text>
+                <For each={po().fingerprints ?? []}>
+                  {(fp) => (
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text.feedback.success.base} flexShrink={0}>
+                        [⚡]
+                      </text>
+                      <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
+                        <span style={{ fg: theme.text.muted }}>{fp.key}:</span> {fp.symptom}
+                        {fp.fixRef ? (
+                          <span style={{ fg: theme.text.muted }}> (fix: {fp.fixRef})</span>
+                        ) : null}
+                      </text>
+                    </box>
+                  )}
                 </For>
               </box>
             </Show>

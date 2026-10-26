@@ -228,6 +228,16 @@ describe("hierarchical-objectives plugin", () => {
       expect(r3.output.message).toContain("validation proof")
 
       // 4. update_secondary with proof -> succeeds
+      const exploring = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Small auth change in the primary thread" },
+        },
+        { sessionID: sid },
+      )
+      expect(exploring.output.success).toBe(true)
       const r4 = await tool.execute(
         {
           action: "update_secondary",
@@ -829,6 +839,17 @@ describe("hierarchical-objectives plugin", () => {
       expect(rNoProof.output.success).toBe(false)
       expect(rNoProof.output.message).toContain("validation proof")
 
+      const rExplore = await tool.execute(
+        {
+          action: "update_tertiary",
+          id: "SO-1-T1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Small tertiary task in this thread" },
+        },
+        { sessionID: sid },
+      )
+      expect(rExplore.output.success).toBe(true)
+
       const rClose = await tool.execute(
         { action: "update_tertiary", id: "SO-1-T1", status: "resolved", validationProof: "step A verified with exit code 0" },
         { sessionID: sid },
@@ -887,6 +908,7 @@ describe("hierarchical-objectives plugin", () => {
         result: "getCookie returns undefined for punycode encoded hostnames",
         nextAction: "Add punycode normalization to the cookie parser",
         evidence: { type: "FILE_READ", source: "auth/cookies.ts:42-58" },
+        delegation: { mode: "main" as const, justification: "Direct investigation in main thread" },
         ...overrides,
       }
     }
@@ -1120,6 +1142,16 @@ describe("hierarchical-objectives plugin", () => {
         { sessionID: sid },
       )
       expect(r2.output.success).toBe(true)
+      const startWork = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Feature implementation is a small local change" },
+        },
+        { sessionID: sid },
+      )
+      expect(startWork.output.success).toBe(true)
       await tool.execute(
         { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "bun test -> 42 passed, exit code 0" },
         { sessionID: sid },
@@ -1333,6 +1365,7 @@ describe("hierarchical-objectives plugin", () => {
       for (const hook of hooks) {
         await hook({ sessionID: sid, tool: "write", input: { path: "README.md" } })
       }
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Small feature patch in primary thread" } }, { sessionID: sid })
       await tool.execute(
         { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "bun test -> 9 passed, exit code 0" },
         { sessionID: sid },
@@ -1359,6 +1392,7 @@ describe("hierarchical-objectives plugin", () => {
       for (const hook of hooks) {
         await hook({ sessionID: sid, tool: "write", input: { path: "src/config/schema.ts" } })
       }
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Small schema update in primary thread" } }, { sessionID: sid })
       await tool.execute(
         { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "bun test -> ok" },
         { sessionID: sid },
@@ -1386,6 +1420,7 @@ describe("hierarchical-objectives plugin", () => {
       for (const hook of hooks) {
         await hook({ sessionID: sid, tool: "write", input: { path: "tests/test_handler.py" } })
       }
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Small handler refactor in primary thread" } }, { sessionID: sid })
       await tool.execute(
         { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "pytest -> ok" },
         { sessionID: sid },
@@ -1401,6 +1436,7 @@ describe("hierarchical-objectives plugin", () => {
       for (const hook of hooks) {
         await hook({ sessionID: sid2, tool: "write", input: { path: "services/engine/worker.py" } })
       }
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Small engine patch in primary thread" } }, { sessionID: sid2 })
       await tool.execute(
         { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "pytest -> ok" },
         { sessionID: sid2 },
@@ -1800,6 +1836,41 @@ describe("hierarchical-objectives plugin", () => {
       expect(po.status).toBe("exploring")
     })
 
+    test("set_primary enforces blocking freeze and keeps initial secondaries pending awaiting user confirmation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("freeze-default-init")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Critical Migration",
+          definitionOfDone: "Zero downtime achieved",
+          presentPlan: true,
+          secondaries: [
+            { title: "Task 1", rationale: "Why 1", status: "exploring" },
+            { title: "Task 2", rationale: "Why 2", status: "resolved", validationProof: "Ran ok" },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("presented_awaiting_confirmation")
+      // Crucial invariant: when frozen awaiting user confirmation, subtasks CANNOT be pre-started
+      expect(po.secondaries[0].status).toBe("pending")
+      expect(po.secondaries[1].status).toBe("pending")
+
+      // Attempting to advance subtask is blocked
+      const blockedAdvance = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring" },
+        { sessionID: sid },
+      )
+      expect(blockedAdvance.output.success).toBe(false)
+      expect(blockedAdvance.output.message).toContain("FROZEN")
+    })
+
     test("delegation assessment is supported across secondary objectives, tertiary objectives, and findings", async () => {
       const { getRegisteredTool } = await setupPluginInstanceLocal()
       const tool = getRegisteredTool()
@@ -1874,6 +1945,260 @@ describe("hierarchical-objectives plugin", () => {
       expect(auditRes.violations.some((v) => v.includes("delegation mode"))).toBe(true)
       expect(auditRes.violations.some((v) => v.includes("delegation justification"))).toBe(true)
     })
+
+    test("delegation reasoning is mandatory when transitioning objective to exploring", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("del-mand-exploring")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Refactor Cache Engine",
+          definitionOfDone: "Zero cache misses on cold boot",
+          secondaries: [{ title: "Implement LRU eviction", rationale: "Prevent OOM errors" }],
+        },
+        { sessionID: sid },
+      )
+
+      // Moving to exploring without delegation fails
+      const failRes = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+        },
+        { sessionID: sid },
+      )
+      expect(failRes.output.success).toBe(false)
+      expect(failRes.output.message).toContain("delegation assessment")
+
+      // Moving to exploring with valid delegation succeeds
+      const okRes = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "subagent", justification: "LRU implementation is isolated and context-heavy" },
+        },
+        { sessionID: sid },
+      )
+      expect(okRes.output.success).toBe(true)
+      // Check compact indicator beside nomenclature in tree
+      expect(okRes.content).toContain("- **SO-1** [EXPLORING] [subagent] Implement LRU eviction")
+    })
+
+    test("delegation reasoning is mandatory when adding a finding", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("del-mand-finding")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Optimize Cache",
+          definitionOfDone: "Zero latency spikes",
+          secondaries: [{ title: "Benchmark cache", rationale: "Gather metrics", delegation: { mode: "main", justification: "Benchmark executed in main session" } }],
+        },
+        { sessionID: sid },
+      )
+
+      // add_finding without delegation fails
+      const failRes = await tool.execute(
+        {
+          action: "add_finding",
+          soRef: "SO-1",
+          title: "Cache hit ratio below 40%",
+          evidence: { type: "COMMAND_OUTPUT", source: "bun run bench:cache" },
+          result: "Hit ratio was 38.5% with high miss rate",
+          nextAction: "Tune cache capacity to 10k items",
+        },
+        { sessionID: sid },
+      )
+      expect(failRes.output.success).toBe(false)
+      expect(failRes.output.message).toContain("delegation assessment")
+
+      // add_finding with valid delegation succeeds
+      const okRes = await tool.execute(
+        {
+          action: "add_finding",
+          soRef: "SO-1",
+          title: "Cache hit ratio below 40%",
+          evidence: { type: "COMMAND_OUTPUT", source: "bun run bench:cache" },
+          result: "Hit ratio was 38.5% with high miss rate",
+          nextAction: "Tune cache capacity to 10k items",
+          delegation: { mode: "main", justification: "Config update is a single line, faster in main session" },
+        },
+        { sessionID: sid },
+      )
+      expect(okRes.output.success).toBe(true)
+      // Check compact indicator beside nomenclature in tree
+      expect(okRes.content).toContain("- **F-001** [SO-1] [main] Cache hit ratio below 40%")
+    })
+
+    test("update_secondary rejects pending-to-resolved and multiple exploring objectives", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("iterative-gates")
+      const delegation = { mode: "main", justification: "Small, coupled change stays in primary" }
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Iterative Work",
+          definitionOfDone: "Both subtasks are verified",
+          secondaries: [
+            { title: "First task", rationale: "Initial change", delegation },
+            { title: "Second task", rationale: "Follow-up change", delegation },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      const active = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", delegation },
+        { sessionID: sid },
+      )
+      expect(active.output.success).toBe(true)
+
+      const pendingResolution = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-2",
+          status: "resolved",
+          validationProof: "bun test -> 12 passed, exit code 0",
+        },
+        { sessionID: sid },
+      )
+      expect(pendingResolution.output.success).toBe(false)
+      expect(pendingResolution.output.message).toContain("cannot transition directly from 'pending' to 'resolved'")
+
+      const secondActive = await tool.execute(
+        { action: "update_secondary", id: "SO-2", status: "exploring", delegation },
+        { sessionID: sid },
+      )
+      expect(secondActive.output.success).toBe(false)
+      expect(secondActive.output.message).toContain("Single-active objective invariant")
+    })
+
+    test("compliance audit rejects resolved PO when options remain in PENDING or EXPLORING", () => {
+      const docWithOpenOption = {
+        status: "resolved",
+        secondaries: [
+          {
+            id: "SO-1",
+            title: "Resolved subtask",
+            status: "resolved",
+            validationProof: "Tests pass",
+            delegation: { mode: "main", justification: "Executed directly in primary session" },
+          },
+        ],
+        options: [
+          {
+            id: "OPT-1",
+            statement: "Hypothesis A for memory leak",
+            status: "EXPLORING",
+            result: "Currently profiling",
+          },
+        ],
+      }
+      const auditRes = runComplianceAudit(docWithOpenOption as any)
+      expect(auditRes.pass).toBe(false)
+      expect(auditRes.violations.some((v) => v.includes("Primary Objective cannot be resolved while option is still in 'EXPLORING'"))).toBe(true)
+    })
+
+    test("resolving a blocked objective automatically records a blocker fingerprint", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("fp-auto")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Fix Network Timeout",
+          definitionOfDone: "Zero timeouts",
+          secondaries: [{ title: "Diagnose gateway", rationale: "Investigate socket drop", delegation: { mode: "main", justification: "Investigating gateway socket drop" } }],
+        },
+        { sessionID: sid },
+      )
+
+      // Mark SO-1 as blocked with a blocker
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "blocked",
+          blocker: "Gateway connection timeout on port 8080 due to firewall rule",
+        },
+        { sessionID: sid },
+      )
+
+      // Resolve SO-1 with proof
+      const resolveRes = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "iptables -A INPUT -p tcp --dport 8080 -j ACCEPT verified with curl exit code 0",
+        },
+        { sessionID: sid },
+      )
+      expect(resolveRes.output.success).toBe(true)
+
+      // Verify fingerprint was auto-created in session tree
+      const po = getObjectives(sid)
+      expect(po?.fingerprints?.length).toBeGreaterThan(0)
+      const fp = po?.fingerprints?.[0]
+      expect(fp?.symptom).toContain("Gateway connection timeout")
+      expect(fp?.status).toBe("resolved")
+      expect(resolveRes.content).toContain("**Blocker Fingerprints:**")
+    })
+
+    test("blast radius violations are tracked when modified files exceed affectedResources", async () => {
+      const { getRegisteredTool, triggerToolHook } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("blast-radius")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Update CLI Command",
+          definitionOfDone: "CLI command updated",
+          secondaries: [
+            {
+              title: "Edit cli parser",
+              rationale: "Update arguments",
+              delegation: { mode: "main", justification: "Local argument parser change" },
+              affectedResources: { files: ["packages/cli/src/parser.ts"] },
+            },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Move SO-1 to exploring
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+        },
+        { sessionID: sid },
+      )
+
+      // Simulate editing a file outside affectedResources.files
+      await triggerToolHook("edit", {
+        path: "packages/server/src/auth.ts",
+      }, sid)
+
+      const po = getObjectives(sid)
+      expect(po?.secondaries[0].blastRadiusViolations).toContain("packages/server/src/auth.ts")
+
+      // Verify alert rendered in tree
+      const listRes = await tool.execute({ action: "list" }, { sessionID: sid })
+      expect(listRes.content).toContain("Blast Radius Alert")
+      expect(listRes.content).toContain("packages/server/src/auth.ts")
+    })
   })
 
   async function setupPluginInstanceLocal() {
@@ -1907,6 +2232,16 @@ describe("hierarchical-objectives plugin", () => {
     }
 
     await HierarchicalObjectivesPlugin.setup(mockCtx as any)
-    return { sessionHooks, toolHooks, getRegisteredTool: () => registeredTool }
+    const triggerToolBefore = async (toolName: string, input: any, sessionID: string) => {
+      for (const h of toolHooks["execute.before"] ?? []) {
+        await h({ tool: toolName, input, sessionID })
+      }
+    }
+    const triggerToolHook = async (toolName: string, input: any, sessionID: string) => {
+      for (const h of toolHooks["execute.after"] ?? []) {
+        await h({ tool: toolName, input, sessionID })
+      }
+    }
+    return { sessionHooks, toolHooks, getRegisteredTool: () => registeredTool, triggerToolHook, triggerToolBefore }
   }
 })

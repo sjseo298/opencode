@@ -1678,6 +1678,17 @@ def action_sync_fork() -> None:
         console.print("[green]✓ Sync + build completado[/]")
 
 
+def action_compile_project() -> None:
+    """Compile project (install deps + build, skipping git sync)."""
+    console.print("\n[bold]Compilando el proyecto (build)...[/]")
+    build_script = str(SCRIPT_DIR.parent / "build.sh")
+    result = subprocess.run(["bash", build_script, "--skip-sync"])
+    if result.returncode != 0:
+        console.print(f"[yellow]⚠ Compilación falló con código {result.returncode}[/]")
+    else:
+        console.print("[green]✓ Compilación completada[/]")
+
+
 def action_view_config() -> None:
     """View the generated config."""
     if GENERATED_CONFIG.exists():
@@ -2006,6 +2017,7 @@ def main() -> None:
         "6": ("Build Completo", action_run_build),
         "7": ("Sync de Fork", action_sync_fork),
         "8": ("Limpiar temporales", prompt_temp_cleanup_on_startup),
+        "9": ("Compilar proyecto", action_compile_project),
         "0": ("Salir", lambda: None),
     }
 
@@ -2025,9 +2037,10 @@ def main() -> None:
         console.print("  [6] Build Completo     — Sync fork + upstream + instalar deps + compilar")
         console.print("  [7] Sync de Fork       — Sync fork (origin) + instalar deps + compilar")
         console.print("  [8] Limpiar temporales — Escanea y limpia temporales según .gitignore")
+        console.print("  [9] Compilar proyecto  — Instalar deps + compilar (sin sincronizar git)")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], default="0")
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
@@ -2048,6 +2061,8 @@ def main() -> None:
             action_sync_fork()
         elif choice == "8":
             prompt_temp_cleanup_on_startup()
+        elif choice == "9":
+            action_compile_project()
 
 
 if __name__ == "__main__":

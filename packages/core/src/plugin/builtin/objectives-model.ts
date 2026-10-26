@@ -202,6 +202,7 @@ export interface AuditObjectiveLike {
 }
 
 export interface AuditDocLike {
+  status?: string
   secondaries: AuditObjectiveLike[]
   options?: Option[]
   findings?: Finding[]
@@ -253,6 +254,9 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
     if (option.status === "SUCCESSFUL" && !(option.proofRef?.trim() ?? "")) {
       violations.push(`${option.id}: option is SUCCESSFUL without proofRef`)
     }
+    if (doc.status === "resolved" && (option.status === "PENDING" || option.status === "EXPLORING")) {
+      violations.push(`${option.id}: Primary Objective cannot be resolved while option is still in '${option.status}' status (must be SUCCESSFUL, DISCARDED, or CANCELLED)`)
+    }
   }
 
   for (const finding of doc.findings ?? []) {
@@ -264,7 +268,9 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
       evidenceSource: finding.evidence.source,
     })
     for (const v of fieldViolations) violations.push(`${finding.id}: ${v}`)
-    if (finding.delegation) {
+    if (!finding.delegation) {
+      violations.push(`${finding.id}: delegation assessment is mandatory (must provide delegation: { mode: 'main' | 'subagent', justification: '...' })`)
+    } else {
       const mode = finding.delegation.mode
       const just = finding.delegation.justification?.trim() ?? ""
       if (mode !== "main" && mode !== "subagent") {
@@ -480,6 +486,7 @@ export interface ProjectionObjectiveLike {
   title: string
   status: string
   rationale?: string
+  delegation?: { mode?: string; justification?: string }
   blocker?: string
   validationProof?: string
   children?: ProjectionObjectiveLike[]
@@ -537,7 +544,8 @@ export function renderProjection(doc: ProjectionDocLike): string {
     lines.push("- (none)")
   } else {
     for (const finding of findings) {
-      lines.push(`### ${finding.id} [${finding.soRef}] ${finding.title}`)
+      const fDelTag = finding.delegation ? ` [${finding.delegation.mode}]` : ""
+      lines.push(`### ${finding.id} [${finding.soRef}]${fDelTag} ${finding.title}`)
       lines.push(`- Evidence: ${finding.evidence.type} — ${finding.evidence.source} (${new Date(finding.evidence.capturedAt).toISOString()})`)
       lines.push(`- Result: ${finding.result}`)
       if (finding.impactOnOption) {
@@ -567,11 +575,13 @@ export function renderProjection(doc: ProjectionDocLike): string {
 
   lines.push("## Current Status")
   for (const so of doc.secondaries) {
-    lines.push(`- ${so.id} [${String(so.status).toUpperCase()}] ${so.title}`)
+    const soDelTag = so.delegation ? ` [${so.delegation.mode}]` : ""
+    lines.push(`- ${so.id} [${String(so.status).toUpperCase()}]${soDelTag} ${so.title}`)
     if (so.blocker) lines.push(`  - Blocker: ${so.blocker}`)
     if (so.validationProof) lines.push(`  - Proof: ${so.validationProof}`)
     for (const child of so.children ?? []) {
-      lines.push(`  - ${child.id} [${String(child.status).toUpperCase()}] ${child.title}`)
+      const chDelTag = child.delegation ? ` [${child.delegation.mode}]` : ""
+      lines.push(`  - ${child.id} [${String(child.status).toUpperCase()}]${chDelTag} ${child.title}`)
     }
   }
   const nextAction = nextConcreteAction(doc)

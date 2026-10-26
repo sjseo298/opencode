@@ -18,6 +18,8 @@ test("renders Protocolo de Objetivos guidance when objective_manage is present",
   expect(prompt).toContain("Before delivering the final response to the user, your first action must be to update and reconcile all objectives")
   expect(prompt).toContain("complete_primary")
   expect(prompt).toContain("Immediately after a compaction finishes, you must first review the preserved objective progress")
+  expect(prompt).toContain("Iterative Objective Sync")
+  expect(prompt).toContain("preserving llama.cpp prefix caching across turns")
 })
 
 test("renders subagent concurrency (slots - 1) and task sizing guidance", () => {
@@ -31,4 +33,3 @@ test("renders subagent concurrency (slots - 1) and task sizing guidance", () => 
   delete (globalThis as any).__OPENCODE_TOTAL_SLOTS__
   delete (globalThis as any).__OPENCODE_MAX_SUBAGENTS__
 })
-

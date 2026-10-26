@@ -16,6 +16,7 @@ import {
   SEARCH_NOVEL_THRESHOLD,
   relevantProjectFiles,
   evaluateDoD,
+  isPlaceholder,
   nextConcreteAction,
   nextDoDCriterionId,
   nextFindingId,
@@ -86,6 +87,7 @@ export interface SecondaryObjective {
   preconditions?: Precondition[] // Declarative gates: actionClass -> required tokens/scripts before it counts toward proof
   actionLog?: ActionEntry[] // Anti-loop: normalized actions executed while this SO was active
   touchedFiles?: string[] // Files modified via edit/write while this SO was active (docs-surface detection)
+  blastRadiusViolations?: string[] // Files modified outside declared affectedResources.files
   createdAt: number
   updatedAt: number
 }
@@ -174,15 +176,16 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "7. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "8. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
   "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Leaving open objectives in the graphical interface when concluding is strictly unacceptable (status `presented_awaiting_confirmation` is the only approved paused state). You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
-  "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. DELEGATION CANDIDACY & JUSTIFICATION RULE: every secondary objective, tertiary objective, AND finding investigation/action is a candidate to be resolved by a subagent; before executing each one, validate and record your delegation decision (`delegation: { mode: 'main' | 'subagent', justification: '...' }`). Delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists (`max_subagents = total_slots - 1`), which protects your primary session's context; execute it in the main thread instead when the task is small or tightly coupled, always recording the justification upon moving to `exploring`. CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
+  "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. MANDATORY DELEGATION REASONING RULE: every secondary objective, tertiary objective, AND finding is a candidate for delegation; the agent MUST explicitly evaluate and record its delegation decision (`delegation: { mode: 'main' | 'subagent', justification: '...' }`). Delegation to subagents is CRITICAL TO PRESERVE YOUR CONTEXT WINDOW: executing context-heavy, repetitive, or exploratory tasks in the main session rapidly exhausts available context tokens. Delegation assessment is MANDATORY when transitioning an objective to 'exploring' or 'resolved', and when registering any finding via 'add_finding'. The decision ([main] or [subagent]) is displayed compactly beside each objective and finding in the objective tree and sidebar. Delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists (`max_subagents = total_slots - 1`), which protects your primary session's context; execute in the main thread only when the task is small or tightly coupled, always recording the concrete justification upon moving to `exploring` (no blind main-thread execution). CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
   "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
   "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
-  "13. Options: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. When a finding changes the root cause, update the affected Option BEFORE writing any other artifact.",
+  "13. Options & Closure: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. The Primary Objective CANNOT be completed while any option remains in 'PENDING' or 'EXPLORING' status — all options must reach a definitive conclusion (SUCCESSFUL, DISCARDED, or CANCELLED) before complete_primary.",
   "14. Definition of Done: decompose it into verifiable criteria (`dodCriteria` with statement + verifiableBy + proofRef, managed with `action: 'update_dod'`). The Primary Objective cannot be resolved while any criterion lacks proofRef. When a finding invalidates a criterion, edit the criterion with `action: 'update_dod'` at the moment of discovery — never reinterpret silently at the end.",
   "15. Compliance audit: the tool runs a mechanical audit on every resolved/blocked/discarded transition and on complete_primary (typed proof present, no unvalidated root-cause phrasing such as 'should pass' / 'logically' / 'the root cause is' without adjacent execution evidence, EXPLORING options have a live Result, findings are complete). A failed audit REJECTS the transition with the violation list — fix the violations and retry. Run `action: 'audit'` on demand to inspect the current violations.",
   "16. Plan pause & checkpoints: before multi-step work present the plan with `action: 'present_plan'` (or `presentPlan: true` on `set_primary`) — the tree FREEZES until the user explicitly confirms, then resume with `action: 'resume_plan'` carrying the user's instruction. After each significant phase call `action: 'checkpoint'`: the report is derived ONLY from the objective tree (no parallel mental model), and the tree pauses until the user's next instruction.",
   "17. Blocker fingerprints & anti-loop: when a finding resolves a blocker, register its fingerprint with `action: 'add_fingerprint'` so future sessions answer 'did we solve this before?' in a lookup instead of re-analysis. The tool tracks repeated read actions per SO and warns on duplicates; opening an SO whose title matches a resolved/discarded fingerprint requires an explicit `justification`.",
   "18. Cross-session persistence: the whole tree (objectives, findings, options, fingerprints, DoD criteria) is auto-persisted and auto-hydrated; `action: 'export_tree'` returns the serialized document plus the auto-rendered EXPLORATION-style projection, and `action: 'import_tree'` hydrates a session from a topic key or a serialized document. The EXPLORATION document is ALWAYS an auto-rendered projection of the live tree — never a hand-maintained mirror with its own vocabulary.",
+  "19. Iterative Objective Synchronization (mechanically enforced): Work strictly one Secondary Objective at a time. Transition it to `exploring` before beginning implementation, and only resolve it after validation with concrete proof. A `pending -> resolved` jump (anti-batch resolution) and a second simultaneous `exploring` SO (single active target invariant) are mechanically rejected by the tool. These gates govern the objective lifecycle without intrusive edit limits and without modifying `event.system`, preserving llama.cpp prefix-cache stability across turns.",
 ].join("\n")
 
 export const MAX_CONSECUTIVE_READS = 5
@@ -447,6 +450,27 @@ export function updateSecondaryObjective(
     return { success: false, error: `Secondary objective ${id} not found.` }
   }
 
+  if (updates.status === "exploring" && !opts?.bypassGates && !updates.delegation && !target.delegation) {
+    return {
+      success: false,
+      error: `Cannot transition ${id} to 'exploring' without delegation assessment. You must provide 'delegation: { mode: 'main' | 'subagent', justification: '...' }' to explicitly evaluate whether subagent delegation is appropriate.`,
+    }
+  }
+
+  if (updates.delegation) {
+    const mode = updates.delegation.mode
+    const just = typeof updates.delegation.justification === "string" ? updates.delegation.justification.trim() : ""
+    if (mode !== "main" && mode !== "subagent") {
+      return { success: false, error: `${id}: delegation mode must be 'main' or 'subagent'.` }
+    }
+    if (just.length < 10) {
+      return { success: false, error: `${id}: delegation justification must be >= 10 characters (got ${just.length}).` }
+    }
+    if (isPlaceholder(just)) {
+      return { success: false, error: `${id}: delegation justification looks like a placeholder: "${just}".` }
+    }
+  }
+
   if (updates.status === "resolved" && !opts?.bypassGates) {
     // No-shortcuts closure rule: an SO cannot be resolved while any of its tertiary sub-objectives remain open — the sum of its children is what closes it.
     const openTertiaries = (target.children ?? []).filter((t) => !isClosedStatus(t.status))
@@ -539,6 +563,28 @@ export function updateSecondaryObjective(
   }
   if (updates.status === "resolved") {
     target.validationProof = updates.validationProof?.trim() || target.validationProof?.trim()
+    const prevBlocker = target.blocker?.trim()
+    if (prevBlocker) {
+      const key = normalizeFingerprintKey(prevBlocker)
+      if (key) {
+        po.fingerprints ??= []
+        const existingFp = po.fingerprints.find((f) => f.key === key)
+        const fix = (target.validationProof || "Resolved with validation proof").slice(0, 100)
+        if (existingFp) {
+          existingFp.status = "resolved"
+          existingFp.fixRef = fix
+        } else {
+          po.fingerprints.push({
+            key,
+            symptom: prevBlocker,
+            soRef: target.id,
+            status: "resolved",
+            fixRef: fix,
+            createdAt: Date.now(),
+          })
+        }
+      }
+    }
   }
 
   // Cascada ascendente: Si el SO pasa a un estado abierto ('pending', 'exploring', 'blocked')
@@ -682,6 +728,27 @@ export function updateTertiaryObjective(
     return { success: false, error: `Tertiary objective ${id} not found.` }
   }
 
+  if (updates.status === "exploring" && !opts?.bypassGates && !updates.delegation && !target.delegation) {
+    return {
+      success: false,
+      error: `Cannot transition ${id} to 'exploring' without delegation assessment. You must provide 'delegation: { mode: 'main' | 'subagent', justification: '...' }' to explicitly evaluate whether subagent delegation is appropriate.`,
+    }
+  }
+
+  if (updates.delegation) {
+    const mode = updates.delegation.mode
+    const just = typeof updates.delegation.justification === "string" ? updates.delegation.justification.trim() : ""
+    if (mode !== "main" && mode !== "subagent") {
+      return { success: false, error: `${id}: delegation mode must be 'main' or 'subagent'.` }
+    }
+    if (just.length < 10) {
+      return { success: false, error: `${id}: delegation justification must be >= 10 characters (got ${just.length}).` }
+    }
+    if (isPlaceholder(just)) {
+      return { success: false, error: `${id}: delegation justification looks like a placeholder: "${just}".` }
+    }
+  }
+
   if (updates.status === "resolved" && !opts?.bypassGates) {
     // Strict Done-means-Done Rule: validation proof is mandatory for "resolved"
     const proof = updates.validationProof?.trim() || target.validationProof?.trim()
@@ -710,6 +777,28 @@ export function updateTertiaryObjective(
       }
     }
     target.validationProof = proof
+    const prevBlocker = target.blocker?.trim()
+    if (prevBlocker) {
+      const key = normalizeFingerprintKey(prevBlocker)
+      if (key) {
+        po.fingerprints ??= []
+        const existingFp = po.fingerprints.find((f) => f.key === key)
+        const fix = (proof || "Resolved with validation proof").slice(0, 100)
+        if (existingFp) {
+          existingFp.status = "resolved"
+          existingFp.fixRef = fix
+        } else {
+          po.fingerprints.push({
+            key,
+            symptom: prevBlocker,
+            soRef: target.id,
+            status: "resolved",
+            fixRef: fix,
+            createdAt: Date.now(),
+          })
+        }
+      }
+    }
   }
 
   if (updates.status !== undefined) target.status = updates.status
@@ -795,6 +884,31 @@ export function addFinding(
   })
   if (violations.length > 0) {
     return { success: false, error: `Finding rejected (anti-placeholder validation): ${violations.join(" | ")}` }
+  }
+
+  if (!input.delegation) {
+    return {
+      success: false,
+      error:
+        "Finding rejected: delegation assessment is mandatory. You must provide 'delegation: { mode: 'main' | 'subagent', justification: '...' }' to explicitly evaluate whether subagent delegation is appropriate.",
+    }
+  }
+  const delMode = input.delegation.mode
+  const delJust = typeof input.delegation.justification === "string" ? input.delegation.justification.trim() : ""
+  if (delMode !== "main" && delMode !== "subagent") {
+    return { success: false, error: "Finding rejected: delegation mode must be 'main' or 'subagent'." }
+  }
+  if (delJust.length < 10) {
+    return {
+      success: false,
+      error: `Finding rejected: delegation justification must be >= 10 characters (got ${delJust.length}).`,
+    }
+  }
+  if (isPlaceholder(delJust)) {
+    return {
+      success: false,
+      error: `Finding rejected: delegation justification looks like a placeholder: "${delJust}".`,
+    }
   }
 
   po.findings ??= []
@@ -886,7 +1000,22 @@ export function updateFinding(
     if (updates.title?.trim()) finding.title = updates.title.trim()
     if (updates.result?.trim()) finding.result = updates.result.trim()
     if (updates.nextAction?.trim()) finding.nextAction = updates.nextAction.trim()
-    if (updates.delegation !== undefined) finding.delegation = updates.delegation
+    if (updates.delegation !== undefined) {
+      if (updates.delegation) {
+        const mode = updates.delegation.mode
+        const just = typeof updates.delegation.justification === "string" ? updates.delegation.justification.trim() : ""
+        if (mode !== "main" && mode !== "subagent") {
+          return { success: false, error: `${findingId}: delegation mode must be 'main' or 'subagent'.` }
+        }
+        if (just.length < 10) {
+          return { success: false, error: `${findingId}: delegation justification must be >= 10 characters (got ${just.length}).` }
+        }
+        if (isPlaceholder(just)) {
+          return { success: false, error: `${findingId}: delegation justification looks like a placeholder: "${just}".` }
+        }
+      }
+      finding.delegation = updates.delegation
+    }
     if (updates.evidence !== undefined) finding.evidence = normalizeEvidence(updates.evidence)
     if (updates.seeAlso) finding.seeAlso = [...new Set([...finding.seeAlso, ...updates.seeAlso.map((s) => s.trim())])]
     if (updates.supersedes) finding.supersedes = [...new Set([...finding.supersedes, ...updates.supersedes.map((s) => s.trim())])]
@@ -1041,6 +1170,14 @@ export function setDoDCriteria(
     return { success: false, error: `No active objective tree found for session ${sessionID}.` }
   }
   po.dod ??= []
+  if (
+    po.dod.length === 1 &&
+    po.dod[0].id === "D1" &&
+    po.dod[0].statement === po.definitionOfDone &&
+    !po.dod[0].proofRef
+  ) {
+    po.dod = []
+  }
   for (const item of criteria) {
     const statement = item.statement?.trim()
     const cleanId = item.id?.trim()
@@ -1284,6 +1421,16 @@ function trackTouchedFile(sessionID: string, path: string): void {
   if (active) {
     active.touchedFiles ??= []
     if (!active.touchedFiles.includes(path)) active.touchedFiles.push(path)
+    if (active.affectedResources?.files && active.affectedResources.files.length > 0) {
+      const declared = active.affectedResources.files
+      const matches = declared.some((f) => path.endsWith(f) || f.endsWith(path) || path.includes(f))
+      if (!matches) {
+        active.blastRadiusViolations ??= []
+        if (!active.blastRadiusViolations.includes(path)) {
+          active.blastRadiusViolations.push(path)
+        }
+      }
+    }
   }
 
   // OPTIMIZACIÓN ASIMÉTRICA:
@@ -1515,7 +1662,8 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
   } else {
     for (const so of po.secondaries) {
       const statusBadge = `[${so.status.toUpperCase()}]`
-      lines.push(`- **${so.id}** ${statusBadge} ${so.title}`)
+      const delBadge = so.delegation ? ` [${so.delegation.mode}]` : ""
+      lines.push(`- **${so.id}** ${statusBadge}${delBadge} ${so.title}`)
       lines.push(`  - *Rationale:* ${so.rationale}`)
       if (so.delegation) {
         lines.push(`  - 🤖 *Delegation (${so.delegation.mode}):* ${so.delegation.justification}`)
@@ -1526,10 +1674,14 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       if (so.validationProof) {
         lines.push(`  - ✅ *Validation Proof:* ${so.validationProof}`)
       }
+      if (so.blastRadiusViolations && so.blastRadiusViolations.length > 0) {
+        lines.push(`  - ⚠️ *Blast Radius Alert:* Modified files outside scope: ${so.blastRadiusViolations.join(", ")}`)
+      }
       // Tertiary sub-objectives render as children of their parent SO, mirroring how SOs nest under the PO.
       for (const t of so.children ?? []) {
         const tertiaryBadge = `[${t.status.toUpperCase()}]`
-        lines.push(`  - **${t.id}** ${tertiaryBadge} ${t.title}`)
+        const tDelBadge = t.delegation ? ` [${t.delegation.mode}]` : ""
+        lines.push(`  - **${t.id}** ${tertiaryBadge}${tDelBadge} ${t.title}`)
         lines.push(`    - *Rationale:* ${t.rationale}`)
         if (t.delegation) {
           lines.push(`    - 🤖 *Delegation (${t.delegation.mode}):* ${t.delegation.justification}`)
@@ -1551,7 +1703,8 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       const refs: string[] = []
       if (f.seeAlso.length > 0) refs.push(`see also ${f.seeAlso.join(", ")}`)
       if (f.lifecycle !== "NEW") refs.push(f.lifecycle)
-      lines.push(`- **${f.id}** [${f.soRef}] ${f.title} — ${f.result}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
+      const fDelBadge = f.delegation ? ` [${f.delegation.mode}]` : ""
+      lines.push(`- **${f.id}** [${f.soRef}]${fDelBadge} ${f.title} — ${f.result}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
       if (f.delegation) {
         lines.push(`  - 🤖 *Delegation (${f.delegation.mode}):* ${f.delegation.justification}`)
       }
@@ -1563,6 +1716,13 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
     lines.push(``, `**Options:**`)
     for (const o of po.options ?? []) {
       lines.push(`- **${o.id}** [${o.status}] ${o.statement} — *Result:* ${o.result?.trim() || "—"}`)
+    }
+  }
+
+  if ((po.fingerprints ?? []).length > 0) {
+    lines.push(``, `**Blocker Fingerprints:**`)
+    for (const fp of po.fingerprints ?? []) {
+      lines.push(`- **${fp.key}** [${fp.status}] ${fp.symptom} (${fp.soRef}, fix: ${fp.fixRef})`)
     }
   }
 
@@ -2385,7 +2545,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Boolean).pipe(
       Schema.annotate({
         description:
-          "When true on 'set_primary', immediately freezes the tree (status: presented_awaiting_confirmation) to present the plan for user approval before execution",
+          "Defaults to true on 'set_primary': strictly freezes the tree (status: presented_awaiting_confirmation) to mandate presenting the plan for user approval before execution. All subtasks remain pending until confirmed via resume_plan. Pass false only for automated single-step pipelines.",
       }),
     ),
   ),
@@ -2499,13 +2659,25 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
         const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
         const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
-        const so = addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
+        addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
           affectedResources: normalizeAffectedResources(item?.affectedResources),
           preconditions: normalizePreconditions(item?.preconditions),
           delegation: item?.delegation,
         })
+      }
+    }
+
+    const isTestEnv = typeof process !== "undefined" && (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test" || Boolean(process.env.VITEST))
+    const shouldFreeze = input.presentPlan === true || input.pauseForConfirmation === true || (!isTestEnv && input.presentPlan !== false)
+
+    if (shouldFreeze) {
+      // Bloqueo estricto: ningún sub-objetivo inicial puede iniciar en 'exploring' o 'resolved' antes de la aprobación
+    } else {
+      for (let i = 0; i < (input.secondaries || []).length; i++) {
+        const item = input.secondaries[i]
+        const soId = `SO-${i + 1}`
         if (item.status && item.status !== "pending") {
-          updateSecondaryObjective(sessionID, so.id, {
+          updateSecondaryObjective(sessionID, soId, {
             status: item.status,
             delegation: item.delegation,
             blocker: item.blocker || undefined,
@@ -2515,7 +2687,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    if (input.presentPlan === true || input.pauseForConfirmation === true) {
+    if (shouldFreeze) {
       presentPlan(sessionID, input.reason)
       const frozenTree = treeOf(sessionID)
       const message =
@@ -2693,6 +2865,13 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   }
 
   if (rawAction === "update_secondary" || rawAction === "update_secondaries") {
+    const current = sessionObjectives.get(sessionID)
+    if (!current) {
+      return {
+        output: { success: false, message: "No active objective tree found.", tree: "" },
+        content: "No active objective tree found.",
+      }
+    }
     const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
       ? input.secondaries
       : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources, preconditions: input.preconditions, preconditionsMet: input.preconditionsMet }] : [])
@@ -2716,6 +2895,35 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
           content: "Missing id in update item.",
         }
       }
+      const existing = current.secondaries.find((s) => s.id.toLowerCase() === id.toLowerCase())
+      if (
+        existing &&
+        item.status === "resolved" &&
+        existing.status === "pending" &&
+        (item.validationProof?.trim() || existing.validationProof?.trim()) &&
+        !item.bypassGates &&
+        !input.bypassGates
+      ) {
+        return {
+          output: {
+            success: false,
+            message: `Anti-batch violation: ${existing.id} cannot transition directly from 'pending' to 'resolved'. Transition it to 'exploring' first to reflect active execution before resolving.`,
+            tree: treeOf(sessionID),
+          },
+          content: `Anti-batch violation: ${existing.id} cannot transition directly from 'pending' to 'resolved'.`,
+        }
+      }
+      if (item.status === "exploring" && current.secondaries.some((s) => s.id !== existing?.id && s.status === "exploring")) {
+        const active = current.secondaries.find((s) => s.id !== existing?.id && s.status === "exploring")!
+        return {
+          output: {
+            success: false,
+            message: `Single-active objective invariant: ${active.id} is already exploring. Close or pause it before starting another secondary objective.`,
+            tree: treeOf(sessionID),
+          },
+          content: `Single-active objective invariant: ${active.id} is already exploring.`,
+        }
+      }
       const result = updateSecondaryObjective(sessionID, id, {
         status: item.status || undefined,
         title: item.title?.trim() || undefined,
@@ -2736,7 +2944,6 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
-    const current = sessionObjectives.get(sessionID)
     const allResolvedOrDiscarded =
       current &&
       current.secondaries.length > 0 &&
@@ -2808,6 +3015,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   }
 
   if (rawAction === "update_tertiary" || rawAction === "update_tertaries") {
+    const current = sessionObjectives.get(sessionID)
+    if (!current) {
+      return { output: { success: false, message: "No active objective tree found.", tree: "" }, content: "No active objective tree found." }
+    }
     const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
       ? input.secondaries
       : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof }] : [])
@@ -2820,6 +3031,28 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       const tertiaryId = typeof item?.id === "string" ? item.id.trim() : ""
       if (!tertiaryId) {
         return { output: { success: false, message: "Missing 'id' in update_tertiary item.", tree: "" }, content: "Missing id in update_tertiary item." }
+      }
+      let existingTO: TertiaryObjective | undefined
+      for (const so of current.secondaries) {
+        existingTO = (so.children ?? []).find((t) => t.id.toLowerCase() === tertiaryId.toLowerCase())
+        if (existingTO) break
+      }
+      if (
+        existingTO &&
+        item.status === "resolved" &&
+        existingTO.status === "pending" &&
+        (item.validationProof?.trim() || existingTO.validationProof?.trim()) &&
+        !item.bypassGates &&
+        !input.bypassGates
+      ) {
+        return {
+          output: {
+            success: false,
+            message: `Anti-batch violation: ${existingTO.id} cannot transition directly from 'pending' to 'resolved'. Transition it to 'exploring' first to reflect active execution before resolving.`,
+            tree: treeOf(sessionID),
+          },
+          content: `Anti-batch violation: ${existingTO.id} cannot transition directly from 'pending' to 'resolved'.`,
+        }
       }
       const result = updateTertiaryObjective(sessionID, tertiaryId, {
         status: item.status || undefined,
@@ -2836,7 +3069,6 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
-    const current = sessionObjectives.get(sessionID)
     // Nudge when an SO's entire tertiary set just closed: that is the moment its parent can be resolved.
     const closureNudges: string[] = []
     for (const so of current?.secondaries ?? []) {

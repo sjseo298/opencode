@@ -568,4 +568,100 @@ describe("SidebarObjectives TUI component", () => {
     // Cannot be resolved because SO-1 is pending
     expect(po?.status).toBe("exploring")
   })
+
+  test("renders delegation indicator compactly beside SO, TO, and finding nomenclature", async () => {
+    const sid = "delegation-sidebar-render"
+    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
+    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+      title: "Distributed Pipeline",
+      status: "exploring",
+      definitionOfDone: "High throughput",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "Build worker queue",
+          status: "exploring",
+          rationale: "Queue tasks",
+          delegation: { mode: "subagent", justification: "Isolated worker setup" },
+          children: [
+            {
+              id: "SO-1-T1",
+              title: "Redis adapter",
+              status: "pending",
+              rationale: "Transport layer",
+              delegation: { mode: "main", justification: "Small config" },
+            },
+          ],
+        },
+      ],
+      findings: [
+        {
+          id: "F-001",
+          title: "Redis latency check",
+          lifecycle: "NEW",
+          result: "Latency is 0.5ms",
+          delegation: { mode: "main", justification: "Quick ping command" },
+        },
+      ],
+    })
+
+    const ctx = makeMockContext({ messages: [] })
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
+      width: 60,
+      height: 25,
+    })
+
+    try {
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("SO-1 [subagent]: Build worker queue")
+      expect(frame).toContain("SO-1-T1 [main]: Redis adapter")
+      expect(frame).toContain("F-001 [main]: Redis latency check")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("renders blast radius scope and fingerprints in sidebar", async () => {
+    const sid = "blast-radius-fingerprints-sidebar"
+    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
+    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+      title: "Cluster Migration",
+      status: "exploring",
+      definitionOfDone: "Zero downtime",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "Migrate database",
+          status: "exploring",
+          rationale: "Upgrade engine",
+          affectedResources: { files: ["packages/core/db.ts", "packages/core/schema.ts"] },
+        },
+      ],
+      fingerprints: [
+        {
+          key: "pg-timeout",
+          symptom: "Postgres timeout on connection pool",
+          fixRef: "max_connections=100",
+        },
+      ],
+    })
+
+    const ctx = makeMockContext({ messages: [] })
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
+      width: 80,
+      height: 25,
+    })
+
+    try {
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("Scope: packages/core/db.ts, packages/core/schema.ts")
+      expect(frame).toContain("Fingerprints (1)")
+      expect(frame).toContain("pg-timeout: Postgres timeout on connection pool")
+      expect(frame).toContain("(fix: max_connections=100)")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 })
