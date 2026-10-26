@@ -1182,19 +1182,34 @@ export function setDoDCriteria(
     const statement = item.statement?.trim()
     const cleanId = item.id?.trim()
     const existing = cleanId ? po.dod.find((c) => c.id.toLowerCase() === cleanId.toLowerCase()) : undefined
+    let proofRef = item.proofRef !== undefined ? (item.proofRef?.trim() || undefined) : undefined
+
+    const satisfiedByList = item.satisfiedBy
+      ? item.satisfiedBy.map((s) => s.trim())
+      : (existing?.satisfiedBy ?? [])
+
+    if (!proofRef && satisfiedByList.length > 0) {
+      const resolvedProofs = po.secondaries
+        .filter((s) => satisfiedByList.includes(s.id) && s.status === "resolved" && s.validationProof?.trim())
+        .map((s) => `${s.id}: ${s.validationProof!.trim()}`)
+      if (resolvedProofs.length > 0) {
+        proofRef = resolvedProofs.join("; ")
+      }
+    }
+
     if (existing) {
       if (statement) existing.statement = statement
       if (item.verifiableBy?.trim()) existing.verifiableBy = item.verifiableBy.trim()
-      if (item.satisfiedBy) existing.satisfiedBy = item.satisfiedBy.map((s) => s.trim())
-      if (item.proofRef !== undefined) existing.proofRef = item.proofRef?.trim() || undefined
+      existing.satisfiedBy = satisfiedByList
+      if (proofRef !== undefined) existing.proofRef = proofRef
     } else {
       if (!statement) continue
       po.dod.push({
         id: cleanId || nextDoDCriterionId(po.dod),
         statement,
         verifiableBy: item.verifiableBy?.trim() ?? "",
-        satisfiedBy: (item.satisfiedBy ?? []).map((s) => s.trim()),
-        proofRef: item.proofRef?.trim() || undefined,
+        satisfiedBy: satisfiedByList,
+        proofRef,
       })
     }
   }
@@ -2125,7 +2140,7 @@ function checkUnexpectedDoDKeys(raw: any): string[] {
   return warnings
 }
 
-function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[]): DoDCriterion[] | undefined {
+function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[], secondaries?: Array<{ id: string; status: string; validationProof?: string }>): DoDCriterion[] | undefined {
   if (!raw) return undefined
   const list = Array.isArray(raw) ? raw : typeof raw === "object" ? [raw] : []
   if (list.length === 0) return undefined
@@ -2181,6 +2196,16 @@ function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[]): DoDCriterion
           satisfiedBy = rawList.split(/[,\s]+/).map((s: string) => s.trim()).filter(Boolean)
           break
         }
+      }
+    }
+
+    // If proofRef is still empty and satisfiedBy points to resolved SOs, auto-inherit proofRef
+    if (!proofRef && satisfiedBy.length > 0 && Array.isArray(secondaries)) {
+      const matchingProofs = secondaries
+        .filter((s) => satisfiedBy.includes(s.id) && s.status === "resolved" && s.validationProof?.trim())
+        .map((s) => `${s.id}: ${s.validationProof!.trim()}`)
+      if (matchingProofs.length > 0) {
+        proofRef = matchingProofs.join("; ")
       }
     }
 
@@ -2821,8 +2846,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     // o si el agente pasa dodCriteria con proofRef, asegurar que se apliquen al DoD antes de evaluar las compuertas de cierre.
     let updatedDod = normalizeDoDInput(input.dodCriteria, current.dod) ?? current.dod
     if (isComplete && Array.isArray(updatedDod)) {
-      // Si el agente proporciona dodCriteria en complete_primary (ej. actualizando o confirmando criterios),
-      // o si hay criterios que carecen de proofRef pero se provee un validationProof explícito para el PO,
+      // Si el agente proporciona dodCriteria explícito en complete_primary y además validationProof para el PO,
       // asociar el validationProof a los criterios del DoD que no tengan prueba.
       if (Array.isArray(input.dodCriteria) && input.dodCriteria.length > 0 && typeof input.validationProof === "string" && input.validationProof.trim()) {
         for (const crit of updatedDod) {
@@ -3322,9 +3346,9 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   }
 
   if (rawAction === "update_dod" || rawAction === "set_dod") {
-    const po = sessionObjectives.get(sessionID)
+    const freshPo = sessionObjectives.get(sessionID)
     const unexpectedKeyWarnings = checkUnexpectedDoDKeys(input.dodCriteria)
-    const criteria = normalizeDoDInput(input.dodCriteria, po?.dod)
+    const criteria = normalizeDoDInput(input.dodCriteria, freshPo?.dod, freshPo?.secondaries)
     if (!criteria) {
       const guidance =
         "Required format for 'dodCriteria': an array of objects matching { id?: string, statement: string, verifiableBy?: string, proofRef?: string, satisfiedBy?: string[] }. The exact key for proof is strictly 'proofRef' (do not use other property names)."
@@ -3337,13 +3361,34 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         content: errorMsg,
       }
     }
+
+    // Auto-inherit proofRef from top-level input.proofRef or from satisfiedBy resolved SOs
+    if (freshPo) {
+      const topLevelProof = typeof input.proofRef === "string" && input.proofRef.trim() ? input.proofRef.trim() : undefined
+      for (const crit of criteria) {
+        if (!crit.proofRef || crit.proofRef.trim().length === 0) {
+          if (topLevelProof) {
+            crit.proofRef = topLevelProof
+          } else if (Array.isArray(crit.satisfiedBy) && crit.satisfiedBy.length > 0) {
+            const matchingProofs = freshPo.secondaries
+              .filter((s) => crit.satisfiedBy.includes(s.id) && s.status === "resolved" && s.validationProof?.trim())
+              .map((s) => `${s.id}: ${s.validationProof!.trim()}`)
+            if (matchingProofs.length > 0) {
+              crit.proofRef = matchingProofs.join("; ")
+            }
+          }
+        }
+      }
+    }
+
     const result = setDoDCriteria(sessionID, criteria)
     if (!result.success) {
       return { output: { success: false, message: result.error || "Failed to update DoD.", tree: "" }, content: result.error || "Failed to update DoD." }
     }
+    const currentPo = sessionObjectives.get(sessionID)
     const tree = treeOf(sessionID)
-    const unsatisfiedCriteria = (result.dod || []).filter((c) => !c.proofRef || !c.proofRef.trim())
-    const satisfied = (result.dod || []).length - unsatisfiedCriteria.length
+    const unsatisfiedCriteria = (currentPo?.dod || []).filter((c) => !c.proofRef || !c.proofRef.trim())
+    const satisfied = (currentPo?.dod || []).length - unsatisfiedCriteria.length
 
     const notes: string[] = []
     if (unexpectedKeyWarnings.length > 0) {

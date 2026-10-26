@@ -1217,6 +1217,90 @@ describe("hierarchical-objectives plugin", () => {
       expect(po.dod![0].satisfiedBy).toEqual(["SO-1"])
     })
 
+    test("update_dod auto-inherits proof from satisfiedBy resolved SO or top-level proofRef", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-autoinherit")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Auto inherit proof test",
+          definitionOfDone: "Tasks completed",
+          presentPlan: false,
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-1",
+          title: "Task 1",
+          rationale: "Subtask 1",
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Local check in main thread" },
+        },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "exit code 0 from suite",
+        },
+        { sessionID: sid },
+      )
+
+      // 1. Auto-inherit from satisfiedBy resolved SO
+      const r1 = await tool.execute(
+        {
+          action: "update_dod",
+          dodCriteria: [
+            {
+              id: "D1",
+              statement: "Task 1 completed",
+              verifiableBy: "test runner",
+              satisfiedBy: ["SO-1"],
+            },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(r1.output.success).toBe(true)
+      expect(r1.output.message).toContain("1/1 satisfied")
+      const po1 = getObjectives(sid)!
+      expect(po1.dod![0].proofRef).toContain("SO-1: exit code 0 from suite")
+
+      // 2. Auto-inherit from top-level proofRef parameter
+      const r2 = await tool.execute(
+        {
+          action: "update_dod",
+          proofRef: "global verification log",
+          dodCriteria: [
+            {
+              id: "D2",
+              statement: "Task 2 completed",
+              verifiableBy: "manual inspection",
+            },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(r2.output.success).toBe(true)
+      const po2 = getObjectives(sid)!
+      const d2 = po2.dod!.find((c) => c.id === "D2")!
+      expect(d2.proofRef).toBe("global verification log")
+    })
+
     test("update_dod warns on unexpected properties and explains allowed schema", async () => {
       const { getRegisteredTool } = await setupPluginInstanceLocal()
       const tool = getRegisteredTool()

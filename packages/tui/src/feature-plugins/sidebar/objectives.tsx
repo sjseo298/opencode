@@ -563,19 +563,36 @@ export function extractObjectivesFromMessages(
           action === "close_primary"
         ) {
           if (po) {
-            // Invariante de coherencia jerárquica:
-            // Un PO solo puede cerrarse como 'resolved' si TODOS los SOs y TOs están cerrados.
-            const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
-            const allSecondariesClosed =
-              po.secondaries.length === 0 ||
-              po.secondaries.every(
-                (s) => isClosed(s.status) && (s.children ?? []).every((t) => isClosed(t.status)),
-              )
+            // Check if the tool execution failed or returned an error before marking resolved
+            const state = part.state as any
+            const isToolError =
+              state?.status === "error" ||
+              (typeof state?.error === "string" && state.error.length > 0) ||
+              (typeof state?.output === "string" && (
+                state.output.includes("Error updating Primary Objective") ||
+                state.output.includes("Cannot resolve Primary Objective")
+              )) ||
+              (typeof state?.content === "string" && (
+                state.content.includes("Error updating Primary Objective") ||
+                state.content.includes("Cannot resolve Primary Objective")
+              )) ||
+              (state?.output && typeof state.output === "object" && state.output.success === false)
 
-            if (allSecondariesClosed) {
-              po.status = "resolved"
-            } else {
-              po.status = "exploring"
+            if (!isToolError) {
+              // Invariante de coherencia jerárquica:
+              // Un PO solo puede cerrarse como 'resolved' si TODOS los SOs y TOs están cerrados.
+              const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
+              const allSecondariesClosed =
+                po.secondaries.length === 0 ||
+                po.secondaries.every(
+                  (s) => isClosed(s.status) && (s.children ?? []).every((t) => isClosed(t.status)),
+                )
+
+              if (allSecondariesClosed) {
+                po.status = "resolved"
+              } else {
+                po.status = "exploring"
+              }
             }
           }
         } else if (action === "update_primary") {

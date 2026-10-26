@@ -384,6 +384,11 @@ export interface DoDStateLike {
   definitionOfDone?: string
   validationProof?: string
   dod?: DoDCriterion[]
+  secondaries?: Array<{
+    id: string
+    status: string
+    validationProof?: string
+  }>
 }
 
 export interface DoDEvaluation {
@@ -416,11 +421,23 @@ export function evaluateDoD(doc: DoDStateLike): DoDEvaluation {
   return {
     legacy: false,
     criteria: criteria.map((criterion) => {
-      const proof = criterion.proofRef?.trim() ?? ""
+      let proof = criterion.proofRef?.trim() ?? ""
+      // Auto-inherit proof from satisfiedBy secondary objectives if proofRef is omitted
+      if (proof.length === 0 && Array.isArray(criterion.satisfiedBy) && criterion.satisfiedBy.length > 0) {
+        const resolvedProofs = (doc.secondaries ?? [])
+          .filter((s) => criterion.satisfiedBy.includes(s.id) && s.status === "resolved" && s.validationProof?.trim())
+          .map((s) => `${s.id}: ${s.validationProof!.trim()}`)
+        if (resolvedProofs.length > 0) {
+          proof = resolvedProofs.join("; ")
+          criterion.proofRef = proof
+        }
+      }
       return {
         criterion,
         satisfied: proof.length > 0 && (criterion.verifiableBy?.trim() ?? "").length > 0,
-        reason: proof.length > 0 ? "proofRef attached" : "missing proofRef (attach via action 'update_dod')",
+        reason: proof.length > 0
+          ? "proofRef attached"
+          : "missing proofRef (attach via action 'update_dod' with dodCriteria: [{ id: '" + criterion.id + "', proofRef: '...' }])",
       }
     }),
   }
