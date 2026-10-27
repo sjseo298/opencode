@@ -1301,6 +1301,178 @@ describe("hierarchical-objectives plugin", () => {
       expect(d2.proofRef).toBe("global verification log")
     })
 
+    test("updateSecondaryObjective immediately auto-inherits validationProof to DoD criteria via satisfiedBy upon resolution", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-immediate-autoinherit")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Immediate auto inherit proof test",
+          definitionOfDone: "Tasks completed",
+          presentPlan: false,
+          dodCriteria: [
+            { id: "D1", statement: "Feature implemented", satisfiedBy: ["SO-1"] },
+            { id: "D2", statement: "Tests verified", satisfiedBy: ["SO-2"] },
+          ],
+          secondaries: [
+            { id: "SO-1", title: "Implement feature", rationale: "Core logic" },
+            { id: "SO-2", title: "Write tests", rationale: "Verification" },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Resolve SO-1 with proof
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Local feature implementation" } }, { sessionID: sid })
+      const resResolve = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "feature works perfectly" },
+        { sessionID: sid },
+      )
+
+      expect(resResolve.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      const d1 = po.dod!.find((c) => c.id === "D1")!
+      expect(d1.proofRef).toContain("SO-1: feature works perfectly")
+      // Output tree contains visual DoD status
+      expect(resResolve.output.tree).toContain("**[D1]** [PROVEN]")
+      expect(resResolve.output.tree).toContain("**[D2]** [MISSING PROOF]")
+    })
+
+    test("complete_primary accepts dodProofs map and direct update_dod shortcuts", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("dod-proofs-map")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Map proof test",
+          definitionOfDone: "All done",
+          presentPlan: false,
+          dodCriteria: [
+            { id: "D1", statement: "Crit 1" },
+            { id: "D2", statement: "Crit 2" },
+          ],
+          secondaries: [
+            { id: "SO-1", title: "Subtask 1", rationale: "Work 1" },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Shortcut proof_dod with id + proofRef
+      const p1 = await tool.execute({ action: "proof_dod", id: "D1", proofRef: "proof 1 output" }, { sessionID: sid })
+      expect(p1.output.success).toBe(true)
+
+      // Resolve SO-1
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Local feature implementation" } }, { sessionID: sid })
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "work 1 done" }, { sessionID: sid })
+
+      // complete_primary with dodProofs map for D2
+      const comp = await tool.execute(
+        { action: "complete_primary", dodProofs: { D2: "proof 2 output" }, validationProof: "All done" },
+        { sessionID: sid },
+      )
+      expect(comp.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("resolved")
+      expect(po.dod!.find((c) => c.id === "D2")!.proofRef).toBe("proof 2 output")
+    })
+
+    test("draft: true allows refining draft secondaries and DoD during presented_awaiting_confirmation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("draft-refinement-test")
+
+      // Initial set_primary freezes with only SO-1
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Initial Draft PO",
+          definitionOfDone: "Initial draft DoD",
+          presentPlan: true,
+          secondaries: [{ id: "SO-1", title: "Task 1", rationale: "Why 1" }],
+        },
+        { sessionID: sid },
+      )
+      expect(res.output.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // Adding SO-2 without draft flag is rejected
+      const blockedAdd = await tool.execute(
+        { action: "add_secondary", id: "SO-2", title: "Task 2", rationale: "Why 2" },
+        { sessionID: sid },
+      )
+      expect(blockedAdd.output.success).toBe(false)
+      expect(blockedAdd.output.message).toContain("FROZEN")
+
+      // Adding SO-2 with draft: true succeeds
+      const draftAdd = await tool.execute(
+        { action: "add_secondary", id: "SO-2", title: "Task 2", rationale: "Why 2", draft: true },
+        { sessionID: sid },
+      )
+      expect(draftAdd.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("presented_awaiting_confirmation")
+      expect(po.secondaries.length).toBe(2)
+
+      // Refining DoD with draft: true succeeds
+      const draftDoD = await tool.execute(
+        { action: "update_dod", dodCriteria: [{ id: "D1", statement: "New criterion" }], draft: true },
+        { sessionID: sid },
+      )
+      expect(draftDoD.output.success).toBe(true)
+      expect(po.dod?.length).toBe(1)
+
+      // Advancing to exploring even with draft: true is rejected (execution gating preserved)
+      const blockedExplore = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", draft: true },
+        { sessionID: sid },
+      )
+      expect(blockedExplore.output.success).toBe(false)
+    })
+
+    test("documentation gate bypasses self-contained report and analysis deliverables", async () => {
+      const { getRegisteredTool, toolHooks } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("docs-gate-report-bypass")
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Generate Apdex Analysis Report",
+          definitionOfDone: "Report generated at root",
+          presentPlan: false,
+          secondaries: [{ id: "SO-1", title: "Extract data and write report", rationale: "Core deliverable" }],
+        },
+        { sessionID: sid },
+      )
+
+      // Simulate creating a report deliverable
+      const hooks = toolHooks["execute.after"] ?? []
+      for (const hook of hooks) {
+        await hook({ sessionID: sid, tool: "write", input: { path: "informe_apdex_ultimos_30_dias.md" } })
+        await hook({ sessionID: sid, tool: "write", input: { path: "tmp/data_extracted.json" } })
+      }
+
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Local report extraction" } },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "Report generated successfully" },
+        { sessionID: sid },
+      )
+
+      // complete_primary should NOT be blocked by documentation gate because the file is a report deliverable
+      const comp = await tool.execute(
+        { action: "complete_primary", validationProof: "All done and verified" },
+        { sessionID: sid },
+      )
+      expect(comp.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("resolved")
+    })
+
     test("update_dod warns on unexpected properties and explains allowed schema", async () => {
       const { getRegisteredTool } = await setupPluginInstanceLocal()
       const tool = getRegisteredTool()

@@ -336,7 +336,7 @@ export function addSecondaryObjective(
   title: string,
   rationale: string,
   explicitId?: string,
-  extra?: { affectedResources?: AffectedResources; preconditions?: Precondition[]; delegation?: DelegationAssessment },
+  extra?: { affectedResources?: AffectedResources; preconditions?: Precondition[]; delegation?: DelegationAssessment; retainStatus?: boolean },
 ): SecondaryObjective {
   let po = sessionObjectives.get(sessionID)
   const now = Date.now()
@@ -412,8 +412,8 @@ export function addSecondaryObjective(
 
   // Invariante de coherencia jerárquica:
   // Si el PO ya estaba cerrado (resolved) o en pausa (presented_awaiting_confirmation)
-  // y se agrega un nuevo SO abierto, el PO se REABRE automáticamente a 'exploring'.
-  if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
+  // y se agrega un nuevo SO abierto, el PO se REABRE automáticamente a 'exploring' (a menos que retainStatus esté activo para borradores).
+  if (!extra?.retainStatus && (po.status === "resolved" || po.status === "presented_awaiting_confirmation")) {
     po.status = "exploring"
     if (po.phase) {
       po.phase.paused = false
@@ -563,6 +563,19 @@ export function updateSecondaryObjective(
   }
   if (updates.status === "resolved") {
     target.validationProof = updates.validationProof?.trim() || target.validationProof?.trim()
+    const finalProof = target.validationProof
+
+    // Auto-inherit validationProof to any DoD criterion that lists this SO in satisfiedBy and lacks its own proofRef
+    if (finalProof && Array.isArray(po.dod)) {
+      for (const crit of po.dod) {
+        if (!crit.proofRef || crit.proofRef.trim().length === 0) {
+          if (Array.isArray(crit.satisfiedBy) && crit.satisfiedBy.map((s) => s.trim().toLowerCase()).includes(target.id.toLowerCase())) {
+            crit.proofRef = `${target.id}: ${finalProof}`
+          }
+        }
+      }
+    }
+
     const prevBlocker = target.blocker?.trim()
     if (prevBlocker) {
       const key = normalizeFingerprintKey(prevBlocker)
@@ -1711,6 +1724,23 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
     }
   }
 
+  if (Array.isArray(po.dod) && po.dod.length > 0) {
+    lines.push(``, `**Definition of Done Criteria:**`)
+    for (const crit of po.dod) {
+      const hasProof = Boolean(crit.proofRef && crit.proofRef.trim().length > 0)
+      const satText = crit.satisfiedBy && crit.satisfiedBy.length > 0 ? ` [satisfiedBy: ${crit.satisfiedBy.join(", ")}]` : ""
+      if (hasProof) {
+        lines.push(`- **[${crit.id}]** [PROVEN] ${crit.statement}${satText}`)
+        lines.push(`  - ✅ *Proof:* ${crit.proofRef}`)
+      } else {
+        lines.push(`- **[${crit.id}]** [MISSING PROOF] ${crit.statement}${satText}`)
+        if (crit.verifiableBy) {
+          lines.push(`  - 🔍 *Verifiable By:* ${crit.verifiableBy}`)
+        }
+      }
+    }
+  }
+
   const activeFindings = (po.findings ?? []).filter((f) => f.lifecycle !== "SUBSUMED")
   if (activeFindings.length > 0) {
     lines.push(``, `**Findings:**`)
@@ -2217,6 +2247,18 @@ function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[], secondaries?:
       proofRef,
     })
   }
+
+  // If raw list was a partial update (e.g. only passed criteria to update/prove), merge with existingDod criteria that were not in raw list
+  if (existingDod && existingDod.length > 0) {
+    for (const ex of existingDod) {
+      if (!criteria.some((c) => c.id.toLowerCase() === ex.id.toLowerCase())) {
+        criteria.push({ ...ex })
+      }
+    }
+    // Sort criteria by id (D1, D2, ...) for deterministic order
+    criteria.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
+  }
+
   return criteria.length > 0 ? criteria : undefined
 }
 
@@ -2266,6 +2308,7 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("update_option"),
   Schema.Literal("add_fingerprint"),
   Schema.Literal("update_dod"),
+  Schema.Literal("proof_dod"),
   Schema.Literal("export_tree"),
   Schema.Literal("import_tree"),
   Schema.Literal("sync"),
@@ -2396,7 +2439,7 @@ export const ObjectiveInputSchema = Schema.Struct({
   action: ObjectiveActionSchema.pipe(
     Schema.annotate({
       description:
-        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary'/'update_secondary' (manage SOs), 'add_tertiary' (add a tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage TOs: 'id' is the TO's own id), 'add_finding'/'update_finding'/'search_findings' (epistemic findings F-NNN with typed evidence and search-before-write), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod' (decomposed Definition of Done criteria), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), or 'list'. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef.",
+        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary'/'update_secondary' (manage SOs), 'add_tertiary' (add a tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage TOs: 'id' is the TO's own id), 'add_finding'/'update_finding'/'search_findings' (epistemic findings F-NNN with typed evidence and search-before-write), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod'/'proof_dod' (decomposed Definition of Done criteria and direct proof attaching), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), or 'list'. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef.",
     }),
   ),
   title: Schema.optional(
@@ -2475,6 +2518,14 @@ export const ObjectiveInputSchema = Schema.Struct({
       Schema.annotate({
         description:
           "Decomposed Definition of Done criteria as an array of objects ({ id, statement, verifiableBy, satisfiedBy, proofRef }). Each field must be a separate property in the object. Use in 'set_primary' to establish, or in 'update_dod'/'update_primary' to upsert by id",
+      }),
+    ),
+  ),
+  dodProofs: Schema.optional(
+    Schema.NullOr(Schema.Record(Schema.String, Schema.String)).pipe(
+      Schema.annotate({
+        description:
+          "Map of DoD criterion id to proofRef string, e.g. { 'D1': 'ls -la ... -> PASS', 'D2': '...' }. Usable in 'complete_primary', 'update_dod', and 'proof_dod'",
       }),
     ),
   ),
@@ -2668,14 +2719,7 @@ function treeOf(sessionID: string): string {
 }
 
 const PAUSED_MUTATING_ACTIONS = new Set([
-  "set_primary",
-  "init",
-  "set_objectives",
   "update_primary",
-  "add_secondary",
-  "add_secondaries",
-  "update_secondary",
-  "update_secondaries",
   "add_tertiary",
   "update_tertiary",
   "add_finding",
@@ -2683,8 +2727,10 @@ const PAUSED_MUTATING_ACTIONS = new Set([
   "add_option",
   "update_option",
   "add_fingerprint",
-  "update_dod",
   "import_tree",
+  "complete_primary",
+  "resolve_primary",
+  "close_primary",
 ])
 
 const FROZEN_MESSAGE =
@@ -2705,11 +2751,37 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   const rawAction = String(input.action || "").toLowerCase()
   const po = sessionObjectives.get(sessionID)
 
-  // F-6: the plan-pause state machine freezes mutations until the user confirms.
-  if (po?.status === "presented_awaiting_confirmation" && PAUSED_MUTATING_ACTIONS.has(rawAction)) {
-    return {
-      output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
-      content: FROZEN_MESSAGE,
+  // F-6: the plan-pause state machine freezes execution mutations until the user confirms.
+  // Planning draft mutations (adding/updating secondary definitions in pending status, or refining DoD)
+  // are allowed during presented_awaiting_confirmation only if allowDraftPlanning is true, or if explicitly requested.
+  // By default, strict freeze blocks PAUSED_MUTATING_ACTIONS and blocks execution advancement.
+  if (po?.status === "presented_awaiting_confirmation") {
+    const isDraftPlanAction = rawAction === "add_secondary" || rawAction === "add_secondaries" || rawAction === "update_dod"
+    const isDraftUpdateAction = rawAction === "update_secondary" || rawAction === "update_secondaries"
+
+    // If draft planning is explicitly requested or if it's draft planning mode
+    const allowDraft = input.draft === true || input.allowDraft === true || input.refinePlan === true
+
+    if (allowDraft && (isDraftPlanAction || isDraftUpdateAction)) {
+      if (isDraftUpdateAction) {
+        const targetStatus = input.status ? String(input.status).toLowerCase() : undefined
+        const secondariesList = Array.isArray(input.secondaries) ? input.secondaries : []
+        const hasNonPending = (targetStatus && targetStatus !== "pending") || secondariesList.some((s: any) => s.status && String(s.status).toLowerCase() !== "pending")
+        if (hasNonPending) {
+          return {
+            output: { success: false, message: "Cannot advance subtasks to non-pending status while plan is awaiting confirmation.", tree: treeOf(sessionID) },
+            content: "Cannot advance subtasks to non-pending status while plan is awaiting confirmation.",
+          }
+        }
+      }
+      // Allowed to refine draft!
+    } else {
+      if (PAUSED_MUTATING_ACTIONS.has(rawAction) || isDraftPlanAction || isDraftUpdateAction) {
+        return {
+          output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
+          content: FROZEN_MESSAGE,
+        }
+      }
     }
   }
 
@@ -2815,7 +2887,9 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       // Prioritize files explicitly judged relevant by the one-shot /btw prompt or the universal detector
       const evaluatedRelevant = current.relevantDocumentableFiles ?? []
       const detectedRelevant = relevantProjectFiles(current.touchedFiles ?? [])
-      const relevant = [...new Set([...evaluatedRelevant, ...detectedRelevant])]
+      // Filter out ephemeral/report files generated as deliverables (e.g. informe_*, report_*, tmp/*)
+      const isReportDeliverable = (f: string) => /(^|\/)(informe|report|investigacion|exploration)_[^/]+\.md$/i.test(f) || /(^|\/)(tmp)\//i.test(f)
+      const relevant = [...new Set([...evaluatedRelevant, ...detectedRelevant])].filter((f) => !isReportDeliverable(f))
       const hasDocsSO = current.secondaries.some((s) => /documentation|docs|readme|spec|changelog/i.test(s.title))
 
       // Universal project rule: if relevant project files were modified and no documentation
@@ -2843,12 +2917,17 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       : ((input.status as PrimaryObjectiveStatus) || "resolved")
 
     // Si se invoca complete_primary con validationProof y dodCriteria en la misma llamada,
-    // o si el agente pasa dodCriteria con proofRef, asegurar que se apliquen al DoD antes de evaluar las compuertas de cierre.
-    let updatedDod = normalizeDoDInput(input.dodCriteria, current.dod) ?? current.dod
+    // o con dodProofs / proofs map ({ D1: "..." }), asegurar que se apliquen al DoD antes de evaluar las compuertas de cierre.
+    let incomingCompleteCriteria = input.dodCriteria
+    if (!incomingCompleteCriteria && (input.dodProofs || input.proofs) && typeof (input.dodProofs || input.proofs) === "object") {
+      const proofsMap = input.dodProofs || input.proofs
+      incomingCompleteCriteria = Object.entries(proofsMap).map(([id, proof]) => ({ id, proofRef: String(proof) }))
+    }
+    let updatedDod = normalizeDoDInput(incomingCompleteCriteria, current.dod, current.secondaries) ?? current.dod
     if (isComplete && Array.isArray(updatedDod)) {
       // Si el agente proporciona dodCriteria explícito en complete_primary y además validationProof para el PO,
       // asociar el validationProof a los criterios del DoD que no tengan prueba.
-      if (Array.isArray(input.dodCriteria) && input.dodCriteria.length > 0 && typeof input.validationProof === "string" && input.validationProof.trim()) {
+      if (Array.isArray(incomingCompleteCriteria) && incomingCompleteCriteria.length > 0 && typeof input.validationProof === "string" && input.validationProof.trim()) {
         for (const crit of updatedDod) {
           if (!crit.proofRef || crit.proofRef.trim().length === 0) {
             crit.proofRef = input.validationProof.trim()
@@ -2925,6 +3004,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
+    const isDraftPlan = (input.draft === true || input.allowDraft === true || input.refinePlan === true) && po?.status === "presented_awaiting_confirmation"
     const addedIds: string[] = []
     for (const item of items) {
       const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
@@ -2934,6 +3014,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         affectedResources: normalizeAffectedResources(item?.affectedResources),
         preconditions: normalizePreconditions(item?.preconditions),
         delegation: item?.delegation ?? input.delegation,
+        retainStatus: isDraftPlan,
       })
       addedIds.push(so.id)
       if (item.status && item.status !== "pending") {
@@ -3345,17 +3426,28 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
   }
 
-  if (rawAction === "update_dod" || rawAction === "set_dod") {
+  if (rawAction === "update_dod" || rawAction === "set_dod" || rawAction === "proof_dod") {
     const freshPo = sessionObjectives.get(sessionID)
-    const unexpectedKeyWarnings = checkUnexpectedDoDKeys(input.dodCriteria)
-    const criteria = normalizeDoDInput(input.dodCriteria, freshPo?.dod, freshPo?.secondaries)
+
+    // Ergonomic shortcut: if called with atomic id + proofRef, or proofs map { D1: "...", D2: "..." }
+    let incomingCriteria = input.dodCriteria
+    if (!incomingCriteria && input.id && (input.proofRef || input.statement || input.verifiableBy)) {
+      incomingCriteria = [{ id: input.id, statement: input.statement, verifiableBy: input.verifiableBy, proofRef: input.proofRef, satisfiedBy: input.satisfiedBy }]
+    } else if (!incomingCriteria && input.proofs && typeof input.proofs === "object") {
+      incomingCriteria = Object.entries(input.proofs).map(([id, proof]) => ({ id, proofRef: String(proof) }))
+    } else if (!incomingCriteria && input.dodProofs && typeof input.dodProofs === "object") {
+      incomingCriteria = Object.entries(input.dodProofs).map(([id, proof]) => ({ id, proofRef: String(proof) }))
+    }
+
+    const unexpectedKeyWarnings = checkUnexpectedDoDKeys(incomingCriteria)
+    const criteria = normalizeDoDInput(incomingCriteria, freshPo?.dod, freshPo?.secondaries)
     if (!criteria) {
       const guidance =
-        "Required format for 'dodCriteria': an array of objects matching { id?: string, statement: string, verifiableBy?: string, proofRef?: string, satisfiedBy?: string[] }. The exact key for proof is strictly 'proofRef' (do not use other property names)."
+        "Required format for 'dodCriteria': an array of objects matching { id?: string, statement: string, verifiableBy?: string, proofRef?: string, satisfiedBy?: string[] }, or shortcut with 'id' and 'proofRef', or 'proofs: { D1: \"...\" }'. The exact key for proof is strictly 'proofRef' (do not use other property names)."
       const errorMsg =
         unexpectedKeyWarnings.length > 0
           ? `'dodCriteria' failed to parse. ${unexpectedKeyWarnings.join(" ")} ${guidance}`
-          : `'dodCriteria' (array of { statement, verifiableBy?, proofRef?, satisfiedBy? }) is required for action 'update_dod'. ${guidance}`
+          : `'dodCriteria' (array of { statement, verifiableBy?, proofRef?, satisfiedBy? } or { id, proofRef }) is required for action 'update_dod'. ${guidance}`
       return {
         output: { success: false, message: errorMsg, tree: "" },
         content: errorMsg,

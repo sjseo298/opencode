@@ -432,12 +432,17 @@ export function evaluateDoD(doc: DoDStateLike): DoDEvaluation {
           criterion.proofRef = proof
         }
       }
+      const verifiable = criterion.verifiableBy?.trim() ?? ""
+      const hasProof = proof.length > 0
+      const isSatisfied = hasProof && (verifiable.length > 0 || hasProof)
       return {
         criterion,
-        satisfied: proof.length > 0 && (criterion.verifiableBy?.trim() ?? "").length > 0,
-        reason: proof.length > 0
-          ? "proofRef attached"
-          : "missing proofRef (attach via action 'update_dod' with dodCriteria: [{ id: '" + criterion.id + "', proofRef: '...' }])",
+        satisfied: isSatisfied,
+        reason: !hasProof
+          ? "missing proofRef (attach via action 'update_dod' with dodCriteria: [{ id: '" + criterion.id + "', proofRef: '...' }])"
+          : !isSatisfied
+            ? "missing verifiableBy criteria"
+            : "proofRef attached",
       }
     }),
   }
