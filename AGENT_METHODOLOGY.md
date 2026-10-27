@@ -502,8 +502,8 @@ Invariants:
 - **Sibling auto-cancellation**: marking an option `SUCCESSFUL` automatically transitions all remaining non-`DISCARDED` siblings to `CANCELLED`.
 - **No silent discard**: `DISCARDED` requires an explicit `reason`.
 
-#### Action 9: `update_dod` (Decomposed Definition of Done, F-3)
-Decomposes acceptance criteria into verifiable rows:
+#### Action 9: `update_dod` / `proof_dod` (Decomposed Definition of Done, F-3)
+Decomposes acceptance criteria into verifiable rows or directly attaches proof to specific criteria:
 ```json
 {
   "action": "update_dod",
@@ -513,12 +513,32 @@ Decomposes acceptance criteria into verifiable rows:
   ]
 }
 ```
+Or direct ergonomic proof assignment via `proof_dod` (or shortcut in `update_dod`):
+```json
+{
+  "action": "proof_dod",
+  "id": "D1",
+  "proofRef": "bun test -> 51 passed, exit code 0"
+}
+```
+Or multi-proof map:
+```json
+{
+  "action": "update_dod",
+  "dodProofs": {
+    "D1": "bun test -> 51 passed, exit code 0",
+    "D2": "bun run check -> 0 errors"
+  }
+}
+```
 Gate & Schema Rules:
 - The exact property name for proof is strictly `proofRef` (do not invent aliases like `validationProof` or `evidence`).
+- **Immediate Auto-Inheritance via `satisfiedBy`**: Whenever a Secondary Objective is marked `resolved` with `validationProof`, any DoD criterion listing that SO in `satisfiedBy` automatically inherits the proof (`SO-N: <proof>`), completely eliminating the need to duplicate proof manually in `update_dod`.
+- **Atomic Closure Proofs (`dodProofs`)**: `complete_primary` accepts `dodProofs: { "D1": "...", "D2": "..." }` to supply missing criterion proofs and complete in a single turn.
 - If an agent sends unrecognized keys, `update_dod` issues an instructive warning clarifying the schema.
 - Defensive parsing extracts `proofRef` and `satisfiedBy` if inadvertently collapsed into `verifiableBy` or `statement`.
-- On `complete_primary`, criteria referencing resolved SOs via `satisfiedBy` automatically inherit proof verification without requiring duplicate input.
-- `complete_primary` will reject closure until **every** declared criterion has a `proofRef` and `verifiableBy`.
+- Visual DoD rendering: `renderObjectiveTree` explicitly projects each criterion with `**[D1]** [PROVEN]` or `**[D2]** [MISSING PROOF]`, ensuring the model never works blind.
+- `complete_primary` will reject closure until **every** declared criterion has a `proofRef`.
 
 #### Action 10: `add_fingerprint` (Blocker Memory, F-7)
 Records canonical blocker signatures so future sessions can look them up instead of re-analyzing:
@@ -533,7 +553,8 @@ Records canonical blocker signatures so future sessions can look them up instead
 Re-opening an SO whose title matches a known resolved/discarded fingerprint requires an explicit `justification`.
 
 #### Action 11: `present_plan` / `resume_plan` / `checkpoint` (Plan Pause, F-6)
-- `present_plan`: Freezes the objective tree (`status: presented_awaiting_confirmation`). All mutating actions are rejected with a clear message until the user confirms.
+- `present_plan`: Freezes the objective tree (`status: presented_awaiting_confirmation`). All execution mutations are blocked until the user confirms.
+- **Draft Plan Refinement**: While in `presented_awaiting_confirmation`, the agent may refine the initial draft (adding missing secondary subtasks, updating pending descriptions, or refining DoD criteria) by passing `draft: true` (or `refinePlan: true`), allowing draft corrections without prematurely unfreezing execution.
 - `resume_plan`: Unfreezes the plan with the user's explicit instructions (`note`).
 - `checkpoint`: Derives a phase progress report strictly from the tree, pauses execution, and requests confirmation before advancing to the next phase.
 
