@@ -166,7 +166,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "## Protocolo de Objetivos (Objectives Protocol)",
   "You are equipped with the **Protocolo de Objetivos** (also referred to as 'Objectives Protocol' or 'Hierarchical Objectives Protocol').",
   "MANDATORY TRIGGER: You MUST strictly follow this exact framework whenever the user instructs you to follow, execute, or apply the 'protocolo de objetivos', 'protocolo de objetivos jerárquicos', 'objectives protocol' (or 'protocolo de investigacion'), OR WHENEVER any task requires planning (multi-step execution, non-trivial analysis, debugging, refactoring, or implementation). The requirement of planning is, in and of itself, sufficient to mandate the Protocolo de Objetivos.",
-  "ORDER OF OPERATIONS (PLAN FIRST, EXECUTE SECOND): You MUST construct the objective plan FIRST via `objective_manage` before executing code modifications, running mutating tasks, or attempting fixes. Never execute first and document objectives after the fact.",
+  "ORDER OF OPERATIONS (PLAN FIRST, EXECUTE SECOND): You MUST construct the objective plan FIRST via `objective_manage` before executing code modifications, running mutating tasks, or attempting fixes. Never execute first and document objectives after the fact. READ-ONLY RECONNAISSANCE PERMITTED (RECON PHASE): You ARE permitted and encouraged to perform read-only reconnaissance (reading files, directory listings, searching code, checking configuration, or running a read-only scout subagent) BEFORE calling `set_primary`. Gathering structural facts to establish a grounded, accurate plan does NOT violate planning-first; only mutating operations (edits, writes, mutating commands, builds) are prohibited prior to plan creation and approval.",
   "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
   "2. Decompose the task into initial **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
   "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]`. MANDATORY PLAN PRESENTATION & APPROVAL: You MUST present the initial plan to the user for review and refinement before executing mutating tasks (either by passing `presentPlan: true` in `set_primary` or immediately calling `action: 'present_plan'`). The tree FREEZES in status `presented_awaiting_confirmation`. Present the plan clearly in your response, pause your turn, and wait for confirmation or adjustments (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves or adjusts, call `action: 'resume_plan'` with their instructions to begin execution.",
@@ -2681,6 +2681,22 @@ export const ObjectiveInputSchema = Schema.Struct({
       }),
     ),
   ),
+  draft: Schema.optional(
+    Schema.NullOr(Schema.Boolean).pipe(
+      Schema.annotate({
+        description:
+          "Pass true during presented_awaiting_confirmation to refine draft secondaries (add_secondary/update_secondary in pending) or update DoD without triggering a frozen rejection.",
+      }),
+    ),
+  ),
+  refinePlan: Schema.optional(
+    Schema.NullOr(Schema.Boolean).pipe(
+      Schema.annotate({
+        description:
+          "Alias for 'draft'. Pass true during presented_awaiting_confirmation to refine plan drafts before user confirmation.",
+      }),
+    ),
+  ),
 })
 
 export const ObjectiveOutputSchema = Schema.Struct({
@@ -2720,6 +2736,8 @@ function treeOf(sessionID: string): string {
 
 const PAUSED_MUTATING_ACTIONS = new Set([
   "update_primary",
+  "add_secondary",
+  "add_secondaries",
   "add_tertiary",
   "update_tertiary",
   "add_finding",
@@ -2727,6 +2745,8 @@ const PAUSED_MUTATING_ACTIONS = new Set([
   "add_option",
   "update_option",
   "add_fingerprint",
+  "update_dod",
+  "proof_dod",
   "import_tree",
   "complete_primary",
   "resolve_primary",
@@ -2734,7 +2754,7 @@ const PAUSED_MUTATING_ACTIONS = new Set([
 ])
 
 const FROZEN_MESSAGE =
-  "Objective tree is FROZEN (status: presented_awaiting_confirmation). Present the plan to the user and call action 'resume_plan' with their explicit instruction before mutating the tree."
+  "Objective tree is FROZEN (status: presented_awaiting_confirmation). Present the plan to the user and call action 'resume_plan' with their explicit instruction before mutating the tree. If you need to refine the draft plan before confirmation, pass 'draft: true' (or 'refinePlan: true')."
 
 function checkFingerprintCollision(po: PrimaryObjective, title: string, justification?: string): string | undefined {
   const key = normalizeFingerprintKey(title)
@@ -2753,13 +2773,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 
   // F-6: the plan-pause state machine freezes execution mutations until the user confirms.
   // Planning draft mutations (adding/updating secondary definitions in pending status, or refining DoD)
-  // are allowed during presented_awaiting_confirmation only if allowDraftPlanning is true, or if explicitly requested.
-  // By default, strict freeze blocks PAUSED_MUTATING_ACTIONS and blocks execution advancement.
+  // are allowed during presented_awaiting_confirmation if 'draft: true' or 'refinePlan: true' is passed.
   if (po?.status === "presented_awaiting_confirmation") {
-    const isDraftPlanAction = rawAction === "add_secondary" || rawAction === "add_secondaries" || rawAction === "update_dod"
+    const isDraftPlanAction = rawAction === "add_secondary" || rawAction === "add_secondaries" || rawAction === "update_dod" || rawAction === "proof_dod"
     const isDraftUpdateAction = rawAction === "update_secondary" || rawAction === "update_secondaries"
 
-    // If draft planning is explicitly requested or if it's draft planning mode
     const allowDraft = input.draft === true || input.allowDraft === true || input.refinePlan === true
 
     if (allowDraft && (isDraftPlanAction || isDraftUpdateAction)) {
@@ -2769,12 +2787,12 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         const hasNonPending = (targetStatus && targetStatus !== "pending") || secondariesList.some((s: any) => s.status && String(s.status).toLowerCase() !== "pending")
         if (hasNonPending) {
           return {
-            output: { success: false, message: "Cannot advance subtasks to non-pending status while plan is awaiting confirmation.", tree: treeOf(sessionID) },
-            content: "Cannot advance subtasks to non-pending status while plan is awaiting confirmation.",
+            output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
+            content: FROZEN_MESSAGE,
           }
         }
       }
-      // Allowed to refine draft!
+      // Permitted to refine draft!
     } else {
       if (PAUSED_MUTATING_ACTIONS.has(rawAction) || isDraftPlanAction || isDraftUpdateAction) {
         return {
@@ -3004,7 +3022,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const isDraftPlan = (input.draft === true || input.allowDraft === true || input.refinePlan === true) && po?.status === "presented_awaiting_confirmation"
+    const isDraftPlan = po?.status === "presented_awaiting_confirmation"
     const addedIds: string[] = []
     for (const item of items) {
       const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
