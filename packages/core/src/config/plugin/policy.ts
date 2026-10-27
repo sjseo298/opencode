@@ -22,8 +22,8 @@ export const Plugin = define({
       Effect.forkScoped({ startImmediately: true }),
     )
     // Documents reverse so earlier-loaded policy wins: managed policy, then a Console config document, then user
-    // and project files. Statements from a Console serving the legacy format follow every document and have the
-    // final say.
+    // and project files. ManagedPolicy statements follow every document and have the final say; the Console no longer
+    // sets any, since it serves its policy as a config document.
     const policies = () => ManagedPolicy.statements(loaded.entries, managed.current())
     const runSync = Effect.runSyncWith(yield* Effect.context())
     yield* ctx.provider.transform((providers) => {
