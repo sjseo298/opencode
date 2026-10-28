@@ -1,16 +1,17 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test, describe, beforeEach } from "bun:test"
+import { expect, test, describe } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { Context } from "@opencode/plugin/tui/context"
 import {
   SidebarObjectives,
+  normalizePrimaryObjectiveView,
   extractObjectivesFromMessages,
-  getSharedObjectivesPath,
 } from "../../src/feature-plugins/sidebar/objectives"
 
 function makeMockContext(options?: {
-  messages?: any[]
+  session?: any
+  objectives?: any
   open?: boolean
 }) {
   const color = RGBA.fromInts(200, 200, 200)
@@ -33,26 +34,28 @@ function makeMockContext(options?: {
     },
     data: {
       session: {
-        get: () => ({ location: { directory: "/workspace" } }),
+        get: (sessionID?: string) => {
+          if (options?.session) return options.session
+          if (options?.objectives) {
+            return {
+              id: sessionID,
+              location: { directory: "/workspace" },
+              metadata: { objectives: options.objectives },
+            }
+          }
+          return { id: sessionID, location: { directory: "/workspace" }, metadata: {} }
+        },
         message: {
-          list: () => options?.messages ?? [],
+          list: () => [],
         },
       },
     },
   } as unknown as Context
 }
 
-describe("SidebarObjectives TUI component", () => {
-  beforeEach(() => {
-    if (globalThis.__OPENCODE_OBJECTIVES__) {
-      globalThis.__OPENCODE_OBJECTIVES__.clear()
-    }
-  })
-
-  test("extracts objectives from global in-memory state", () => {
-    const sid = "test-session-mem"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
-    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+describe("SidebarObjectives TUI component (Canonical session.metadata architecture)", () => {
+  test("normalizePrimaryObjectiveView normalizes valid tree from session.metadata", () => {
+    const raw = {
       title: "Migrate Auth Layer",
       status: "exploring",
       definitionOfDone: "Zero auth regressions",
@@ -72,9 +75,9 @@ describe("SidebarObjectives TUI component", () => {
           blocker: "CORS domain mismatch in dev environment",
         },
       ],
-    })
+    }
 
-    const po = extractObjectivesFromMessages(sid, [])
+    const po = normalizePrimaryObjectiveView(raw)
     expect(po).toBeDefined()
     expect(po?.title).toBe("Migrate Auth Layer")
     expect(po?.secondaries.length).toBe(2)
@@ -84,77 +87,49 @@ describe("SidebarObjectives TUI component", () => {
     expect(po?.secondaries[1].blocker).toContain("CORS domain mismatch")
   })
 
-  test("reconstructs objectives from session message tool calls", () => {
-    const sid = "test-session-msg"
-    const messages = [
-      {
-        id: "m1",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: {
-              action: "set_primary",
-              title: "Backend API Optimization",
-              definitionOfDone: "p95 latency < 50ms",
-            },
-          },
-        ],
-      },
-      {
-        id: "m2",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: {
-              action: "add_secondary",
-              title: "Index query keys",
-              rationale: "Accelerate user lookup",
-            },
-          },
-        ],
-      },
-      {
-        id: "m3",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: {
-              action: "update_secondary",
-              id: "SO-1",
-              status: "resolved",
-              validationProof: "Explain analyze shows index scan used",
-            },
-          },
-        ],
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.title).toBe("Backend API Optimization")
-    expect(po?.definitionOfDone).toBe("p95 latency < 50ms")
-    expect(po?.secondaries.length).toBe(1)
-    expect(po?.secondaries[0].id).toBe("SO-1")
-    expect(po?.secondaries[0].status).toBe("resolved")
-    expect(po?.secondaries[0].validationProof).toContain("Explain analyze shows index scan used")
+  test("auto-repairs status if PO says resolved but SOs or TOs are open", () => {
+    const corruptTree = {
+      title: "Broken PO Status",
+      status: "resolved",
+      secondaries: [
+        { id: "SO-1", title: "Still in progress", status: "exploring", rationale: "WIP" },
+      ],
+    }
+    const repaired = normalizePrimaryObjectiveView(corruptTree)
+    expect(repaired?.status).toBe("exploring")
   })
 
-  test("renders nothing when no objectives exist", async () => {
-    const ctx = makeMockContext({ messages: [] })
+  test("auto-closes PO if all secondaries and tertiaries are closed", () => {
+    const closedChildrenTree = {
+      title: "All Tasks Finished",
+      status: "exploring",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "Task 1",
+          status: "resolved",
+          rationale: "Done",
+          children: [{ id: "SO-1-T1", title: "Subtask", status: "resolved", rationale: "Done" }],
+        },
+        { id: "SO-2", title: "Task 2", status: "discarded", rationale: "Not needed" },
+      ],
+    }
+    const result = normalizePrimaryObjectiveView(closedChildrenTree)
+    expect(result?.status).toBe("resolved")
+  })
+
+  test("renders nothing when no objectives exist in session.metadata", async () => {
+    const ctx = makeMockContext()
     const app = await testRender(() => <SidebarObjectives context={ctx} sessionID="empty-ses" />, {
-      width: 42,
-      height: 12,
+      width: 60,
+      height: 20,
     })
 
     try {
       await app.renderOnce()
-      expect(app.captureCharFrame()).not.toContain("Objectives")
+      const frame = app.captureCharFrame()
+      expect(frame).not.toContain("Objectives")
+      expect(frame).not.toContain("Definition of Done")
     } finally {
       app.renderer.destroy()
     }
@@ -162,147 +137,84 @@ describe("SidebarObjectives TUI component", () => {
 
   test("renders Primary Objective and Secondary Objectives with badges and details", async () => {
     const sid = "render-test"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
-    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+    const objectives = {
       title: "Core Platform Refactor",
       status: "exploring",
-      definitionOfDone: "Pass all regression suites",
+      definitionOfDone: "Zero test regressions across all packages",
       secondaries: [
         {
           id: "SO-1",
-          title: "Refactor router handlers",
+          title: "Migrate database schema",
           status: "resolved",
-          rationale: "Clean architecture separation",
-          validationProof: "bun test router.test.ts passed",
+          rationale: "Upgrade SQLite tables",
+          validationProof: "All drizzle migrations passed",
         },
         {
           id: "SO-2",
-          title: "Fix broken middleware",
+          title: "Update API routes",
+          status: "exploring",
+          rationale: "Expose v2 endpoints",
+        },
+        {
+          id: "SO-3",
+          title: "Deploy staging environment",
           status: "blocked",
-          rationale: "Unblock auth pipeline",
-          blocker: "Missing upstream secret",
+          rationale: "Verify deployment pipeline",
+          blocker: "Missing staging credentials",
+        },
+        {
+          id: "SO-4",
+          title: "Deprecated legacy endpoint",
+          status: "discarded",
+          rationale: "No longer needed",
         },
       ],
-    })
+    }
 
-    const ctx = makeMockContext({ messages: [] })
+    const ctx = makeMockContext({ objectives })
     const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
-      width: 44,
-      height: 18,
+      width: 70,
+      height: 25,
     })
 
     try {
       await app.renderOnce()
       const frame = app.captureCharFrame()
-      expect(frame).toContain("Objectives")
       expect(frame).toContain("Core Platform Refactor")
-      expect(frame).toContain("[PO]")
-      expect(frame).toContain("SO-1:")
-      expect(frame).toContain("Refactor router handlers")
-      expect(frame).toContain("[✓]")
-      expect(frame).toContain("SO-2:")
-      expect(frame).toContain("[!]")
-      expect(frame).toContain("Blocker: Missing upstream secret")
-      expect(frame).toContain("Proof: bun test router.test.ts passed")
+      expect(frame).toContain("DoD: Zero test regressions across all packages")
+      expect(frame).toContain("(1/4)")
+      expect(frame).toContain("[✓] SO-1: Migrate database schema")
+      expect(frame).toContain("↳ Upgrade SQLite tables")
+      expect(frame).toContain("Proof: All drizzle migrations passed")
+      expect(frame).toContain("[•] SO-2: Update API routes")
+      expect(frame).toContain("[!] SO-3: Deploy staging environment")
+      expect(frame).toContain("Blocker: Missing staging credentials")
+      expect(frame).toContain("[✕] SO-4: Deprecated legacy endpoint")
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("extracts objectives from part.state.input with initial secondaries array", () => {
-    const sid = "test-session-state-input"
-    const messages = [
-      {
-        id: "m1",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            id: "call_1",
-            name: "objective_manage",
-            state: {
-              status: "completed",
-              input: {
-                action: "set_primary",
-                title: "Full App Redesign",
-                definitionOfDone: "Zero CSS regressions and high lighthouse score",
-                secondaries: [
-                  {
-                    title: "Audit color tokens",
-                    rationale: "Required for theme alignment",
-                  },
-                  {
-                    title: "Implement responsive grid",
-                    rationale: "Support mobile devices",
-                    status: "exploring",
-                  },
-                ],
-              },
-            },
-          },
-        ],
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.title).toBe("Full App Redesign")
-    expect(po?.definitionOfDone).toBe("Zero CSS regressions and high lighthouse score")
-    expect(po?.secondaries.length).toBe(2)
-    expect(po?.secondaries[0].id).toBe("SO-1")
-    expect(po?.secondaries[0].title).toBe("Audit color tokens")
-    expect(po?.secondaries[0].status).toBe("pending")
-    expect(po?.secondaries[1].id).toBe("SO-2")
-    expect(po?.secondaries[1].status).toBe("exploring")
-  })
-
-  test("extracts objectives from compaction checkpoint summary as fallback", () => {
-    const sid = "test-session-compaction-fallback"
-    const messages = [
-      {
-        id: "c1",
-        type: "compaction",
-        summary: [
-          "## Protocolo de Objetivos - Resumen de Objetivos (Insumo de Compactación)",
-          "[PO] Core Engine Modernization [EXPLORING]",
-          "Definition of Done: Zero compilation warnings and all unit tests pass",
-          "",
-          "### Completed Objectives",
-          "- [SO-1] [RESOLVED] Update build script (Validation Proof: bash build.sh exit 0)",
-          "",
-          "### Active / Exploring Objectives",
-          "- [SO-2] [EXPLORING] Refactor session runner (Rationale: Improve concurrency)",
-        ].join("\n"),
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.title).toBe("Core Engine Modernization")
-    expect(po?.definitionOfDone).toBe("Zero compilation warnings and all unit tests pass")
-    expect(po?.secondaries.length).toBe(2)
-    expect(po?.secondaries[0].id).toBe("SO-1")
-    expect(po?.secondaries[0].status).toBe("resolved")
-    expect(po?.secondaries[0].validationProof).toBe("bash build.sh exit 0")
-    expect(po?.secondaries[1].id).toBe("SO-2")
-    expect(po?.secondaries[1].status).toBe("exploring")
-    expect(po?.secondaries[1].rationale).toBe("Improve concurrency")
-  })
-
   test("renders resolved badge [PO ✓] when Primary Objective is resolved", async () => {
     const sid = "render-resolved-po"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
-    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+    const objectives = {
       title: "Completed Project",
       status: "resolved",
-      definitionOfDone: "All done",
-      secondaries: [],
-    })
+      definitionOfDone: "Finished and verified",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "All done",
+          status: "resolved",
+          rationale: "Complete",
+        },
+      ],
+    }
 
-    const ctx = makeMockContext({ messages: [] })
+    const ctx = makeMockContext({ objectives })
     const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
-      width: 44,
-      height: 10,
+      width: 60,
+      height: 15,
     })
 
     try {
@@ -317,280 +229,73 @@ describe("SidebarObjectives TUI component", () => {
 
   test("renders tertiary sub-objectives nested under their parent secondary", async () => {
     const sid = "render-nested-to"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
-    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+    const objectives = {
       title: "Platform Overhaul",
       status: "exploring",
       definitionOfDone: "Zero regressions",
       secondaries: [
         {
           id: "SO-1",
-          title: "Oversized task",
+          title: "Refactor Session Core",
           status: "exploring",
-          rationale: "Needs decomposition",
+          rationale: "Break into sub-steps",
           children: [
             {
               id: "SO-1-T1",
-              title: "Patch step A",
+              title: "Migrate state machine",
               status: "resolved",
-              rationale: "Isolate first step",
-              validationProof: "exit 0 on stepA test",
+              rationale: "Step 1 of core refactor",
+              validationProof: "State machine tests pass",
             },
             {
               id: "SO-1-T2",
-              title: "Patch step B",
-              status: "pending",
-              rationale: "Isolate second step",
+              title: "Update inbox queue",
+              status: "exploring",
+              rationale: "Step 2 of core refactor",
             },
           ],
         },
       ],
-    })
+    }
 
-    const ctx = makeMockContext({ messages: [] })
+    const ctx = makeMockContext({ objectives })
     const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
-      width: 46,
-      height: 30,
+      width: 70,
+      height: 20,
     })
 
     try {
       await app.renderOnce()
       const frame = app.captureCharFrame()
-      expect(frame).toContain("Oversized task")
-      expect(frame).toContain("SO-1-T1:")
-      expect(frame).toContain("Patch step A")
-      expect(frame).toContain("[✓]")
-      expect(frame).toContain("Proof: exit 0 on stepA test")
-      expect(frame).toContain("SO-1-T2:")
-      expect(frame).toContain("Isolate second step")
+      expect(frame).toContain("[•] SO-1: Refactor Session Core")
+      expect(frame).toContain("[✓] SO-1-T1: Migrate state machine")
+      expect(frame).toContain("[•] SO-1-T2: Update inbox queue")
+      expect(frame).toContain("Proof: State machine tests pass")
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("reconstructs tertiary objectives from add_tertiary/update_tertiary tool calls", () => {
-    const sid = "test-session-to-replay"
-    const messages = [
-      {
-        id: "m1",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: { action: "set_primary", title: "Nested Task", definitionOfDone: "All levels closed" },
-          },
-        ],
-      },
-      {
-        id: "m2",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: { action: "add_secondary", title: "Oversized task", rationale: "Needs decomposition" },
-          },
-        ],
-      },
-      {
-        id: "m3",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: { action: "add_tertiary", id: "SO-1", title: "Patch step A", rationale: "Isolate first step" },
-          },
-        ],
-      },
-      {
-        id: "m4",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            tool: "objective_manage",
-            input: { action: "update_tertiary", id: "SO-1-T1", status: "resolved", validationProof: "step A exit 0" },
-          },
-        ],
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.secondaries.length).toBe(1)
-    expect(po?.secondaries[0].children?.length).toBe(1)
-    expect(po?.secondaries[0].children?.[0]?.id).toBe("SO-1-T1")
-    expect(po?.secondaries[0].children?.[0]?.status).toBe("resolved")
-    expect(po?.secondaries[0].children?.[0]?.validationProof).toContain("step A exit 0")
-  })
-
-  test("attaches tertiary lines to their parent when reconstructing from compaction checkpoint", () => {
-    const sid = "test-session-to-checkpoint"
-    const messages = [
-      {
-        id: "c1",
-        type: "compaction",
-        summary: [
-          "[PO] Checkpoint Nest Task [EXPLORING]",
-          "Definition of Done: All levels recovered",
-          "",
-          "### Active / Exploring Objectives",
-          "- [SO-2] [EXPLORING] Oversized work (Rationale: Needs decomposition)",
-          "  - [SO-2-T1] [PENDING] Patch step A",
-        ].join("\n"),
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.secondaries.length).toBe(1)
-    expect(po?.secondaries[0].id).toBe("SO-2")
-    expect(po?.secondaries[0].children?.length).toBe(1)
-    expect(po?.secondaries[0].children?.[0]?.id).toBe("SO-2-T1")
-    expect(po?.secondaries[0].children?.[0]?.status).toBe("pending")
-  })
-
-  test("hydrates findings, options, and dod fallback from memory and messages", () => {
-    const sid = "test-session-epistemic"
-    const memoryTree = {
-      title: "Epistemic Task",
-      status: "presented_awaiting_confirmation",
-      definitionOfDone: "Verify DoD",
-      dod: [{ id: "D1", statement: "Criteria 1", proofRef: "proof" }],
-      findings: [
-        { id: "F-001", title: "Cookie bug", lifecycle: "NEW", result: "observed", evidence: { source: "src/auth.ts" } },
-      ],
-      options: [
-        { id: "OPT-1", statement: "Strategy A", status: "DISCARDED", result: "failed", reason: "slow" },
-        { id: "OPT-2", statement: "Strategy B", status: "SUCCESSFUL", result: "ok" },
-      ],
-      secondaries: [],
-    }
-    ;(globalThis as any).__OPENCODE_OBJECTIVES__ = new Map([[sid, memoryTree]])
-
-    const po = extractObjectivesFromMessages(sid, [])
-    expect(po).toBeDefined()
-    expect(po?.status).toBe("presented_awaiting_confirmation")
-    expect(po?.dodCriteria?.length).toBe(1)
-    expect(po?.dodCriteria?.[0]?.statement).toBe("Criteria 1")
-    expect(po?.findings?.length).toBe(1)
-    expect(po?.options?.length).toBe(2)
-    // DISCARDED sibling was preserved when OPT-2 became SUCCESSFUL
-    expect(po?.options?.find((o) => o.id === "OPT-1")?.status).toBe("DISCARDED")
-  })
-
-  test("parses compaction checkpoint with Markdown summary format (no leading dash, bolded SOs)", () => {
-    const sid = "test-session-checkpoint-markdown"
-    const messages = [
-      {
-        type: "user",
-        content: [
-          "<conversation-checkpoint>",
-          "<summary>",
-          "## Objective",
-          "Improve OpenCode's Protocolo de Objetivos",
-          "",
-          "## Work State",
-          "### Completed",
-          "- **SO-1 [RESOLVED]** Recon current objective_manage implementation",
-          "- **SO-2 [RESOLVED]** Design data model and API surface",
-          "### Active",
-          "- **SO-3 [EXPLORING]** Implement cross-session persistence",
-          "</summary>",
-          "</conversation-checkpoint>",
-        ].join("\n"),
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.title).toBe("Improve OpenCode's Protocolo de Objetivos")
-    expect(po?.secondaries.length).toBe(3)
-    expect(po?.secondaries[0].id).toBe("SO-1")
-    expect(po?.secondaries[0].status).toBe("resolved")
-    expect(po?.secondaries[1].id).toBe("SO-2")
-    expect(po?.secondaries[1].status).toBe("resolved")
-    expect(po?.secondaries[2].id).toBe("SO-3")
-    expect(po?.secondaries[2].status).toBe("exploring")
-  })
-
-  test("auto-repairs memory status if PO says resolved but SOs are open", () => {
-    const sid = "test-corrupt-mem"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map([[
-      sid,
-      {
-        title: "Corrupt Task",
-        status: "resolved",
-        definitionOfDone: "DoD",
-        secondaries: [
-          { id: "SO-1", title: "Open subtask", status: "pending", rationale: "r" },
-        ],
-      },
-    ]])
-
-    const po = extractObjectivesFromMessages(sid, [])
-    expect(po).toBeDefined()
-    // Auto-repaired to exploring because SO-1 is pending
-    expect(po?.status).toBe("exploring")
-  })
-
-  test("message reconstruction complete_primary rejects resolved if an SO is still pending", () => {
-    const sid = "test-msg-complete-gate"
-    const messages = [
-      {
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            name: "objective_manage",
-            input: {
-              action: "set_primary",
-              title: "Task",
-              definitionOfDone: "DoD",
-              secondaries: [{ id: "SO-1", title: "Task 1", status: "pending", rationale: "r" }],
-            },
-          },
-          {
-            type: "tool",
-            name: "objective_manage",
-            input: {
-              action: "complete_primary",
-              validationProof: "premature attempt",
-            },
-          },
-        ],
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    // Cannot be resolved because SO-1 is pending
-    expect(po?.status).toBe("exploring")
-  })
-
   test("renders delegation indicator compactly beside SO, TO, and finding nomenclature", async () => {
     const sid = "delegation-sidebar-render"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
-    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+    const objectives = {
       title: "Distributed Pipeline",
       status: "exploring",
-      definitionOfDone: "High throughput",
+      definitionOfDone: "Completed with optimal context management",
       secondaries: [
         {
           id: "SO-1",
           title: "Build worker queue",
           status: "exploring",
-          rationale: "Queue tasks",
-          delegation: { mode: "subagent", justification: "Isolated worker setup" },
+          rationale: "Heavy task",
+          delegation: { mode: "subagent", justification: "Delegate worker to subagent" },
           children: [
             {
               id: "SO-1-T1",
               title: "Redis adapter",
-              status: "pending",
-              rationale: "Transport layer",
-              delegation: { mode: "main", justification: "Small config" },
+              status: "resolved",
+              rationale: "Connect cache",
+              delegation: { mode: "main", justification: "Quick connection setup" },
             },
           ],
         },
@@ -598,15 +303,16 @@ describe("SidebarObjectives TUI component", () => {
       findings: [
         {
           id: "F-001",
+          soRef: "SO-1",
           title: "Redis latency check",
           lifecycle: "NEW",
           result: "Latency is 0.5ms",
           delegation: { mode: "main", justification: "Quick ping command" },
         },
       ],
-    })
+    }
 
-    const ctx = makeMockContext({ messages: [] })
+    const ctx = makeMockContext({ objectives })
     const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
       width: 60,
       height: 25,
@@ -625,8 +331,7 @@ describe("SidebarObjectives TUI component", () => {
 
   test("renders blast radius scope and fingerprints in sidebar", async () => {
     const sid = "blast-radius-fingerprints-sidebar"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map()
-    globalThis.__OPENCODE_OBJECTIVES__.set(sid, {
+    const objectives = {
       title: "Cluster Migration",
       status: "exploring",
       definitionOfDone: "Zero downtime",
@@ -646,9 +351,9 @@ describe("SidebarObjectives TUI component", () => {
           fixRef: "max_connections=100",
         },
       ],
-    })
+    }
 
-    const ctx = makeMockContext({ messages: [] })
+    const ctx = makeMockContext({ objectives })
     const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
       width: 80,
       height: 25,
@@ -666,152 +371,29 @@ describe("SidebarObjectives TUI component", () => {
     }
   })
 
-  test("Causa 1: recovers po and synthesizes missing secondary when set_primary is paginated away", () => {
-    delete (globalThis as any).__OPENCODE_OBJECTIVES__
-    const sid = "paginated-session-recovery"
-    const messages = [
-      {
-        id: "msg-recent-update",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            name: "objective_manage",
-            state: {
-              status: "completed",
-              input: {
-                action: "update_secondary",
-                id: "SO-2",
-                title: "Refactor message store",
-                status: "exploring",
-                rationale: "Crucial for pagination resilience",
-              },
-            },
-          },
-        ],
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.title).toBe("Primary Objective")
-    expect(po?.status).toBe("exploring")
-    expect(po?.secondaries).toHaveLength(1)
-    expect(po?.secondaries[0].id).toBe("SO-2")
-    expect(po?.secondaries[0].title).toBe("Refactor message store")
-    expect(po?.secondaries[0].status).toBe("exploring")
-  })
-
-  test("Causa 2: loads objective tree from shared disk snapshot when globalThis is empty", () => {
-    delete (globalThis as any).__OPENCODE_OBJECTIVES__
-    const sid = "disk-store-shared-session"
-    const sharedPath = getSharedObjectivesPath(sid)
-    const fs = require("node:fs")
-    const path = require("node:path")
-    fs.mkdirSync(path.dirname(sharedPath), { recursive: true })
-    const diskTree = {
-      title: "Shared Disk Architecture",
+  test("displays active objective in header when collapsed (view.open=false)", async () => {
+    const sid = "collapsed-header-active-badge"
+    const objectives = {
+      title: "Large Task Session",
       status: "exploring",
-      definitionOfDone: "Cross-process verified",
+      definitionOfDone: "Verify feedback",
       secondaries: [
         {
           id: "SO-1",
-          title: "Bridge TUI and Daemon",
+          title: "Diagnose bug",
           status: "resolved",
-          rationale: "Decouple from globalThis",
-          validationProof: "File snapshot exists",
+          rationale: "Understand cause",
+        },
+        {
+          id: "SO-2",
+          title: "Implement resilience fix",
+          status: "exploring",
+          rationale: "Fix root cause",
         },
       ],
     }
-    fs.writeFileSync(sharedPath, JSON.stringify(diskTree), "utf-8")
 
-    try {
-      const po = extractObjectivesFromMessages(sid, [])
-      expect(po).toBeDefined()
-      expect(po?.title).toBe("Shared Disk Architecture")
-      expect(po?.secondaries[0].title).toBe("Bridge TUI and Daemon")
-      expect(po?.secondaries[0].status).toBe("resolved")
-    } finally {
-      try {
-        fs.unlinkSync(sharedPath)
-      } catch {}
-    }
-  })
-
-  test("Causa 3: processes compaction chronologically and applies subsequent updates on top", () => {
-    delete (globalThis as any).__OPENCODE_OBJECTIVES__
-    const sid = "compaction-chronological-session"
-    const compactionSummary = `
-## Objective
-- Complete backend migration
-Definition of Done: All endpoints pass tests
-
-- [SO-1] [RESOLVED] Database migration (Validation Proof: db migrate up)
-- **SO-2 [PENDING]** API endpoint rewrite
-`
-    const messages = [
-      {
-        id: "msg-compaction",
-        type: "compaction",
-        summary: compactionSummary,
-      },
-      {
-        id: "msg-after-compaction",
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            name: "objective_manage",
-            state: {
-              status: "completed",
-              input: {
-                action: "update_secondary",
-                id: "SO-2",
-                status: "exploring",
-              },
-            },
-          },
-        ],
-      },
-    ]
-
-    const po = extractObjectivesFromMessages(sid, messages)
-    expect(po).toBeDefined()
-    expect(po?.title).toBe("Complete backend migration")
-    expect(po?.secondaries).toHaveLength(2)
-    expect(po?.secondaries[0].id).toBe("SO-1")
-    expect(po?.secondaries[0].status).toBe("resolved")
-    expect(po?.secondaries[1].id).toBe("SO-2")
-    expect(po?.secondaries[1].status).toBe("exploring")
-  })
-
-  test("Causa 4: displays active objective in header when collapsed (view.open=false)", async () => {
-    const sid = "collapsed-header-active-badge"
-    globalThis.__OPENCODE_OBJECTIVES__ = new Map([[
-      sid,
-      {
-        title: "Large Task Session",
-        status: "exploring",
-        definitionOfDone: "Verify feedback",
-        secondaries: [
-          {
-            id: "SO-1",
-            title: "Diagnose bug",
-            status: "resolved",
-            rationale: "Understand cause",
-          },
-          {
-            id: "SO-2",
-            title: "Implement resilience fix",
-            status: "exploring",
-            rationale: "Fix root cause",
-          },
-        ],
-      },
-    ]])
-
-    const ctx = makeMockContext({ messages: [] })
-    // Seed collapsed view state
+    const ctx = makeMockContext({ objectives })
     const [, setView] = ctx.storage.store("view", { initial: { open: false } })
     await setView((d) => {
       d.open = false
@@ -833,5 +415,55 @@ Definition of Done: All endpoints pass tests
     } finally {
       app.renderer.destroy()
     }
+  })
+
+  test("renders tree reactively from canonical session.metadata.objectives directly", async () => {
+    const sid = "session-metadata-canonical-test"
+    const metadataTree = {
+      title: "Canonical Metadata Architecture",
+      status: "exploring",
+      definitionOfDone: "Zero failure reactivity",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "Persistent session state",
+          status: "exploring",
+          rationale: "Eliminate ephemeral state",
+        },
+      ],
+    }
+
+    const ctx = makeMockContext({
+      session: {
+        id: sid,
+        location: { directory: "/workspace" },
+        metadata: {
+          objectives: metadataTree,
+        },
+      },
+    })
+
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
+      width: 80,
+      height: 25,
+    })
+
+    try {
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("Canonical Metadata Architecture")
+      expect(frame).toContain("DoD: Zero failure reactivity")
+      expect(frame).toContain("[•] SO-1: Persistent session state")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("extractObjectivesFromMessages backward compatibility wrapper extracts metadata objectives", () => {
+    const sid = "compat-test"
+    const tree = { title: "Test", status: "exploring", secondaries: [] }
+    const po = extractObjectivesFromMessages(sid, [], tree)
+    expect(po?.title).toBe("Test")
+    expect(extractObjectivesFromMessages(sid, [])).toBeUndefined()
   })
 })

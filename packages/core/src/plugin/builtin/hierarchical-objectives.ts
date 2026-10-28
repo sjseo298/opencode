@@ -1,6 +1,3 @@
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
 import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 import { Schema } from "effect"
 import {
@@ -113,18 +110,9 @@ export interface PrimaryObjective {
   updatedAt: number
 }
 
-// In-memory objective state per session (attached to globalThis for TUI sidebar access)
-declare global {
-  var __OPENCODE_OBJECTIVES__: Map<string, PrimaryObjective> | undefined
-  var __OPENCODE_POST_COMPACTION_SESSIONS__: Set<string> | undefined
-}
-export const sessionObjectives: Map<string, PrimaryObjective> =
-  globalThis.__OPENCODE_OBJECTIVES__ ?? new Map<string, PrimaryObjective>()
-globalThis.__OPENCODE_OBJECTIVES__ = sessionObjectives
-
-export const postCompactionSessions: Set<string> =
-  globalThis.__OPENCODE_POST_COMPACTION_SESSIONS__ ?? new Set<string>()
-globalThis.__OPENCODE_POST_COMPACTION_SESSIONS__ = postCompactionSessions
+// In-memory objective state per session for process runtime
+export const sessionObjectives = new Map<string, PrimaryObjective>()
+export const postCompactionSessions = new Set<string>()
 
 // Inspection tracking for anti-loop protocol per session
 export const consecutiveReadCounts = new Map<string, number>()
@@ -143,11 +131,30 @@ export function getObjectivesStore(): ObjectivesStore | undefined {
   return activeStore
 }
 
-export function getSharedObjectivesPath(sessionID: string): string {
-  const custom = process.env.OPENCODE_OBJECTIVES_DIR
-  if (custom) return path.join(custom, `${sessionID}.json`)
-  const base = path.join(os.homedir(), ".local", "share", "opencode", "objectives")
-  return path.join(base, `${sessionID}.json`)
+let activePluginContext: any = undefined
+
+export function setActivePluginContext(ctx: any): void {
+  activePluginContext = ctx
+}
+
+export function getActivePluginContext(): any {
+  return activePluginContext
+}
+
+export async function syncSessionObjectivesMetadata(sessionID: string, po: PrimaryObjective): Promise<void> {
+  if (!activePluginContext?.session || !sessionID || sessionID === "default-session") return
+  try {
+    const existing = await activePluginContext.session.get({ sessionID }).catch(() => undefined)
+    const currentMetadata = existing?.metadata || {}
+    await activePluginContext.session.update({
+      sessionID,
+      metadata: {
+        ...currentMetadata,
+        objectives: po,
+        objectivesUpdatedAt: Date.now(),
+      },
+    }).catch(() => {})
+  } catch {}
 }
 
 function persistSessionObjectives(sessionID: string): void {
@@ -156,12 +163,7 @@ function persistSessionObjectives(sessionID: string): void {
   if (activeStore) {
     void activeStore.save(sessionID, po as unknown as Record<string, any>).catch(() => {})
   }
-  try {
-    const filePath = getSharedObjectivesPath(sessionID)
-    const dir = path.dirname(filePath)
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(filePath, JSON.stringify(po, null, 2), "utf-8")
-  } catch {}
+  void syncSessionObjectivesMetadata(sessionID, po).catch(() => {})
 }
 
 export const READONLY_TOOLS = new Set([
@@ -238,6 +240,20 @@ export async function hydrateSessionObjectives(
       }
       return po
     }
+  }
+  // Check session.metadata.objectives from durable session storage
+  if (activePluginContext?.session && sessionID && sessionID !== "default-session") {
+    try {
+      const sess = await activePluginContext.session.get({ sessionID }).catch(() => undefined)
+      if (sess?.metadata?.objectives) {
+        const po = sess.metadata.objectives as PrimaryObjective
+        if (po && po.title) {
+          repairDocumentInvariants(po as any)
+          sessionObjectives.set(sessionID, po)
+          return po
+        }
+      }
+    } catch {}
   }
   if (Array.isArray(messages)) {
     const po = reconstructObjectivesFromMessages(sessionID, messages)
@@ -3667,6 +3683,8 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugin.define({
   id: "hierarchical-objectives",
   async setup(ctx) {
+    setActivePluginContext(ctx)
+
     // 0. Wire the persistent store when the context exposes a JSON KV storage domain (F-1).
     const storage = (ctx as any).storage
     if (storage && typeof storage.get === "function" && typeof storage.set === "function" && typeof storage.remove === "function") {
@@ -3696,6 +3714,10 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             // F-1: hydrate from the persistent store before acting (in-memory first).
             await hydrateSessionObjectives(sessionID)
             const result = await executeObjectiveAction(input, sessionID)
+            const po = sessionObjectives.get(sessionID)
+            if (po) {
+              await syncSessionObjectivesMetadata(sessionID, po)
+            }
             return withWarnings(sessionID, result)
           },
         })

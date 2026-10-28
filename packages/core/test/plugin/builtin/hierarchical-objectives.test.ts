@@ -2576,17 +2576,45 @@ describe("hierarchical-objectives plugin", () => {
       expect(listRes.content).toContain("Blast Radius Alert")
       expect(listRes.content).toContain("packages/server/src/auth.ts")
     })
+
+    test("tool execution automatically synchronizes objective tree into session.metadata.objectives", async () => {
+      const { getRegisteredTool, sessionStore } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("metadata-sync-exec")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Formal Metadata Sync",
+          definitionOfDone: "Session metadata reflects changes",
+          secondaries: [{ title: "Subtask A", rationale: "First unit of work" }],
+        },
+        { sessionID: sid },
+      )
+
+      expect(sessionStore[sid]?.metadata?.objectives).toBeDefined()
+      expect(sessionStore[sid].metadata.objectives.title).toBe("Formal Metadata Sync")
+      expect(sessionStore[sid].metadata.objectives.secondaries.length).toBe(1)
+    })
   })
 
   async function setupPluginInstanceLocal() {
     const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
     const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
+    const sessionStore: Record<string, any> = {}
     let registeredTool: any = null
 
     const mockCtx = {
       options: {},
       session: {
         todo: async () => [],
+        get: async (input: { sessionID: string }) => sessionStore[input.sessionID] ?? { id: input.sessionID, metadata: {} },
+        update: async (input: { sessionID: string; metadata?: any }) => {
+          sessionStore[input.sessionID] = {
+            id: input.sessionID,
+            metadata: input.metadata ?? {},
+          }
+        },
         hook: async (name: string, handler: any) => {
           sessionHooks[name] = sessionHooks[name] ?? []
           sessionHooks[name].push(handler)
@@ -2619,6 +2647,6 @@ describe("hierarchical-objectives plugin", () => {
         await h({ tool: toolName, input, sessionID })
       }
     }
-    return { sessionHooks, toolHooks, getRegisteredTool: () => registeredTool, triggerToolHook, triggerToolBefore }
+    return { sessionHooks, toolHooks, sessionStore, getRegisteredTool: () => registeredTool, triggerToolHook, triggerToolBefore }
   }
 })
