@@ -9,6 +9,7 @@
 
 - The `SidebarObjectives` component (`packages/tui/src/feature-plugins/sidebar/objectives.tsx`) renders the objective tree directly from OpenCode's canonical `session.metadata.objectives`:
   1. Updated atomically on every `objective_manage` invocation in `hierarchical-objectives.ts`.
-  2. Persisted formally in OpenCode's SQLite database (`session` table) and dispatched via `session.metadata.updated`.
-  3. Reactively listened via Solid's `context.data.session.get(sessionID)`, ensuring immediate zero-latency updates across process boundaries.
-  4. Live active-objective status feedback displayed in the collapsed header (`view.open = false`) to ensure users never perceive an empty or lost tree when collapsed.
+  2. Persisted formally in OpenCode's SQLite database (`session` table) and dispatched across the event bus via `session.metadata.updated`.
+  3. Received by `@opencode/client` Solid data layer (`packages/client/src/solid/data.ts`), which reconciles `store.session.info[sessionID].metadata` upon receiving `session.metadata.updated`.
+  4. Reactively listened in `SidebarObjectives` via Solid's `context.data.session.get(sessionID)`, ensuring immediate zero-latency updates across process boundaries.
+  5. Live active-objective status feedback displayed in the collapsed header (`view.open = false`) to ensure users never perceive an empty or lost tree when collapsed.

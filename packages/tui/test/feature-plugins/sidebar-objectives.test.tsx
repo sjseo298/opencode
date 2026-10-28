@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test, describe } from "bun:test"
+import { createSignal } from "solid-js"
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { Context } from "@opencode/plugin/tui/context"
@@ -465,5 +466,58 @@ describe("SidebarObjectives TUI component (Canonical session.metadata architectu
     const po = extractObjectivesFromMessages(sid, [], tree)
     expect(po?.title).toBe("Test")
     expect(extractObjectivesFromMessages(sid, [])).toBeUndefined()
+  })
+
+  test("reacts immediately when session metadata updates in real time", async () => {
+    const [sess, setSess] = createSignal({
+      id: "live-session",
+      location: { directory: "/workspace" },
+      metadata: {
+        objectives: {
+          title: "Live Session Tree",
+          status: "exploring",
+          definitionOfDone: "Verify live updates",
+          secondaries: [{ id: "SO-1", title: "Task 1", status: "pending", rationale: "R1" }],
+        },
+      },
+    })
+
+    const ctx = {
+      ...makeMockContext(),
+      data: {
+        session: {
+          get: () => sess(),
+        },
+      },
+    } as unknown as Context
+
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID="live-session" />, {
+      width: 80,
+      height: 20,
+    })
+
+    try {
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("[ ] SO-1: Task 1")
+
+      // Simulate live update of SO-1 to exploring
+      setSess({
+        id: "live-session",
+        location: { directory: "/workspace" },
+        metadata: {
+          objectives: {
+            title: "Live Session Tree",
+            status: "exploring",
+            definitionOfDone: "Verify live updates",
+            secondaries: [{ id: "SO-1", title: "Task 1", status: "exploring", rationale: "R1" }],
+          },
+        },
+      })
+
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("[•] SO-1: Task 1")
+    } finally {
+      app.renderer.destroy()
+    }
   })
 })

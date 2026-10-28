@@ -1511,3 +1511,68 @@ async function wait(check: () => boolean) {
     await Bun.sleep(10)
   }
 }
+
+test("updates session metadata when session.metadata.updated is received", async () => {
+  const listeners = new Set<Parameters<CreateDataInput["event"]["listen"]>[0]>()
+  const sessionInfo: SessionInfo = {
+    id: "ses_meta",
+    projectID: "project",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    outcome: "succeeded",
+    time: { created: 0, updated: 0, idle: 2, viewed: 0 },
+    location: { directory: "/project" },
+    metadata: {
+      objectives: {
+        title: "Test Objective",
+        status: "pending",
+        secondaries: [{ id: "SO-1", status: "pending" }],
+      },
+    },
+  }
+  const api = OpenCode.make({
+    baseUrl: "http://opencode.local",
+    fetch: async () => Response.json({ data: sessionInfo }),
+  })
+  const setup = createRoot((dispose) => ({
+    data: createData({
+      api: () => api,
+      directory: "/project",
+      initialMessageLimit: () => 40,
+      event: {
+        on: () => () => {},
+        listen: (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+      },
+    }),
+    dispose,
+  }))
+  try {
+    await setup.data.session.sync("ses_meta")
+    expect(setup.data.session.get("ses_meta")?.metadata?.objectives?.status).toBe("pending")
+
+    const event: OpenCodeEvent = {
+      id: "evt_meta_1",
+      created: 10,
+      type: "session.metadata.updated",
+      durable: { aggregateID: "ses_meta", seq: 1, version: 1 },
+      data: {
+        sessionID: "ses_meta",
+        metadata: {
+          objectives: {
+            title: "Test Objective",
+            status: "exploring",
+            secondaries: [{ id: "SO-1", status: "exploring" }],
+          },
+        },
+      },
+    }
+    listeners.forEach((listener) => listener({ name: event.type, details: event }))
+    expect(setup.data.session.get("ses_meta")?.metadata?.objectives?.status).toBe("exploring")
+    expect(setup.data.session.get("ses_meta")?.metadata?.objectives?.secondaries[0].status).toBe("exploring")
+  } finally {
+    setup.dispose()
+  }
+})
