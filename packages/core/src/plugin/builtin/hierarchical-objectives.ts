@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { Plugin as OpenCodePlugin } from "@opencode/plugin"
 import { Schema } from "effect"
 import {
@@ -140,11 +143,25 @@ export function getObjectivesStore(): ObjectivesStore | undefined {
   return activeStore
 }
 
+export function getSharedObjectivesPath(sessionID: string): string {
+  const custom = process.env.OPENCODE_OBJECTIVES_DIR
+  if (custom) return path.join(custom, `${sessionID}.json`)
+  const base = path.join(os.homedir(), ".local", "share", "opencode", "objectives")
+  return path.join(base, `${sessionID}.json`)
+}
+
 function persistSessionObjectives(sessionID: string): void {
-  if (!activeStore) return
   const po = sessionObjectives.get(sessionID)
   if (!po) return
-  void activeStore.save(sessionID, po as unknown as Record<string, any>).catch(() => {})
+  if (activeStore) {
+    void activeStore.save(sessionID, po as unknown as Record<string, any>).catch(() => {})
+  }
+  try {
+    const filePath = getSharedObjectivesPath(sessionID)
+    const dir = path.dirname(filePath)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(filePath, JSON.stringify(po, null, 2), "utf-8")
+  } catch {}
 }
 
 export const READONLY_TOOLS = new Set([

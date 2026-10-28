@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { Plugin } from "@opencode/plugin/tui"
 import { createMemo, For, Show } from "solid-js"
 
@@ -127,57 +130,275 @@ function parseDodCriteriaInput(value: any): DoDCriterionView[] | undefined {
   return criteria.length > 0 ? criteria : undefined
 }
 
+export function getSharedObjectivesPath(sessionID: string): string {
+  const custom = process.env.OPENCODE_OBJECTIVES_DIR
+  if (custom) return path.join(custom, `${sessionID}.json`)
+  const base = path.join(os.homedir(), ".local", "share", "opencode", "objectives")
+  return path.join(base, `${sessionID}.json`)
+}
+
+export function parseObjectivesFromCompactionText(text: string): PrimaryObjectiveView | undefined {
+  if (!text || typeof text !== "string") return undefined
+
+  let poTitle = ""
+  let dod = "Verified"
+  const poMatch =
+    text.match(/\[PO(?: - [^\]]+)?\]\s+([^\n\[]+)/i) ||
+    text.match(/\*\*Primary Objective(?:\s*\[[^\]]+\])?\*\*:\s*([^\n]+)/i) ||
+    text.match(/Primary Objective(?:\s*\[[^\]]+\])?:\s*([^\n]+)/i)
+  if (poMatch) {
+    poTitle = poMatch[1].trim()
+  } else {
+    const objMatch =
+      text.match(/## Objective\s*\n+(?:-\s*)?([^\n]+)/i) ||
+      text.match(/\*\*Objective\*\*:\s*([^\n]+)/i)
+    if (objMatch) poTitle = objMatch[1].trim()
+  }
+
+  const dodMatch = text.match(/(?:Definition of Done|DoD):\s*([^\n]+)/i)
+  if (dodMatch) dod = dodMatch[1].trim()
+
+  if (!poTitle) return undefined
+
+  const secondaries: SecondaryObjectiveView[] = []
+  const pendingTertiaries: {
+    id: string
+    title: string
+    rationale: string
+    blocker?: string
+    proof?: string
+    status: ObjectiveStatus
+  }[] = []
+
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith("-") && !trimmed.startsWith("*")) continue
+
+    let id = ""
+    let rawStatus = "pending"
+    let title = ""
+    let extra = ""
+
+    // Pattern 1: - [SO-1] [RESOLVED] Title (Extra)
+    let m = trimmed.match(/^[-*]\s*\[(SO-\d+(?:-T\d+)?)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/i)
+    if (m) {
+      id = m[1].toUpperCase()
+      rawStatus = m[2].toLowerCase()
+      title = m[3].trim()
+      extra = m[4] || ""
+    } else {
+      // Pattern 2: - **SO-1 [RESOLVED]** Title
+      m = trimmed.match(/^[-*]\s*\*\*(SO-\d+(?:-T\d+)?)\s*\[([A-Z_]+)\]\*\*\s*[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
+      if (m) {
+        id = m[1].toUpperCase()
+        rawStatus = m[2].toLowerCase()
+        title = m[3].trim()
+        extra = m[4] || ""
+      } else {
+        // Pattern 3: - **SO-1** [RESOLVED] Title
+        m = trimmed.match(/^[-*]\s*\*\*(SO-\d+(?:-T\d+)?)\*\*\s*\[([A-Z_]+)\]\s*[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
+        if (m) {
+          id = m[1].toUpperCase()
+          rawStatus = m[2].toLowerCase()
+          title = m[3].trim()
+          extra = m[4] || ""
+        } else {
+          // Pattern 4: - [x] or - [✓] or - [ ] **SO-1**: Title
+          m = trimmed.match(/^[-*]\s*\[([ xX✓])] (?:\*\*)?(SO-\d+(?:-T\d+)?)(?:\*\*)?[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
+          if (m) {
+            id = m[2].toUpperCase()
+            rawStatus = m[1].trim() === "x" || m[1].trim() === "X" || m[1].trim() === "✓" ? "resolved" : "pending"
+            title = m[3].trim()
+            extra = m[4] || ""
+          } else {
+            // Pattern 5: - SO-1 [RESOLVED] Title or - SO-1: [RESOLVED] Title
+            m = trimmed.match(/^[-*]\s*(SO-\d+(?:-T\d+)?)\s*[:\-]?\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/i)
+            if (m) {
+              id = m[1].toUpperCase()
+              rawStatus = m[2].toLowerCase()
+              title = m[3].trim()
+              extra = m[4] || ""
+            } else {
+              // Pattern 6: - SO-1: Title (without explicit bracket status)
+              m = trimmed.match(/^[-*]\s*(?:\*\*)?(SO-\d+(?:-T\d+)?)(?:\*\*)?:\s*([^(\n]+)(?:\(([^)]+)\))?/i)
+              if (m) {
+                id = m[1].toUpperCase()
+                rawStatus = "exploring"
+                title = m[2].trim()
+                extra = m[3] || ""
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!id) continue
+
+    let rationale = "Preserved from session checkpoint"
+    let blocker: string | undefined
+    let proof: string | undefined
+
+    const rMatch = extra.match(/Rationale:\s*([^;]+)/i)
+    if (rMatch) rationale = rMatch[1].trim()
+
+    const bMatch = extra.match(/Blocker:\s*([^;]+)/i)
+    if (bMatch) blocker = bMatch[1].trim()
+
+    const pMatch = extra.match(/(?:Proof|Validation Proof):\s*([^;]+)/i)
+    if (pMatch) proof = pMatch[1].trim()
+
+    const validStatuses: ObjectiveStatus[] = [
+      "pending",
+      "exploring",
+      "blocked",
+      "resolved",
+      "discarded",
+      "cancelled",
+    ]
+    const status: ObjectiveStatus = validStatuses.includes(rawStatus as any)
+      ? (rawStatus as ObjectiveStatus)
+      : "pending"
+
+    if (!/-T\d+$/i.test(id)) {
+      secondaries.push({
+        id,
+        title,
+        status,
+        rationale,
+        blocker,
+        validationProof: proof,
+      })
+    } else {
+      pendingTertiaries.push({ id, title, rationale, blocker, proof, status })
+    }
+  }
+
+  for (const entry of pendingTertiaries) {
+    const parentId = entry.id.replace(/-T\d+$/i, "")
+    let parent = secondaries.find((s) => s.id.toLowerCase() === parentId.toLowerCase())
+    if (!parent) {
+      parent = {
+        id: parentId,
+        title: `Recovered parent ${parentId}`,
+        status: "exploring",
+        rationale: "Reconstructed from compaction checkpoint",
+      }
+      secondaries.push(parent)
+    }
+    parent.children ??= []
+    parent.children.push({
+      id: entry.id,
+      title: entry.title,
+      status: entry.status,
+      rationale: entry.rationale,
+      blocker: entry.blocker,
+      validationProof: entry.proof,
+    })
+  }
+
+  return {
+    title: poTitle,
+    status: "exploring",
+    definitionOfDone: dod,
+    secondaries,
+  }
+}
+
 export function extractObjectivesFromMessages(
   sessionID: string,
   messages: any[],
 ): PrimaryObjectiveView | undefined {
   // 1. Live memory lookup first
-  if (globalThis.__OPENCODE_OBJECTIVES__?.has(sessionID)) {
-    const raw = globalThis.__OPENCODE_OBJECTIVES__.get(sessionID)
-    if (raw && typeof raw.title === "string") {
-      let status: PrimaryObjectiveStatus =
-        raw.status === "pending" ||
-        raw.status === "resolved" ||
-        raw.status === "presented_awaiting_confirmation"
-          ? raw.status
-          : "exploring"
+  let raw = globalThis.__OPENCODE_OBJECTIVES__?.has(sessionID)
+    ? globalThis.__OPENCODE_OBJECTIVES__.get(sessionID)
+    : undefined
 
-      // Invariante jerárquico estricto en memoria viva:
-      // Si el PO dice 'resolved' pero alguno de sus SOs o TOs está abierto,
-      // la UI debe auto-repararlo inmediatamente a 'exploring' para nunca mostrar
-      // un PO cerrado con tareas abiertas.
-      const secondaries: SecondaryObjectiveView[] = Array.isArray(raw.secondaries) ? [...raw.secondaries] : []
-      const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
-      const hasOpenChild = secondaries.some(
-        (s) => !isClosed(s.status) || (s.children ?? []).some((t) => !isClosed(t.status)),
-      )
-      if (status === "resolved" && hasOpenChild) {
-        status = "exploring"
+  // 1b. Fallback to shared filesystem store across process boundaries (server vs TUI)
+  if (!raw && sessionID) {
+    try {
+      const sharedPath = getSharedObjectivesPath(sessionID)
+      if (fs.existsSync(sharedPath)) {
+        const content = fs.readFileSync(sharedPath, "utf-8")
+        raw = JSON.parse(content)
       }
+    } catch {}
+  }
 
-      const rawDod = Array.isArray(raw.dodCriteria)
-        ? raw.dodCriteria
-        : Array.isArray(raw.dod)
-          ? raw.dod
-          : undefined
-      return {
-        title: raw.title,
-        status,
-        definitionOfDone: raw.definitionOfDone ?? "",
-        secondaries,
-        dodCriteria: rawDod ? [...rawDod] : undefined,
-        findings: Array.isArray(raw.findings) ? [...raw.findings] : undefined,
-        options: Array.isArray(raw.options) ? [...raw.options] : undefined,
-        fingerprints: Array.isArray(raw.fingerprints) ? [...raw.fingerprints] : undefined,
-        checkpointNote: typeof raw.checkpointNote === "string" ? raw.checkpointNote : undefined,
-      }
+  if (raw && typeof raw.title === "string") {
+    let status: PrimaryObjectiveStatus =
+      raw.status === "pending" ||
+      raw.status === "resolved" ||
+      raw.status === "presented_awaiting_confirmation"
+        ? raw.status
+        : "exploring"
+
+    // Invariante jerárquico estricto en memoria viva:
+    // Si el PO dice 'resolved' pero alguno de sus SOs o TOs está abierto,
+    // la UI debe auto-repararlo inmediatamente a 'exploring' para nunca mostrar
+    // un PO cerrado con tareas abiertas.
+    const secondaries: SecondaryObjectiveView[] = Array.isArray(raw.secondaries) ? [...raw.secondaries] : []
+    const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
+    const hasOpenChild = secondaries.some(
+      (s) => !isClosed(s.status) || (s.children ?? []).some((t) => !isClosed(t.status)),
+    )
+    if (status === "resolved" && hasOpenChild) {
+      status = "exploring"
+    }
+
+    const rawDod = Array.isArray(raw.dodCriteria)
+      ? raw.dodCriteria
+      : Array.isArray(raw.dod)
+        ? raw.dod
+        : undefined
+    return {
+      title: raw.title,
+      status,
+      definitionOfDone: raw.definitionOfDone ?? "",
+      secondaries,
+      dodCriteria: rawDod ? [...rawDod] : undefined,
+      findings: Array.isArray(raw.findings) ? [...raw.findings] : undefined,
+      options: Array.isArray(raw.options) ? [...raw.options] : undefined,
+      fingerprints: Array.isArray(raw.fingerprints) ? [...raw.fingerprints] : undefined,
+      checkpointNote: typeof raw.checkpointNote === "string" ? raw.checkpointNote : undefined,
     }
   }
 
-  // 2. Reconstruct from session message history (tool calls)
+  // 2. Reconstruct from session message history (tool calls and compaction checkpoints)
   let po: PrimaryObjectiveView | undefined = undefined
 
   for (const msg of messages) {
+    // Chronological compaction checkpoint processing:
+    const compactionText =
+      msg.type === "compaction" && typeof msg.summary === "string"
+        ? msg.summary
+        : typeof msg.content === "string" && msg.content.includes("<conversation-checkpoint>")
+          ? msg.content
+          : ""
+    if (compactionText) {
+      const fromCompaction = parseObjectivesFromCompactionText(compactionText)
+      if (fromCompaction) {
+        if (!po) {
+          po = fromCompaction
+        } else {
+          po.title = fromCompaction.title || po.title
+          po.definitionOfDone = fromCompaction.definitionOfDone || po.definitionOfDone
+          for (const s of fromCompaction.secondaries) {
+            const existing = po.secondaries.find((x) => x.id.toLowerCase() === s.id.toLowerCase())
+            if (!existing) {
+              po.secondaries.push(s)
+            } else {
+              existing.status = s.status
+              existing.title = s.title
+              if (s.validationProof) existing.validationProof = s.validationProof
+              if (s.blocker) existing.blocker = s.blocker
+              if (s.children && s.children.length > 0) existing.children = s.children
+            }
+          }
+        }
+      }
+    }
+
     if (msg.type !== "assistant" || !Array.isArray(msg.content)) continue
 
     for (const part of msg.content) {
@@ -287,29 +508,56 @@ export function extractObjectivesFromMessages(
             }
           }
         } else if (action === "update_secondary" || action === "update_secondaries") {
-          if (po) {
-            const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
-              ? input.secondaries
-              : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources }] : [])
+          if (!po) {
+            po = {
+              title: "Primary Objective",
+              status: "exploring",
+              definitionOfDone: "Complete all tasks",
+              secondaries: [],
+            }
+          }
 
-            for (const item of items) {
-              const targetId = String(item?.id || "").toLowerCase()
-              if (!targetId) continue
-              const target = po.secondaries.find((s) => s.id.toLowerCase() === targetId)
-              if (target) {
-                if (item.status) target.status = item.status
-                if (item.title) target.title = item.title
-                if (item.rationale) target.rationale = item.rationale
-                if (item.delegation !== undefined) target.delegation = item.delegation
-                if (item.affectedResources !== undefined) target.affectedResources = item.affectedResources
-                if (item.blocker !== undefined) target.blocker = item.blocker
-                if (item.validationProof !== undefined) target.validationProof = item.validationProof
+          const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
+            ? input.secondaries
+            : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof, affectedResources: input.affectedResources }] : [])
 
-                // Invariante de coherencia jerárquica en reconstrucción:
-                // Si el SO se actualiza a un estado abierto ('pending', 'exploring', 'blocked'),
-                // el PO se reabre automáticamente a 'exploring'.
-                const isOpen = target.status === "pending" || target.status === "exploring" || target.status === "blocked"
-                if (isOpen && (po.status === "resolved" || po.status === "presented_awaiting_confirmation")) {
+          for (const item of items) {
+            const targetId = String(item?.id || "").toLowerCase()
+            if (!targetId) continue
+            let target = po.secondaries.find((s) => s.id.toLowerCase() === targetId)
+            if (target) {
+              if (item.status) target.status = item.status
+              if (item.title) target.title = item.title
+              if (item.rationale) target.rationale = item.rationale
+              if (item.delegation !== undefined) target.delegation = item.delegation
+              if (item.affectedResources !== undefined) target.affectedResources = item.affectedResources
+              if (item.blocker !== undefined) target.blocker = item.blocker
+              if (item.validationProof !== undefined) target.validationProof = item.validationProof
+
+              // Invariante de coherencia jerárquica en reconstrucción:
+              // Si el SO se actualiza a un estado abierto ('pending', 'exploring', 'blocked'),
+              // el PO se reabre automáticamente a 'exploring'.
+              const isOpen = target.status === "pending" || target.status === "exploring" || target.status === "blocked"
+              if (isOpen && (po.status === "resolved" || po.status === "presented_awaiting_confirmation")) {
+                po.status = "exploring"
+              }
+            } else {
+              // Resiliencia ante sesiones paginadas: el SO fue declarado en un set_primary o add_secondary
+              // que quedó fuera del búfer de mensajes cargados por el cliente. Sintetizarlo dinámicamente.
+              const sTitle = item?.title?.trim() || item?.rationale?.trim() || String(item?.id || "").trim() || "Subtask"
+              const newSO: SecondaryObjectiveView = {
+                id: String(item?.id || "").trim(),
+                title: sTitle,
+                status: item?.status || "exploring",
+                rationale: item?.rationale || "Reconstructed from paginated session update",
+                delegation: item?.delegation,
+                affectedResources: item?.affectedResources,
+                blocker: item?.blocker || undefined,
+                validationProof: item?.validationProof || undefined,
+              }
+              po.secondaries.push(newSO)
+              if (newSO.status === "pending" || newSO.status === "exploring" || newSO.status === "blocked") {
+                if (po.status === "resolved" || po.status === "presented_awaiting_confirmation") {
                   po.status = "exploring"
                 }
               }
@@ -375,7 +623,14 @@ export function extractObjectivesFromMessages(
             }
           }
         } else if (action === "update_tertiary" || action === "update_tertaries") {
-          if (!po) continue
+          if (!po) {
+            po = {
+              title: "Primary Objective",
+              status: "exploring",
+              definitionOfDone: "Complete all tasks",
+              secondaries: [],
+            }
+          }
           const items = Array.isArray(input.secondaries) && input.secondaries.length > 0
             ? input.secondaries
             : (input.id ? [{ id: input.id, status: input.status, title: input.title, rationale: input.rationale, delegation: input.delegation, blocker: input.blocker, validationProof: input.validationProof }] : [])
@@ -409,6 +664,30 @@ export function extractObjectivesFromMessages(
                   po.status = "exploring"
                 }
               }
+            } else {
+              // Resiliencia ante sesiones paginadas: sintetizar parent SO si no existe y añadir el TO
+              const parentId = targetId.replace(/-t\d+$/i, "").toUpperCase()
+              let parent = po.secondaries.find((s) => s.id.toLowerCase() === parentId.toLowerCase())
+              if (!parent) {
+                parent = {
+                  id: parentId,
+                  title: `Parent ${parentId}`,
+                  status: "exploring",
+                  rationale: "Reconstructed parent from paginated session tertiary update",
+                }
+                po.secondaries.push(parent)
+              }
+              parent.children ??= []
+              const tTitle = item?.title?.trim() || item?.rationale?.trim() || String(item?.id || "").trim() || "Tertiary subtask"
+              parent.children.push({
+                id: String(item?.id || "").trim(),
+                title: tTitle,
+                status: item?.status || "exploring",
+                rationale: item?.rationale || "Reconstructed from paginated session update",
+                delegation: item?.delegation,
+                blocker: item?.blocker || undefined,
+                validationProof: item?.validationProof || undefined,
+              })
             }
           }
         } else if (action === "add_finding") {
@@ -510,18 +789,24 @@ export function extractObjectivesFromMessages(
             }
           }
         } else if (action === "update_dod" || (action === "update_primary" && Array.isArray(input.dodCriteria))) {
-          if (po) {
-            const criteria = parseDodCriteriaInput(input.dodCriteria)
-            if (criteria) {
-              po.dodCriteria ??= []
-              for (const c of criteria) {
-                const existing = po.dodCriteria.find((x) => x.id.toLowerCase() === c.id.toLowerCase())
-                if (existing) {
-                  existing.statement = c.statement
-                  if (c.proofRef) existing.proofRef = c.proofRef
-                } else {
-                  po.dodCriteria.push(c)
-                }
+          if (!po) {
+            po = {
+              title: "Primary Objective",
+              status: "exploring",
+              definitionOfDone: "Complete all tasks",
+              secondaries: [],
+            }
+          }
+          const criteria = parseDodCriteriaInput(input.dodCriteria)
+          if (criteria) {
+            po.dodCriteria ??= []
+            for (const c of criteria) {
+              const existing = po.dodCriteria.find((x) => x.id.toLowerCase() === c.id.toLowerCase())
+              if (existing) {
+                existing.statement = c.statement
+                if (c.proofRef) existing.proofRef = c.proofRef
+              } else {
+                po.dodCriteria.push(c)
               }
             }
           }
@@ -647,129 +932,9 @@ export function extractObjectivesFromMessages(
             : ""
       if (!text) continue
 
-      let poTitle = ""
-      let dod = "Verified"
-      const poMatch = text.match(/\[PO\]\s+([^\n\[]+)/i)
-      if (poMatch) {
-        poTitle = poMatch[1].trim()
-      } else {
-        const objMatch = text.match(/## Objective\s*\n+(?:-\s*)?([^\n]+)/i)
-        if (objMatch) poTitle = objMatch[1].trim()
-      }
-
-      const dodMatch = text.match(/Definition of Done:\s*([^\n]+)/i)
-      if (dodMatch) dod = dodMatch[1].trim()
-
-      if (poTitle) {
-        const secondaries: SecondaryObjectiveView[] = []
-        const pendingTertiaries: { id: string; title: string; rationale: string; blocker?: string; proof?: string; status: ObjectiveStatus }[] = []
-
-        // Parse line by line to support all compaction formats reliably:
-        // 1. - [SO-1] [RESOLVED] Title (Details)
-        // 2. - **SO-1 [RESOLVED]** Title
-        // 3. - **SO-1** [RESOLVED] Title
-        for (const line of text.split("\n")) {
-          const trimmed = line.trim()
-          if (!trimmed.startsWith("-")) continue
-
-          let id = ""
-          let rawStatus = "pending"
-          let title = ""
-          let extra = ""
-
-          // Pattern 1: - [SO-1] [RESOLVED] Title (Extra)
-          let m = trimmed.match(/^-\s*\[(SO-\d+(?:-T\d+)?)\]\s*\[([A-Z_]+)\]\s*([^(\n]+)(?:\(([^)]+)\))?/i)
-          if (m) {
-            id = m[1].toUpperCase()
-            rawStatus = m[2].toLowerCase()
-            title = m[3].trim()
-            extra = m[4] || ""
-          } else {
-            // Pattern 2: - **SO-1 [RESOLVED]** Title
-            m = trimmed.match(/^-\s*\*\*(SO-\d+(?:-T\d+)?)\s*\[([A-Z_]+)\]\*\*\s*[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
-            if (m) {
-              id = m[1].toUpperCase()
-              rawStatus = m[2].toLowerCase()
-              title = m[3].trim()
-              extra = m[4] || ""
-            } else {
-              // Pattern 3: - **SO-1** [RESOLVED] Title
-              m = trimmed.match(/^-\s*\*\*(SO-\d+(?:-T\d+)?)\*\*\s*\[([A-Z_]+)\]\s*[:\s]*([^(\n]+)(?:\(([^)]+)\))?/i)
-              if (m) {
-                id = m[1].toUpperCase()
-                rawStatus = m[2].toLowerCase()
-                title = m[3].trim()
-                extra = m[4] || ""
-              }
-            }
-          }
-
-          if (!id) continue
-
-          let rationale = "Preserved from session checkpoint"
-          let blocker: string | undefined
-          let proof: string | undefined
-
-          const rMatch = extra.match(/Rationale:\s*([^;]+)/i)
-          if (rMatch) rationale = rMatch[1].trim()
-
-          const bMatch = extra.match(/Blocker:\s*([^;]+)/i)
-          if (bMatch) blocker = bMatch[1].trim()
-
-          const pMatch = extra.match(/(?:Proof|Validation Proof):\s*([^;]+)/i)
-          if (pMatch) proof = pMatch[1].trim()
-
-          const validStatuses: ObjectiveStatus[] = [
-            "pending",
-            "exploring",
-            "blocked",
-            "resolved",
-            "discarded",
-            "cancelled",
-          ]
-          const status: ObjectiveStatus = validStatuses.includes(rawStatus as any)
-            ? (rawStatus as ObjectiveStatus)
-            : "pending"
-
-          if (!/-T\d+$/i.test(id)) {
-            secondaries.push({
-              id,
-              title,
-              status,
-              rationale,
-              blocker,
-              validationProof: proof,
-            })
-          } else {
-            pendingTertiaries.push({ id, title, rationale, blocker, proof, status })
-          }
-        }
-
-        // Attach tertiary sub-objectives under their parent SO (recovered placeholder if missing).
-        for (const entry of pendingTertiaries) {
-          const parentId = entry.id.replace(/-T\d+$/i, "")
-          let parent = secondaries.find((s) => s.id.toLowerCase() === parentId.toLowerCase())
-          if (!parent) {
-            parent = { id: parentId, title: `Recovered parent ${parentId}`, status: "exploring", rationale: "Reconstructed from compaction checkpoint" }
-            secondaries.push(parent)
-          }
-          parent.children ??= []
-          parent.children.push({
-            id: entry.id,
-            title: entry.title,
-            status: entry.status,
-            rationale: entry.rationale,
-            blocker: entry.blocker,
-            validationProof: entry.proof,
-          })
-        }
-
-        po = {
-          title: poTitle,
-          status: "exploring",
-          definitionOfDone: dod,
-          secondaries,
-        }
+      const fromCompaction = parseObjectivesFromCompactionText(text)
+      if (fromCompaction) {
+        po = fromCompaction
         break
       }
     }
@@ -804,6 +969,13 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
   const resolvedSecondaries = createMemo(
     () => objectives()?.secondaries.filter((s) => s.status === "resolved").length ?? 0,
   )
+  const activeObjective = createMemo(() => {
+    const list = objectives()?.secondaries ?? []
+    return (
+      list.find((s) => s.status === "exploring" || s.status === "blocked") ??
+      list.find((s) => s.status === "pending")
+    )
+  })
 
   const statusBadge = (status: ObjectiveStatus) => {
     switch (status) {
@@ -868,6 +1040,17 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                 ({resolvedSecondaries()}/{totalSecondaries()})
               </span>
             </text>
+            <Show when={!view.open && activeObjective()}>
+              {(active) => {
+                const badge = statusBadge(active().status)
+                return (
+                  <text fg={theme.text.muted} wrapMode="none" truncate>
+                    <span style={{ fg: badge.color }}>{badge.symbol}</span>{" "}
+                    <span style={{ fg: theme.text.base }}>{active().id}:</span> {active().title}
+                  </text>
+                )
+              }}
+            </Show>
           </box>
 
           <Show when={view.open}>

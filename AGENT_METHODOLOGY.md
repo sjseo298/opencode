@@ -347,7 +347,12 @@ export interface PrimaryObjective {
    * Registered in `packages/tui/src/plugin/builtins.ts`.
    * Displays the Primary Objective and Definition of Done at the top of the right sidebar.
    * Renders color-coded status badges for each Secondary Objective (`[EXPLORING]`, `[BLOCKED]`, `[RESOLVED]`, `[PENDING]`), rationale, blocker alerts, and validation evidence live as tool calls occur (`part.state.input`).
-   * Seamlessly restores objectives from compaction checkpoint summaries if in-memory state was cleared.
+   * **Multi-Layer Resilience Architecture for Large Sessions**:
+     - *Layer 1 (Live Memory)*: Checks `globalThis.__OPENCODE_OBJECTIVES__` for same-process execution.
+     - *Layer 2 (Shared Filesystem Store)*: Bridges across client/server process boundaries via `getSharedObjectivesPath(sessionID)` (`~/.local/share/opencode/objectives/${sessionID}.json`), decoupling the UI from process-local global maps.
+     - *Layer 3 (Pagination Auto-Recovery)*: If earlier messages containing `set_primary` are evicted due to client message window pagination in large sessions, `update_secondary` and `update_tertiary` automatically synthesize the root PO and missing subtasks so the UI never displays an empty tree.
+     - *Layer 4 (Chronological Compaction Integration)*: Compaction summaries are processed in strict chronological order and support multiple checkpoint syntaxes (checkboxes `[✓]`, markdown bold `- **SO-1 [RESOLVED]**`, bracketed prefixes), applying subsequent tool updates cleanly on top.
+     - *Layer 5 (Collapsed Status Feedback)*: When `view.open` is `false`, the collapsed header renders the currently active objective (`[•] SO-N: Title`) alongside the completion count, preventing the false perception that objectives vanished.
 
 ### 11.3 Tool Interface: `objective_manage`
 

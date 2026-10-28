@@ -6,6 +6,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import {
   SidebarObjectives,
   extractObjectivesFromMessages,
+  getSharedObjectivesPath,
 } from "../../src/feature-plugins/sidebar/objectives"
 
 function makeMockContext(options?: {
@@ -660,6 +661,175 @@ describe("SidebarObjectives TUI component", () => {
       expect(frame).toContain("Fingerprints (1)")
       expect(frame).toContain("pg-timeout: Postgres timeout on connection pool")
       expect(frame).toContain("(fix: max_connections=100)")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("Causa 1: recovers po and synthesizes missing secondary when set_primary is paginated away", () => {
+    delete (globalThis as any).__OPENCODE_OBJECTIVES__
+    const sid = "paginated-session-recovery"
+    const messages = [
+      {
+        id: "msg-recent-update",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            name: "objective_manage",
+            state: {
+              status: "completed",
+              input: {
+                action: "update_secondary",
+                id: "SO-2",
+                title: "Refactor message store",
+                status: "exploring",
+                rationale: "Crucial for pagination resilience",
+              },
+            },
+          },
+        ],
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.title).toBe("Primary Objective")
+    expect(po?.status).toBe("exploring")
+    expect(po?.secondaries).toHaveLength(1)
+    expect(po?.secondaries[0].id).toBe("SO-2")
+    expect(po?.secondaries[0].title).toBe("Refactor message store")
+    expect(po?.secondaries[0].status).toBe("exploring")
+  })
+
+  test("Causa 2: loads objective tree from shared disk snapshot when globalThis is empty", () => {
+    delete (globalThis as any).__OPENCODE_OBJECTIVES__
+    const sid = "disk-store-shared-session"
+    const sharedPath = getSharedObjectivesPath(sid)
+    const fs = require("node:fs")
+    const path = require("node:path")
+    fs.mkdirSync(path.dirname(sharedPath), { recursive: true })
+    const diskTree = {
+      title: "Shared Disk Architecture",
+      status: "exploring",
+      definitionOfDone: "Cross-process verified",
+      secondaries: [
+        {
+          id: "SO-1",
+          title: "Bridge TUI and Daemon",
+          status: "resolved",
+          rationale: "Decouple from globalThis",
+          validationProof: "File snapshot exists",
+        },
+      ],
+    }
+    fs.writeFileSync(sharedPath, JSON.stringify(diskTree), "utf-8")
+
+    try {
+      const po = extractObjectivesFromMessages(sid, [])
+      expect(po).toBeDefined()
+      expect(po?.title).toBe("Shared Disk Architecture")
+      expect(po?.secondaries[0].title).toBe("Bridge TUI and Daemon")
+      expect(po?.secondaries[0].status).toBe("resolved")
+    } finally {
+      try {
+        fs.unlinkSync(sharedPath)
+      } catch {}
+    }
+  })
+
+  test("Causa 3: processes compaction chronologically and applies subsequent updates on top", () => {
+    delete (globalThis as any).__OPENCODE_OBJECTIVES__
+    const sid = "compaction-chronological-session"
+    const compactionSummary = `
+## Objective
+- Complete backend migration
+Definition of Done: All endpoints pass tests
+
+- [SO-1] [RESOLVED] Database migration (Validation Proof: db migrate up)
+- **SO-2 [PENDING]** API endpoint rewrite
+`
+    const messages = [
+      {
+        id: "msg-compaction",
+        type: "compaction",
+        summary: compactionSummary,
+      },
+      {
+        id: "msg-after-compaction",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            name: "objective_manage",
+            state: {
+              status: "completed",
+              input: {
+                action: "update_secondary",
+                id: "SO-2",
+                status: "exploring",
+              },
+            },
+          },
+        ],
+      },
+    ]
+
+    const po = extractObjectivesFromMessages(sid, messages)
+    expect(po).toBeDefined()
+    expect(po?.title).toBe("Complete backend migration")
+    expect(po?.secondaries).toHaveLength(2)
+    expect(po?.secondaries[0].id).toBe("SO-1")
+    expect(po?.secondaries[0].status).toBe("resolved")
+    expect(po?.secondaries[1].id).toBe("SO-2")
+    expect(po?.secondaries[1].status).toBe("exploring")
+  })
+
+  test("Causa 4: displays active objective in header when collapsed (view.open=false)", async () => {
+    const sid = "collapsed-header-active-badge"
+    globalThis.__OPENCODE_OBJECTIVES__ = new Map([[
+      sid,
+      {
+        title: "Large Task Session",
+        status: "exploring",
+        definitionOfDone: "Verify feedback",
+        secondaries: [
+          {
+            id: "SO-1",
+            title: "Diagnose bug",
+            status: "resolved",
+            rationale: "Understand cause",
+          },
+          {
+            id: "SO-2",
+            title: "Implement resilience fix",
+            status: "exploring",
+            rationale: "Fix root cause",
+          },
+        ],
+      },
+    ]])
+
+    const ctx = makeMockContext({ messages: [] })
+    // Seed collapsed view state
+    const [, setView] = ctx.storage.store("view", { initial: { open: false } })
+    await setView((d) => {
+      d.open = false
+    })
+
+    const app = await testRender(() => <SidebarObjectives context={ctx} sessionID={sid} />, {
+      width: 80,
+      height: 20,
+    })
+
+    try {
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("▶")
+      expect(frame).toContain("Objectives")
+      expect(frame).toContain("(1/2)")
+      expect(frame).toContain("[•]")
+      expect(frame).toContain("SO-2: Implement resilience fix")
     } finally {
       app.renderer.destroy()
     }
