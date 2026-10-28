@@ -11,7 +11,7 @@ export const RpcHandler = HttpApiBuilder.group(Api, "server.rpc", (handlers) =>
       yield* Plugin.awaitActivation
       const rpc = yield* Rpc.Service
       const output = yield* rpc.call(params.rpcID, params.method, payload.input)
-      return output === undefined ? {} : { output }
+      return output === undefined ? {} : { output: JSON.parse(JSON.stringify(output)) }
     }).pipe(
       Effect.mapError((error) =>
         error.type === "rpc.invalid_output" || error.type === "rpc.internal"

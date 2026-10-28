@@ -11,6 +11,7 @@ export const DynamicProviderPlugin = define({
       "sdk",
       Effect.fn(function* (evt) {
         if (evt.sdk) return
+        if (evt.package.startsWith("@opencode/")) return
 
         evt.sdk = ((yield* loadSDKFactory(npm, evt.package)) as (options: any) => any)(evt.options)
       }),

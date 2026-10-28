@@ -99,6 +99,7 @@
   },
   "dependencies": {
     "@ai-sdk/cohere": "3.0.27",
+    "@ai-sdk/google": "3.0.138",
     "@ai-sdk/perplexity": "3.0.26",
     "@ai-sdk/provider": "3.0.8",
     "@ai-sdk/provider-utils": "4.0.23",
@@ -118,6 +119,7 @@
     "@parcel/watcher": "2.5.1",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@standard-schema/spec": "catalog:",
+    "@types/proper-lockfile": "4.1.4",
     "bun-pty": "0.4.11",
     "diff": "catalog:",
     "drizzle-orm": "catalog:",
@@ -132,6 +134,7 @@
     "jose": "6.0.11",
     "jsonc-parser": "3.3.1",
     "mime-types": "3.0.2",
+    "proper-lockfile": "4.1.2",
     "tree-sitter-bash": "0.25.0",
     "tree-sitter-powershell": "0.25.10",
     "web-tree-sitter": "0.25.10",

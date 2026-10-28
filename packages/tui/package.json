@@ -69,7 +69,8 @@
     "remeda": "catalog:",
     "solid-js": "catalog:",
     "string-width": "catalog:",
-    "strip-ansi": "7.1.2"
+    "strip-ansi": "7.1.2",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
