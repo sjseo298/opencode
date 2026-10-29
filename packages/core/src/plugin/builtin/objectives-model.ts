@@ -21,9 +21,9 @@ export interface FindingEvidence {
 
 export type FindingLifecycle = "NEW" | "EXTENDED" | "SUBSUMED"
 
-export type FindingStatus = "open" | "closed"
+export type FindingStatus = "open" | "closed" | "deferred" | "out_of_scope"
 
-export const FINDING_STATUSES: FindingStatus[] = ["open", "closed"]
+export const FINDING_STATUSES: FindingStatus[] = ["open", "closed", "deferred", "out_of_scope"]
 
 export interface FindingImpact {
   optionId: string

@@ -12,6 +12,7 @@ import {
   type PhaseState,
   type Precondition,
   FINDING_EVIDENCE_TYPES,
+  type FindingStatus,
   SEARCH_ATTACH_THRESHOLD,
   SEARCH_NOVEL_THRESHOLD,
   relevantProjectFiles,
@@ -458,6 +459,25 @@ export function addSecondaryObjective(
   return so
 }
 
+export function validateDelegationAssessment(
+  delegation: DelegationAssessment | undefined,
+  id: string,
+): string | undefined {
+  if (!delegation) return undefined
+  const mode = delegation.mode
+  const just = typeof delegation.justification === "string" ? delegation.justification.trim() : ""
+  if (mode !== "main" && mode !== "subagent") {
+    return `${id}: delegation mode must be 'main' or 'subagent'.`
+  }
+  if (just.length < 10) {
+    return `${id}: delegation justification must be >= 10 characters (got ${just.length}).`
+  }
+  if (isPlaceholder(just)) {
+    return `${id}: delegation justification looks like a placeholder: "${just}".`
+  }
+  return undefined
+}
+
 export function updateSecondaryObjective(
   sessionID: string,
   id: string,
@@ -491,16 +511,9 @@ export function updateSecondaryObjective(
   }
 
   if (updates.delegation) {
-    const mode = updates.delegation.mode
-    const just = typeof updates.delegation.justification === "string" ? updates.delegation.justification.trim() : ""
-    if (mode !== "main" && mode !== "subagent") {
-      return { success: false, error: `${id}: delegation mode must be 'main' or 'subagent'.` }
-    }
-    if (just.length < 10) {
-      return { success: false, error: `${id}: delegation justification must be >= 10 characters (got ${just.length}).` }
-    }
-    if (isPlaceholder(just)) {
-      return { success: false, error: `${id}: delegation justification looks like a placeholder: "${just}".` }
+    const delErr = validateDelegationAssessment(updates.delegation, id)
+    if (delErr) {
+      return { success: false, error: delErr }
     }
   }
 
@@ -797,16 +810,9 @@ export function updateTertiaryObjective(
   }
 
   if (updates.delegation) {
-    const mode = updates.delegation.mode
-    const just = typeof updates.delegation.justification === "string" ? updates.delegation.justification.trim() : ""
-    if (mode !== "main" && mode !== "subagent") {
-      return { success: false, error: `${id}: delegation mode must be 'main' or 'subagent'.` }
-    }
-    if (just.length < 10) {
-      return { success: false, error: `${id}: delegation justification must be >= 10 characters (got ${just.length}).` }
-    }
-    if (isPlaceholder(just)) {
-      return { success: false, error: `${id}: delegation justification looks like a placeholder: "${just}".` }
+    const delErr = validateDelegationAssessment(updates.delegation, id)
+    if (delErr) {
+      return { success: false, error: delErr }
     }
   }
 
@@ -941,9 +947,12 @@ export function addFinding(
   }
 
   const evidence = normalizeEvidence(input.evidence)
+  const effectiveResult =
+    (input.result?.trim()) ||
+    (typeof evidence.source === "string" && evidence.source.trim().length >= 15 ? evidence.source.trim() : "")
   const violations = validateFindingFields({
     title: input.title,
-    result: input.result,
+    result: effectiveResult,
     nextAction: input.nextAction,
     evidenceSource: evidence.source,
   })
@@ -958,28 +967,15 @@ export function addFinding(
         "Finding rejected: delegation assessment is mandatory. You must provide 'delegation: { mode: 'main' | 'subagent', justification: '...' }' to explicitly evaluate whether subagent delegation is appropriate.",
     }
   }
-  const delMode = input.delegation.mode
-  const delJust = typeof input.delegation.justification === "string" ? input.delegation.justification.trim() : ""
-  if (delMode !== "main" && delMode !== "subagent") {
-    return { success: false, error: "Finding rejected: delegation mode must be 'main' or 'subagent'." }
-  }
-  if (delJust.length < 10) {
-    return {
-      success: false,
-      error: `Finding rejected: delegation justification must be >= 10 characters (got ${delJust.length}).`,
-    }
-  }
-  if (isPlaceholder(delJust)) {
-    return {
-      success: false,
-      error: `Finding rejected: delegation justification looks like a placeholder: "${delJust}".`,
-    }
+  const delErr = validateDelegationAssessment(input.delegation, "Finding rejected")
+  if (delErr) {
+    return { success: false, error: delErr }
   }
 
   po.findings ??= []
 
   // Search-before-write (F-2): the tool decides whether this is new, an extension, or a duplicate.
-  const query = `${input.title?.trim() ?? ""} ${input.result?.trim() ?? ""}`
+  const query = `${input.title?.trim() ?? ""} ${effectiveResult}`
   const hits = searchFindings(po.findings, query)
   const top = hits[0]
   if (top && top.score >= SEARCH_ATTACH_THRESHOLD) {
@@ -1006,13 +1002,20 @@ export function addFinding(
 
   const now = Date.now()
   const rawStatus = input.status?.trim().toLowerCase()
-  const initialStatus = rawStatus === "closed" || rawStatus === "resolved" ? "closed" : "open"
+  const initialStatus: FindingStatus =
+    rawStatus === "closed" || rawStatus === "resolved"
+      ? "closed"
+      : rawStatus === "deferred"
+        ? "deferred"
+        : rawStatus === "out_of_scope" || rawStatus === "out-of-scope"
+          ? "out_of_scope"
+          : "open"
   const finding: Finding = {
     id: nextFindingId(po.findings),
     soRef,
     title: input.title!.trim(),
     evidence,
-    result: input.result!.trim(),
+    result: effectiveResult,
     impactOnOption: input.impactOnOption,
     nextAction: input.nextAction!.trim(),
     delegation: input.delegation,
@@ -1074,6 +1077,10 @@ export function updateFinding(
       const norm = updates.status.trim().toLowerCase()
       if (norm === "closed" || norm === "resolved") {
         finding.status = "closed"
+      } else if (norm === "deferred") {
+        finding.status = "deferred"
+      } else if (norm === "out_of_scope" || norm === "out-of-scope") {
+        finding.status = "out_of_scope"
       } else if (norm === "open") {
         finding.status = "open"
       }
@@ -1086,16 +1093,9 @@ export function updateFinding(
     }
     if (updates.delegation !== undefined) {
       if (updates.delegation) {
-        const mode = updates.delegation.mode
-        const just = typeof updates.delegation.justification === "string" ? updates.delegation.justification.trim() : ""
-        if (mode !== "main" && mode !== "subagent") {
-          return { success: false, error: `${findingId}: delegation mode must be 'main' or 'subagent'.` }
-        }
-        if (just.length < 10) {
-          return { success: false, error: `${findingId}: delegation justification must be >= 10 characters (got ${just.length}).` }
-        }
-        if (isPlaceholder(just)) {
-          return { success: false, error: `${findingId}: delegation justification looks like a placeholder: "${just}".` }
+        const delErr = validateDelegationAssessment(updates.delegation, findingId)
+        if (delErr) {
+          return { success: false, error: delErr }
         }
       }
       finding.delegation = updates.delegation
@@ -2247,9 +2247,47 @@ function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[], secondaries?:
   if (!raw) return undefined
   const list = Array.isArray(raw) ? raw : typeof raw === "object" ? [raw] : []
   if (list.length === 0) return undefined
+
+  // Pre-merge incoming items that share the same ID (e.g. one item defines statement, another defines satisfiedBy)
+  const mergedList: any[] = []
+  const idMap = new Map<string, any>()
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue
+    const rawId = typeof item?.id === "string" && item.id.trim() ? item.id.trim().toUpperCase() : undefined
+    if (rawId && idMap.has(rawId)) {
+      const existingItem = idMap.get(rawId)
+      if (item.statement && typeof item.statement === "string" && item.statement.trim()) {
+        existingItem.statement = item.statement.trim()
+      }
+      if (item.verifiableBy && typeof item.verifiableBy === "string" && item.verifiableBy.trim()) {
+        existingItem.verifiableBy = item.verifiableBy.trim()
+      }
+      if (item.satisfiedBy) {
+        const incomingSatisfied = Array.isArray(item.satisfiedBy)
+          ? item.satisfiedBy
+          : typeof item.satisfiedBy === "string"
+            ? item.satisfiedBy.split(/[,\s]+/)
+            : []
+        existingItem.satisfiedBy = [
+          ...new Set([
+            ...(Array.isArray(existingItem.satisfiedBy) ? existingItem.satisfiedBy : []),
+            ...incomingSatisfied.map((s: any) => String(s).trim()).filter(Boolean),
+          ]),
+        ]
+      }
+      if (item.proofRef && typeof item.proofRef === "string" && item.proofRef.trim()) {
+        existingItem.proofRef = item.proofRef.trim()
+      }
+    } else {
+      const cloned = { ...item }
+      if (rawId) idMap.set(rawId, cloned)
+      mergedList.push(cloned)
+    }
+  }
+
   const criteria: DoDCriterion[] = []
   let counter = 0
-  for (const item of list) {
+  for (const item of mergedList) {
     if (!item || typeof item !== "object") continue
     const rawId = typeof item?.id === "string" && item.id.trim() ? item.id.trim() : undefined
     const existing = rawId && existingDod ? existingDod.find((c) => c.id.toLowerCase() === rawId.toLowerCase()) : undefined
@@ -2312,13 +2350,24 @@ function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[], secondaries?:
       }
     }
 
-    criteria.push({
-      id: rawId || existing?.id || `D${counter}`,
-      statement,
-      verifiableBy,
-      satisfiedBy,
-      proofRef,
-    })
+    const targetId = rawId || existing?.id || `D${counter}`
+    const existingInCriteria = criteria.find((c) => c.id.toLowerCase() === targetId.toLowerCase())
+    if (existingInCriteria) {
+      existingInCriteria.statement = statement
+      if (verifiableBy) existingInCriteria.verifiableBy = verifiableBy
+      if (satisfiedBy.length > 0) {
+        existingInCriteria.satisfiedBy = [...new Set([...existingInCriteria.satisfiedBy, ...satisfiedBy])]
+      }
+      if (proofRef) existingInCriteria.proofRef = proofRef
+    } else {
+      criteria.push({
+        id: targetId,
+        statement,
+        verifiableBy,
+        satisfiedBy,
+        proofRef,
+      })
+    }
   }
 
   // If raw list was a partial update (e.g. only passed criteria to update/prove), merge with existingDod criteria that were not in raw list
@@ -2402,8 +2451,12 @@ const SecondaryStatusSchema = Schema.Union([
 const FindingStatusSchema = Schema.Union([
   Schema.Literal("open"),
   Schema.Literal("closed"),
+  Schema.Literal("deferred"),
+  Schema.Literal("out_of_scope"),
   Schema.Literal("OPEN"),
   Schema.Literal("CLOSED"),
+  Schema.Literal("DEFERRED"),
+  Schema.Literal("OUT_OF_SCOPE"),
 ])
 const OptionStatusSchema = Schema.Union([
   Schema.Literal("PENDING"),
@@ -2478,7 +2531,7 @@ export const SecondaryInputItemSchema = Schema.Struct({
   ),
   delegation: Schema.optional(
     Schema.NullOr(DelegationInputSchema).pipe(
-      Schema.annotate({ description: "Assessment of subagent delegation vs main-thread execution" }),
+      Schema.annotate({ description: "Assessment of subagent delegation vs main-thread execution for this secondary objective ({ mode: 'main' | 'subagent', justification: '...' })" }),
     ),
   ),
   status: Schema.optional(
@@ -2549,7 +2602,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Union([SecondaryStatusSchema, FindingStatusSchema])).pipe(
       Schema.annotate({
         description:
-          "New status for secondary objective ('pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled') or finding ('open', 'closed')",
+          "New status for secondary objective ('pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled') or finding ('open', 'closed', 'deferred', 'out_of_scope')",
       }),
     ),
   ),
@@ -2584,6 +2637,14 @@ export const ObjectiveInputSchema = Schema.Struct({
       }),
     ),
   ),
+  plannedSecondaryCount: Schema.optional(
+    Schema.NullOr(Schema.Number).pipe(
+      Schema.annotate({
+        description:
+          "Total number of secondary objectives you plan to establish in this initial plan (e.g. 5). The tool uses this count to detect accidental token cutoffs or omitted items, and alerts you if fewer items were received in 'secondaries'.",
+      }),
+    ),
+  ),
   topicKey: Schema.optional(
     Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
@@ -2612,7 +2673,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Union([FindingEvidenceInputSchema, Schema.String])).pipe(
       Schema.annotate({
         description:
-          "Typed evidence for a finding: { type: COMMAND_OUTPUT|QUERY_RESULT|LOG_EXCERPT|FILE_READ|SCREENSHOT, source } or a plain source string (treated as FILE_READ)",
+          "Typed evidence for a finding: { type: COMMAND_OUTPUT|QUERY_RESULT|LOG_EXCERPT|FILE_READ|SCREENSHOT, source } or a plain source string (treated as FILE_READ). If 'result' is omitted, a detailed source (>=15 chars) serves as fallback result.",
       }),
     ),
   ),
@@ -2642,7 +2703,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.String).pipe(
       Schema.annotate({
         description:
-          "Literal finding result (for 'add_finding'/'update_finding') or the current known state for an option (for 'add_option'/'update_option' — the live Result column)",
+          "Literal finding observation or output (>=15 chars, required for 'add_finding'/'update_finding' unless detailed in evidence.source) or the current known state for an option (live Result column)",
       }),
     ),
   ),
@@ -2748,7 +2809,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(DelegationInputSchema).pipe(
       Schema.annotate({
         description:
-          "Assessment of subagent delegation vs main-thread execution (for single update_secondary/add_secondary/update_tertiary)",
+          "Assessment of subagent delegation vs main-thread execution. MANDATORY when registering a finding ('add_finding'), required when transitioning objectives to 'exploring'/'resolved', and serves as default delegation in 'set_primary' if not provided per-secondary.",
       }),
     ),
   ),
@@ -2764,7 +2825,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Boolean).pipe(
       Schema.annotate({
         description:
-          "Pass true during presented_awaiting_confirmation to refine draft secondaries (add_secondary/update_secondary in pending) or update DoD without triggering a frozen rejection.",
+          "Pass true during presented_awaiting_confirmation to refine draft secondaries (add_secondary/update_secondary in pending), add findings (add_finding), or update DoD without triggering a frozen rejection.",
       }),
     ),
   ),
@@ -2772,7 +2833,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Boolean).pipe(
       Schema.annotate({
         description:
-          "Alias for 'draft'. Pass true during presented_awaiting_confirmation to refine plan drafts before user confirmation.",
+          "Alias for 'draft'. Pass true during presented_awaiting_confirmation to refine plan drafts (secondaries, findings, DoD) before user confirmation.",
       }),
     ),
   ),
@@ -2854,7 +2915,12 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   // Planning draft mutations (adding/updating secondary definitions in pending status, or refining DoD)
   // are allowed during presented_awaiting_confirmation if 'draft: true' or 'refinePlan: true' is passed.
   if (po?.status === "presented_awaiting_confirmation") {
-    const isDraftPlanAction = rawAction === "add_secondary" || rawAction === "add_secondaries" || rawAction === "update_dod" || rawAction === "proof_dod"
+    const isDraftPlanAction =
+      rawAction === "add_secondary" ||
+      rawAction === "add_secondaries" ||
+      rawAction === "update_dod" ||
+      rawAction === "proof_dod" ||
+      rawAction === "add_finding"
     const isDraftUpdateAction = rawAction === "update_secondary" || rawAction === "update_secondaries"
 
     const allowDraft = input.draft === true || input.allowDraft === true || input.refinePlan === true
@@ -2895,6 +2961,16 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         content: "Missing required parameters for set_primary (title and definitionOfDone are mandatory).",
       }
     }
+    if (input.delegation) {
+      const topDelErr = validateDelegationAssessment(input.delegation, "Top-level delegation")
+      if (topDelErr) {
+        return {
+          output: { success: false, message: `Delegation assessment rejected: ${topDelErr}`, tree: "" },
+          content: `Delegation assessment rejected: ${topDelErr}`,
+        }
+      }
+    }
+
     const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
     const dodCriteria = normalizeDoDInput(input.dodCriteria)
     const created = setPrimaryObjective(sessionID, title, dod, initialSecondaries, {
@@ -2907,14 +2983,45 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       for (let i = 0; i < input.secondaries.length; i++) {
         const item = input.secondaries[i]
         const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
+        const effectiveDelegation = item?.delegation ?? input.delegation
+        if (effectiveDelegation) {
+          const delErr = validateDelegationAssessment(effectiveDelegation, explicitId)
+          if (delErr) {
+            return {
+              output: { success: false, message: `Delegation assessment rejected for ${explicitId}: ${delErr}`, tree: "" },
+              content: `Delegation assessment rejected for ${explicitId}: ${delErr}`,
+            }
+          }
+        }
+      }
+
+      for (let i = 0; i < input.secondaries.length; i++) {
+        const item = input.secondaries[i]
+        const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : `SO-${i + 1}`
         const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || `Subtask ${i + 1}`
         const sRationale = item?.rationale?.trim() || item?.title?.trim() || "Planned subtask for primary objective"
+        const effectiveDelegation = item?.delegation ?? input.delegation
         addSecondaryObjective(sessionID, sTitle, sRationale, explicitId, {
           affectedResources: normalizeAffectedResources(item?.affectedResources),
           preconditions: normalizePreconditions(item?.preconditions),
-          delegation: item?.delegation,
+          delegation: effectiveDelegation,
         })
       }
+    }
+
+    const countProvided = Array.isArray(input.secondaries) ? input.secondaries.length : 0
+    const plannedCount = typeof input.plannedSecondaryCount === "number" ? input.plannedSecondaryCount : undefined
+    let countWarning: string | undefined
+    if (plannedCount !== undefined && plannedCount > 0 && countProvided < plannedCount) {
+      const missingCount = plannedCount - countProvided
+      const receivedRange = countProvided > 0 ? `SO-1..SO-${countProvided}` : "none"
+      countWarning =
+        `\n\n⚠️ [Protocol Warning - Incomplete Plan Admission]: You declared 'plannedSecondaryCount: ${plannedCount}', ` +
+        `but only ${countProvided} secondary objective(s) were received (${receivedRange}). ` +
+        `${missingCount} objective(s) (SO-${countProvided + 1}..SO-${plannedCount}) are missing (likely cut off mid-generation). ` +
+        `The received objectives were registered and the tree is currently FROZEN in 'presented_awaiting_confirmation'. ` +
+        `ACTION REQUIRED: Before presenting the plan to the user, add the remaining ${missingCount} objective(s) in batch ` +
+        `via action: 'add_secondary' with 'secondaries: [{ title: '...', rationale: '...', delegation: {...} }, ...]' and 'draft: true'.`
     }
 
     const isTestEnv = typeof process !== "undefined" && (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test" || Boolean(process.env.VITEST))
@@ -2941,17 +3048,18 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       presentPlan(sessionID, input.reason)
       const frozenTree = treeOf(sessionID)
       const message =
-        "Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval. Present the plan to the user and call action 'resume_plan' once confirmed."
+        "Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval. Present the plan to the user and call action 'resume_plan' once confirmed." +
+        (countWarning ?? "")
       return {
         output: { success: true, message, tree: frozenTree },
-        content: frozenTree,
+        content: frozenTree + (countWarning ?? ""),
       }
     }
 
     const tree = renderObjectiveTree(created)
     return {
-      output: { success: true, message: `Primary Objective and secondaries established.`, tree },
-      content: tree,
+      output: { success: true, message: `Primary Objective and secondaries established.` + (countWarning ?? ""), tree },
+      content: tree + (countWarning ?? ""),
     }
   }
 
@@ -3097,6 +3205,30 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         return {
           output: { success: false, message: collision, tree: treeOf(sessionID) },
           content: collision,
+        }
+      }
+    }
+
+    if (input.delegation) {
+      const topDelErr = validateDelegationAssessment(input.delegation, "Top-level delegation")
+      if (topDelErr) {
+        return {
+          output: { success: false, message: `Delegation assessment rejected: ${topDelErr}`, tree: treeOf(sessionID) },
+          content: `Delegation assessment rejected: ${topDelErr}`,
+        }
+      }
+    }
+    for (const item of items) {
+      const explicitId = (typeof item?.id === "string" && item.id.trim()) ? item.id.trim() : undefined
+      const sTitle = item?.title?.trim() || item?.rationale?.trim() || explicitId || "Subtask"
+      const effectiveDelegation = item?.delegation ?? input.delegation
+      if (effectiveDelegation) {
+        const delErr = validateDelegationAssessment(effectiveDelegation, explicitId ?? sTitle)
+        if (delErr) {
+          return {
+            output: { success: false, message: `Delegation assessment rejected for ${explicitId ?? sTitle}: ${delErr}`, tree: treeOf(sessionID) },
+            content: `Delegation assessment rejected for ${explicitId ?? sTitle}: ${delErr}`,
+          }
         }
       }
     }

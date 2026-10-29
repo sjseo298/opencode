@@ -2758,6 +2758,245 @@ describe("hierarchical-objectives plugin", () => {
       expect(toolEventResult.content).toContain("[Protocol Guidance]")
       expect(toolEventResult.content).toContain("warrants registering an epistemic finding via objective_manage(action: 'add_finding')")
     })
+
+    test("Improvement 1: add_finding in freeze with draft: true is permitted", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-freeze-draft-finding")
+
+      const setRes = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Freeze test",
+          definitionOfDone: "DoD",
+          presentPlan: true,
+          secondaries: [{ title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Main thread execution justified" } }],
+        },
+        { sessionID: sid },
+      )
+      expect(setRes.output.success).toBe(true)
+      expect(setRes.output.message).toContain("FROZEN")
+
+      // Attempt add_finding without draft -> rejected
+      const rejectRes = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Latent dead code bug",
+          result: "Dead code never executed in production environment",
+          soRef: "SO-1",
+          evidence: { type: "FILE_READ", source: "src/file.ts:20-30" },
+          delegation: { mode: "main", justification: "Verified by direct file inspection in main session" },
+          nextAction: "Remove dead code in SO-1",
+        },
+        { sessionID: sid },
+      )
+      expect(rejectRes.output.success).toBe(false)
+      expect(rejectRes.output.message).toContain("FROZEN")
+
+      // Attempt add_finding with draft: true -> accepted!
+      const draftRes = await tool.execute(
+        {
+          action: "add_finding",
+          draft: true,
+          title: "Latent dead code bug",
+          result: "Dead code never executed in production environment",
+          soRef: "SO-1",
+          evidence: { type: "FILE_READ", source: "src/file.ts:20-30" },
+          delegation: { mode: "main", justification: "Verified by direct file inspection in main session" },
+          nextAction: "Remove dead code in SO-1",
+        },
+        { sessionID: sid },
+      )
+      expect(draftRes.output.success).toBe(true)
+      expect(draftRes.output.tree).toContain("F-001")
+      expect(draftRes.output.tree).toContain("Latent dead code bug")
+    })
+
+    test("Improvement 3: findings with status 'deferred' or 'out_of_scope' do not block complete_primary", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-deferred-finding-closure")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Deferred finding test",
+          definitionOfDone: "All done",
+          presentPlan: false,
+          secondaries: [{ title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Direct execution justified" } }],
+        },
+        { sessionID: sid },
+      )
+
+      // Add a finding with status: 'out_of_scope'
+      const findRes = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Out of scope issue discovered",
+          result: "This issue belongs to a different repository",
+          status: "out_of_scope",
+          soRef: "SO-1",
+          evidence: "service/external.ts:10",
+          delegation: { mode: "main", justification: "Inspection performed in main thread" },
+          nextAction: "File upstream ticket later",
+        },
+        { sessionID: sid },
+      )
+      expect(findRes.output.success).toBe(true)
+
+      // Resolve SO-1
+      await tool.execute({ action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Executing SO-1 directly" } }, { sessionID: sid })
+      const resSo = await tool.execute({ action: "update_secondary", id: "SO-1", status: "resolved", validationProof: "Verified with exit code 0" }, { sessionID: sid })
+      expect(resSo.output.success).toBe(true)
+
+      // complete_primary should succeed despite out_of_scope finding
+      const compRes = await tool.execute({ action: "complete_primary", validationProof: "Everything verified" }, { sessionID: sid })
+      expect(compRes.output.success).toBe(true)
+    })
+
+    test("Improvement 4: delegation placeholder rejection and top-level inheritance in set_primary", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-delegation-placeholder")
+
+      // set_primary with placeholder in top-level delegation -> rejected!
+      const rejTop = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Test task",
+          definitionOfDone: "DoD criteria",
+          delegation: { mode: "main", justification: "placeholder" },
+          secondaries: [{ title: "SO-1", rationale: "R1" }],
+        },
+        { sessionID: sid },
+      )
+      expect(rejTop.output.success).toBe(false)
+      expect(rejTop.output.message).toContain("placeholder")
+
+      // set_primary with placeholder in secondary delegation -> rejected!
+      const rejItem = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Test task",
+          definitionOfDone: "DoD criteria",
+          secondaries: [{ title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "todo later" } }],
+        },
+        { sessionID: sid },
+      )
+      expect(rejItem.output.success).toBe(false)
+      expect(rejItem.output.message).toContain("placeholder")
+
+      // set_primary with valid top-level delegation -> inherited by secondaries
+      const okRes = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Test task",
+          definitionOfDone: "DoD criteria",
+          presentPlan: false,
+          delegation: { mode: "main", justification: "Valid justification with > 10 chars" },
+          secondaries: [{ title: "SO-1", rationale: "R1" }],
+        },
+        { sessionID: sid },
+      )
+      expect(okRes.output.success).toBe(true)
+      expect(okRes.output.tree).toContain("[main]")
+    })
+
+    test("Improvement 5: plannedSecondaryCount alerts about missing secondaries without failing", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-planned-count")
+
+      // LLM planned 5, only provided 2 (token truncation simulation)
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Truncation test",
+          definitionOfDone: "DoD",
+          presentPlan: true,
+          plannedSecondaryCount: 5,
+          secondaries: [
+            { title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Valid reason for task 1" } },
+            { title: "SO-2", rationale: "R2", delegation: { mode: "main", justification: "Valid reason for task 2" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(res.output.success).toBe(true)
+      expect(res.output.message).toContain("⚠️ [Protocol Warning - Incomplete Plan Admission]")
+      expect(res.output.message).toContain("plannedSecondaryCount: 5")
+      expect(res.output.message).toContain("only 2 secondary objective(s) were received")
+      expect(res.output.message).toContain("SO-3..SO-5")
+    })
+
+    test("Improvement 6: normalizeDoDInput merges multiple entries with the same ID in dodCriteria", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-dod-merge")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "DoD merge test",
+          definitionOfDone: "DoD",
+          presentPlan: false,
+          secondaries: [{ title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Valid justification 10ch" } }],
+        },
+        { sessionID: sid },
+      )
+
+      // Pass two objects for D1: one with statement and verifiableBy, another with satisfiedBy
+      const updateRes = await tool.execute(
+        {
+          action: "update_dod",
+          dodCriteria: [
+            { id: "D1", statement: "Grep version tags", verifiableBy: "grep -rn 'version' ." },
+            { id: "D1", satisfiedBy: ["SO-1"] },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(updateRes.output.success).toBe(true)
+      expect(updateRes.output.tree).toContain("Grep version tags")
+      expect(updateRes.output.tree).toContain("grep -rn 'version' .")
+      expect(updateRes.output.tree).toContain("SO-1")
+    })
+
+    test("Improvement 7: add_finding falls back to evidence.source when result is omitted", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-finding-fallback")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Fallback test",
+          definitionOfDone: "DoD",
+          presentPlan: false,
+          secondaries: [{ title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Valid justification 10ch" } }],
+        },
+        { sessionID: sid },
+      )
+
+      // add_finding without result but with detailed evidence.source (>= 15 chars)
+      const findRes = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Evidence source fallback finding",
+          soRef: "SO-1",
+          evidence: {
+            type: "FILE_READ",
+            source: "src/docker/Dockerfile:L20-30 showing pinned version 0.6.1.0 in COPY and RUN lines",
+          },
+          delegation: { mode: "main", justification: "Direct investigation in main thread" },
+          nextAction: "Fix the Dockerfile pin",
+        },
+        { sessionID: sid },
+      )
+      expect(findRes.output.success).toBe(true)
+      expect(findRes.output.tree).toContain("F-001")
+      expect(findRes.output.tree).toContain("src/docker/Dockerfile:L20-30")
+    })
   })
 
   async function setupPluginInstanceLocal() {
