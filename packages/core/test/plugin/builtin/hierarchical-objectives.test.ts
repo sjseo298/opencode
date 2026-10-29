@@ -2596,6 +2596,168 @@ describe("hierarchical-objectives plugin", () => {
       expect(sessionStore[sid].metadata.objectives.title).toBe("Formal Metadata Sync")
       expect(sessionStore[sid].metadata.objectives.secondaries.length).toBe(1)
     })
+
+    test("finding lifecycle: open/closed status, smart default soRef, and tree rendering", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("finding-status-lifecycle")
+      const delegation = { mode: "main", justification: "Local diagnostics in primary thread" }
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Lifecycle Task",
+          definitionOfDone: "Verified",
+          secondaries: [{ title: "Diagnose latency", rationale: "Investigate latency root cause", delegation }],
+        },
+        { sessionID: sid },
+      )
+
+      // Transition SO-1 to exploring
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", delegation },
+        { sessionID: sid },
+      )
+
+      // Add finding WITHOUT specifying soRef — should auto-default to active exploring SO ("SO-1")
+      const addRes = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Database connection pool exhausted",
+          evidence: "connection pool reached 100/100 limit",
+          result: "Max connections 100 exhausted under load",
+          nextAction: "Increase pool size to 200",
+          delegation,
+        },
+        { sessionID: sid },
+      )
+      expect(addRes.output.success).toBe(true)
+
+      const po1 = getObjectives(sid)
+      expect(po1?.findings?.length).toBe(1)
+      const finding1 = po1?.findings?.[0]
+      expect(finding1?.soRef).toBe("SO-1")
+      expect(finding1?.status).toBe("open")
+      expect(addRes.content).toContain("- **F-001** [SO-1] [main] Database connection pool exhausted")
+      expect(addRes.content).toContain("(OPEN)")
+
+      // Update finding to closed
+      const updateRes = await tool.execute(
+        {
+          action: "update_finding",
+          findingId: "F-001",
+          status: "closed",
+        },
+        { sessionID: sid },
+      )
+      expect(updateRes.output.success).toBe(true)
+      const po2 = getObjectives(sid)
+      expect(po2?.findings?.[0].status).toBe("closed")
+      expect(updateRes.content).toContain("CLOSED")
+    })
+
+    test("secondary objective cannot be resolved while associated findings remain OPEN", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("open-findings-gate")
+      const delegation = { mode: "main", justification: "Local gate testing in primary thread" }
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Gate Task",
+          definitionOfDone: "Verified",
+          secondaries: [{ title: "Solve crash", rationale: "Fix panic on startup", delegation }],
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", delegation },
+        { sessionID: sid },
+      )
+
+      // Record an open finding associated with SO-1
+      await tool.execute(
+        {
+          action: "add_finding",
+          soRef: "SO-1",
+          title: "Null pointer dereference on config load",
+          evidence: "crash.log line 42",
+          result: "Config pointer is null when env missing",
+          nextAction: "Provide fallback default config",
+          delegation,
+        },
+        { sessionID: sid },
+      )
+
+      // Attempting to resolve SO-1 while F-001 is OPEN must be REJECTED
+      const failResolve = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "bun test -> PASS",
+        },
+        { sessionID: sid },
+      )
+      expect(failResolve.output.success).toBe(false)
+      expect(failResolve.output.message).toContain("finding(s) [F-001] associated with this objective are still OPEN")
+
+      // Close the finding
+      await tool.execute(
+        {
+          action: "update_finding",
+          findingId: "F-001",
+          status: "closed",
+        },
+        { sessionID: sid },
+      )
+
+      // Now resolving SO-1 succeeds
+      const okResolve = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "bun test -> PASS",
+        },
+        { sessionID: sid },
+      )
+      expect(okResolve.output.success).toBe(true)
+    })
+
+    test("micro-nudge in update_secondary and failure auto-nudge in tool execute.after", async () => {
+      const { getRegisteredTool, triggerToolHook } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("nudges-test")
+      const delegation = { mode: "main", justification: "Local testing in primary thread" }
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Nudge Verification",
+          definitionOfDone: "Verified",
+          secondaries: [{ title: "Investigative step", rationale: "Diagnostic task", delegation }],
+        },
+        { sessionID: sid },
+      )
+
+      // Activating SO-1 to exploring returns the micro-nudge in content
+      const exploringRes = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", delegation },
+        { sessionID: sid },
+      )
+      expect(exploringRes.content).toContain("💡 Protocol Guidance [SO-1]")
+      expect(exploringRes.content).toContain("add_finding")
+      expect(exploringRes.content).toContain("add_tertiary")
+
+      // Simulating a failed tool execution triggers the reflexive failure auto-nudge
+      const toolEventResult = { content: "Error: build failed with exit code 1", output: { exitCode: 1 } }
+      await triggerToolHook("shell", { command: "bun build" }, sid, toolEventResult)
+      expect(toolEventResult.content).toContain("[Protocol Guidance]")
+      expect(toolEventResult.content).toContain("warrants registering an epistemic finding via objective_manage(action: 'add_finding')")
+    })
   })
 
   async function setupPluginInstanceLocal() {
@@ -2642,9 +2804,9 @@ describe("hierarchical-objectives plugin", () => {
         await h({ tool: toolName, input, sessionID })
       }
     }
-    const triggerToolHook = async (toolName: string, input: any, sessionID: string) => {
+    const triggerToolHook = async (toolName: string, input: any, sessionID: string, result?: any) => {
       for (const h of toolHooks["execute.after"] ?? []) {
-        await h({ tool: toolName, input, sessionID })
+        await h({ tool: toolName, input, sessionID, result })
       }
     }
     return { sessionHooks, toolHooks, sessionStore, getRegisteredTool: () => registeredTool, triggerToolHook, triggerToolBefore }

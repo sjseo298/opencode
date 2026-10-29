@@ -197,7 +197,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Leaving open objectives in the graphical interface when concluding is strictly unacceptable (status `presented_awaiting_confirmation` is the only approved paused state). You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
   "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. MANDATORY DELEGATION REASONING RULE: every secondary objective, tertiary objective, AND finding is a candidate for delegation; the agent MUST explicitly evaluate and record its delegation decision (`delegation: { mode: 'main' | 'subagent', justification: '...' }`). Delegation to subagents is CRITICAL TO PRESERVE YOUR CONTEXT WINDOW: executing context-heavy, repetitive, or exploratory tasks in the main session rapidly exhausts available context tokens. Delegation assessment is MANDATORY when transitioning an objective to 'exploring' or 'resolved', and when registering any finding via 'add_finding'. The decision ([main] or [subagent]) is displayed compactly beside each objective and finding in the objective tree and sidebar. Delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists (`max_subagents = total_slots - 1`), which protects your primary session's context; execute in the main thread only when the task is small or tightly coupled, always recording the concrete justification upon moving to `exploring` (no blind main-thread execution). CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
   "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
-  "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
+  "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Newly created findings start in 'open' status and auto-associate with the active Secondary Objective (soRef); NO secondary objective can be resolved while it has associated OPEN findings (close them via action: 'update_finding' with status: 'closed'). Furthermore, no Primary Objective can close while any finding in the tree remains OPEN. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
   "13. Options & Closure: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. The Primary Objective CANNOT be completed while any option remains in 'PENDING' or 'EXPLORING' status — all options must reach a definitive conclusion (SUCCESSFUL, DISCARDED, or CANCELLED) before complete_primary.",
   "14. Definition of Done: decompose it into verifiable criteria (array of objects in 'dodCriteria' with separate fields { id, statement, verifiableBy, satisfiedBy, proofRef }, managed with action: 'update_dod' or 'proof_dod'). Criteria listing resolved secondary objectives in 'satisfiedBy' automatically inherit proofRef upon SO resolution. The Primary Objective cannot be resolved while any criterion lacks proofRef. The exact property name for proof is strictly 'proofRef'. Direct criterion proof assignment is supported via action 'proof_dod' (id + proofRef) or passing 'dodProofs: { D1: ... }' directly in 'complete_primary'. When a finding invalidates a criterion, edit the criterion with action: 'update_dod' at the moment of discovery — never reinterpret silently at the end.",
   "15. Compliance audit: the tool runs a mechanical audit on every resolved/blocked/discarded transition and on complete_primary (typed proof present, no unvalidated root-cause phrasing such as 'should pass' / 'logically' / 'the root cause is' without adjacent execution evidence, EXPLORING options have a live Result, findings are complete). A failed audit REJECTS the transition with the violation list — fix the violations and retry. Run `action: 'audit'` on demand to inspect the current violations.",
@@ -535,6 +535,21 @@ export function updateSecondaryObjective(
             .map((p) => `${p.actionClass} (requires: ${p.requires.join(", ")})`)
             .join("; ")}. Pass 'preconditionsMet' listing each satisfied actionClass.`,
         }
+      }
+    }
+
+    // Gate: No secondary objective can be resolved while it has associated OPEN findings
+    const openFindings = (po.findings ?? []).filter(
+      (f) =>
+        f.lifecycle !== "SUBSUMED" &&
+        f.soRef.toLowerCase() === target.id.toLowerCase() &&
+        f.status === "open",
+    )
+    if (openFindings.length > 0) {
+      const ids = openFindings.map((f) => f.id).join(", ")
+      return {
+        success: false,
+        error: `Cannot mark ${id} as resolved: finding(s) [${ids}] associated with this objective are still OPEN. Close them with action 'update_finding' (findingId, status: 'closed') before resolving.`,
       }
     }
 
@@ -909,6 +924,7 @@ export function addFinding(
     seeAlso?: string[]
     supersedes?: string[]
     spawnedBy?: string
+    status?: string
   },
 ): { success: boolean; error?: string; warning?: string; finding?: Finding } {
   const po = sessionObjectives.get(sessionID)
@@ -916,7 +932,10 @@ export function addFinding(
     return { success: false, error: `No active objective tree found for session ${sessionID}. Call 'set_primary' first.` }
   }
 
-  const soRef = (input.soRef ?? "PO").trim()
+  // Smart default for soRef: active exploring SO first, then "PO"
+  const activeSoId = po.secondaries.find((s) => s.status === "exploring")?.id
+  const defaultSoRef = activeSoId ?? "PO"
+  const soRef = (input.soRef?.trim() || defaultSoRef)
   if (soRef !== "PO" && !po.secondaries.some((s) => s.id.toLowerCase() === soRef.toLowerCase())) {
     return { success: false, error: `Finding soRef '${soRef}' does not match any secondary objective id (or 'PO').` }
   }
@@ -986,6 +1005,8 @@ export function addFinding(
   }
 
   const now = Date.now()
+  const rawStatus = input.status?.trim().toLowerCase()
+  const initialStatus = rawStatus === "closed" || rawStatus === "resolved" ? "closed" : "open"
   const finding: Finding = {
     id: nextFindingId(po.findings),
     soRef,
@@ -999,6 +1020,7 @@ export function addFinding(
     supersedes: input.supersedes ?? [],
     spawnedBy: input.spawnedBy,
     lifecycle: "NEW",
+    status: initialStatus,
     createdAt: now,
     updatedAt: now,
   }
@@ -1026,6 +1048,8 @@ export function updateFinding(
     seeAlso?: string[]
     supersedes?: string[]
     subsumedBy?: string
+    status?: string
+    soRef?: string
     impactOnOption?: { optionId: string; newStatus: OptionStatus; reason: string }
   },
 ): { success: boolean; error?: string; finding?: Finding } {
@@ -1046,6 +1070,20 @@ export function updateFinding(
     if (updates.title?.trim()) finding.title = updates.title.trim()
     if (updates.result?.trim()) finding.result = updates.result.trim()
     if (updates.nextAction?.trim()) finding.nextAction = updates.nextAction.trim()
+    if (updates.status !== undefined) {
+      const norm = updates.status.trim().toLowerCase()
+      if (norm === "closed" || norm === "resolved") {
+        finding.status = "closed"
+      } else if (norm === "open") {
+        finding.status = "open"
+      }
+    }
+    if (updates.soRef?.trim()) {
+      const targetSo = updates.soRef.trim()
+      if (targetSo === "PO" || po.secondaries.some((s) => s.id.toLowerCase() === targetSo.toLowerCase())) {
+        finding.soRef = targetSo
+      }
+    }
     if (updates.delegation !== undefined) {
       if (updates.delegation) {
         const mode = updates.delegation.mode
@@ -1779,6 +1817,7 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
     lines.push(``, `**Findings:**`)
     for (const f of activeFindings) {
       const refs: string[] = []
+      refs.push((f.status ?? "open").toUpperCase())
       if (f.seeAlso.length > 0) refs.push(`see also ${f.seeAlso.join(", ")}`)
       if (f.lifecycle !== "NEW") refs.push(f.lifecycle)
       const fDelBadge = f.delegation ? ` [${f.delegation.mode}]` : ""
@@ -1863,7 +1902,8 @@ export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
   if (activeFindings.length > 0) {
     lines.push("### Findings (preserve IDs, evidence and next actions)")
     for (const f of activeFindings) {
-      lines.push(`- [${f.id}] [${f.soRef}] ${f.title} (Evidence: ${f.evidence.type} ${f.evidence.source}; Result: ${f.result}; Next: ${f.nextAction})`)
+      const fStatus = (f.status ?? "open").toUpperCase()
+      lines.push(`- [${f.id}] [${f.soRef}] [${fStatus}] ${f.title} (Evidence: ${f.evidence.type} ${f.evidence.source}; Result: ${f.result}; Next: ${f.nextAction})`)
     }
     lines.push("")
   }
@@ -2359,6 +2399,12 @@ const SecondaryStatusSchema = Schema.Union([
   Schema.Literal("discarded"),
   Schema.Literal("cancelled"),
 ])
+const FindingStatusSchema = Schema.Union([
+  Schema.Literal("open"),
+  Schema.Literal("closed"),
+  Schema.Literal("OPEN"),
+  Schema.Literal("CLOSED"),
+])
 const OptionStatusSchema = Schema.Union([
   Schema.Literal("PENDING"),
   Schema.Literal("EXPLORING"),
@@ -2500,10 +2546,10 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   status: Schema.optional(
-    Schema.NullOr(SecondaryStatusSchema).pipe(
+    Schema.NullOr(Schema.Union([SecondaryStatusSchema, FindingStatusSchema])).pipe(
       Schema.annotate({
         description:
-          "New status for secondary objective: 'pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled'",
+          "New status for secondary objective ('pending', 'exploring', 'blocked', 'resolved', 'discarded', 'cancelled') or finding ('open', 'closed')",
       }),
     ),
   ),
@@ -3185,13 +3231,18 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         ? " All secondary objectives are resolved! Call objective_manage with action: 'complete_primary' to formally close the Primary Objective before presenting your final response."
         : ""
 
+    const exploringItem = items.find((i: any) => i.status === "exploring")
+    const exploringNotice = exploringItem
+      ? `\n\n💡 Protocol Guidance [${exploringItem.id ?? input.id ?? "active objective"}]: If problems, unexpected blockers, or key discoveries arise, analyze whether they warrant registering via objective_manage(action: 'add_finding') before attempting fixes. If this objective proves too broad, split it via action 'add_tertiary'.`
+      : ""
+
     return {
       output: {
         success: true,
-        message: `Secondary objective(s) successfully updated.${reopenNotice}${completionNotice}`,
+        message: `Secondary objective(s) successfully updated.${reopenNotice}${completionNotice}${exploringNotice ? ` ${exploringNotice.trim()}` : ""}`,
         tree,
       },
-      content: tree,
+      content: tree + exploringNotice,
     }
   }
 
@@ -3315,6 +3366,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       result: input.result,
       nextAction: input.nextAction,
       delegation: input.delegation,
+      status: input.status || undefined,
       impactOnOption:
         input.optionId && input.optionStatus
           ? { optionId: input.optionId, newStatus: input.optionStatus, reason: input.reason ?? "" }
@@ -3350,6 +3402,8 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       nextAction: input.nextAction,
       delegation: input.delegation,
       evidence: input.evidence,
+      status: input.status || undefined,
+      soRef: input.soRef || undefined,
       seeAlso: Array.isArray(input.seeAlso) ? input.seeAlso : undefined,
       supersedes: Array.isArray(input.supersedes) ? input.supersedes : undefined,
       subsumedBy: input.subsumedBy,
@@ -3885,6 +3939,30 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
               existingSO.status = "resolved"
               existingSO.validationProof = existingSO.validationProof || "Marked completed via todowrite"
             }
+          }
+        }
+      }
+
+      // Reflexive failure auto-nudge: if a tool execution encounters an error/failure,
+      // append a lightweight reminder inviting the agent to evaluate whether to register an epistemic finding.
+      const po = sessionObjectives.get(sessionID)
+      if (po && po.status === "exploring" && event.tool !== "objective_manage") {
+        let isFailure = false
+        if ((event as any).status === "error" || (event as any).error) {
+          isFailure = true
+        } else if (event.tool === "shell") {
+          const content = typeof (event as any).result?.content === "string" ? (event as any).result.content : ""
+          const output = (event as any).result?.output
+          const exitCode = typeof output?.exitCode === "number" ? output.exitCode : undefined
+          if ((exitCode !== undefined && exitCode !== 0) || content.includes("Exited with code") || /error:|command not found|fatal:|FAIL:/i.test(content)) {
+            isFailure = true
+          }
+        }
+
+        if (isFailure && (event as any).result && typeof (event as any).result.content === "string") {
+          const nudge = "\n\n💡 [Protocol Guidance]: A command or tool reported an issue/failure. Analyze whether this symptom or blocker warrants registering an epistemic finding via objective_manage(action: 'add_finding') before attempting a fix."
+          if (!(event as any).result.content.includes("[Protocol Guidance]")) {
+            ;(event as any).result.content += nudge
           }
         }
       }

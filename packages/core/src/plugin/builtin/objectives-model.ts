@@ -21,6 +21,10 @@ export interface FindingEvidence {
 
 export type FindingLifecycle = "NEW" | "EXTENDED" | "SUBSUMED"
 
+export type FindingStatus = "open" | "closed"
+
+export const FINDING_STATUSES: FindingStatus[] = ["open", "closed"]
+
 export interface FindingImpact {
   optionId: string
   newStatus: OptionStatus
@@ -40,6 +44,7 @@ export interface Finding {
   supersedes: string[]
   spawnedBy?: string
   lifecycle: FindingLifecycle
+  status?: FindingStatus // "open" | "closed" (defaults to "open")
   createdAt: number
   updatedAt: number
 }
@@ -218,6 +223,15 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
       else if (UNVALIDATED_CAUSE_PATTERN.test(proof) && !ARTIFACT_PATTERN.test(proof)) {
         violations.push(`${obj.id}: proof asserts a root cause without execution evidence ("${proof.slice(0, 80)}")`)
       }
+      const openForObj = (doc.findings ?? []).filter(
+        (f) =>
+          f.lifecycle !== "SUBSUMED" &&
+          f.soRef?.toLowerCase() === obj.id.toLowerCase() &&
+          f.status === "open",
+      )
+      if (openForObj.length > 0) {
+        violations.push(`${obj.id}: resolved but has open finding(s) [${openForObj.map((f) => f.id).join(", ")}]`)
+      }
     }
     if (obj.status === "blocked") {
       const blocker = obj.blocker?.trim() ?? ""
@@ -256,6 +270,17 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
     }
     if (doc.status === "resolved" && (option.status === "PENDING" || option.status === "EXPLORING")) {
       violations.push(`${option.id}: Primary Objective cannot be resolved while option is still in '${option.status}' status (must be SUCCESSFUL, DISCARDED, or CANCELLED)`)
+    }
+  }
+
+  if (doc.status === "resolved") {
+    const unclosedFindings = (doc.findings ?? []).filter(
+      (f) => f.lifecycle !== "SUBSUMED" && f.status === "open",
+    )
+    if (unclosedFindings.length > 0) {
+      violations.push(
+        `Primary Objective cannot be resolved while finding(s) [${unclosedFindings.map((f) => f.id).join(", ")}] are still OPEN (must be closed via update_finding)`,
+      )
     }
   }
 
@@ -567,7 +592,8 @@ export function renderProjection(doc: ProjectionDocLike): string {
   } else {
     for (const finding of findings) {
       const fDelTag = finding.delegation ? ` [${finding.delegation.mode}]` : ""
-      lines.push(`### ${finding.id} [${finding.soRef}]${fDelTag} ${finding.title}`)
+      const fStatus = (finding.status ?? "open").toUpperCase()
+      lines.push(`### ${finding.id} [${finding.soRef}] [${fStatus}]${fDelTag} ${finding.title}`)
       lines.push(`- Evidence: ${finding.evidence.type} — ${finding.evidence.source} (${new Date(finding.evidence.capturedAt).toISOString()})`)
       lines.push(`- Result: ${finding.result}`)
       if (finding.impactOnOption) {
