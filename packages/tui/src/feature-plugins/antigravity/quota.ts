@@ -1,5 +1,18 @@
 import type { AccountSummary } from "./account-rpc.js"
 
+/** ANSI color helpers */
+const ANSI = {
+  reset: "\x1b[0m",
+  dim: "\x1b[2m",
+  bold: "\x1b[1m",
+  cyan: "\x1b[36m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  red: "\x1b[31m",
+  white: "\x1b[37m",
+  gray: "\x1b[90m",
+} as const
+
 /** Format a cached quota and reset countdown for an account menu row. */
 export function formatQuotaDescription(quota: AccountSummary["quota"], now = Date.now()): string {
   if (!quota) return "no quota data"
@@ -18,13 +31,26 @@ export function formatQuotaDescription(quota: AccountSummary["quota"], now = Dat
   return `${description} · resets in ${duration}`
 }
 
-/** Format progress bar with solid and shaded block characters, exactly 50 blocks wide. */
-export function renderQuotaProgressBar(fraction: number, width = 50): string {
+/** Get ANSI color code based on quota fraction (green > 50%, yellow 20-50%, red <= 20%). */
+export function getQuotaColorCode(fraction: number): string {
+  if (fraction > 0.5) return ANSI.green
+  if (fraction > 0.2) return ANSI.yellow
+  return ANSI.red
+}
+
+/** Format progress bar with solid and shaded block characters, exactly 50 blocks wide with dynamic colors. */
+export function renderQuotaProgressBar(fraction: number, width = 50, colorize = true): string {
   const clamped = Math.max(0, Math.min(1, fraction))
   const filled = Math.round(clamped * width)
   const empty = width - filled
   const percent = (clamped * 100).toFixed(2)
-  return `[${"█".repeat(filled)}${"░".repeat(empty)}] ${percent}%`
+
+  if (!colorize) {
+    return `[${"█".repeat(filled)}${"░".repeat(empty)}] ${percent}%`
+  }
+
+  const fg = getQuotaColorCode(clamped)
+  return `[${fg}${"█".repeat(filled)}${ANSI.dim}${"░".repeat(empty)}${ANSI.reset}] ${fg}${percent}%${ANSI.reset}`
 }
 
 /** Format reset countdown duration like "Refreshes in 94h 37m" or "Quota available". */

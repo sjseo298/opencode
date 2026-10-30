@@ -344,7 +344,8 @@ export function createDialogApi(
     alert(options) {
       return new Promise<void>((resolve) => {
         const done = settle(resolve)
-        api.show(() => <DialogAlert title={options.title} message={options.message} onConfirm={done} />, done)
+        if (options.size) dialog.setSize(options.size)
+        api.show(() => <DialogAlert title={options.title} message={options.message} size={options.size} onConfirm={done} />, done)
       })
     },
     confirm(options) {

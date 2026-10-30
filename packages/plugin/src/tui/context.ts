@@ -334,6 +334,7 @@ export interface DialogOptions {
 export interface DialogAlertOptions {
   readonly title: string
   readonly message: string
+  readonly size?: DialogSize
 }
 
 export interface DialogConfirmOptions {

@@ -1,16 +1,21 @@
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { DialogHeader, DialogLayout, useDialog } from "./dialog"
+import { DialogHeader, DialogLayout, useDialog, type DialogSize } from "./dialog"
 
 export type DialogAlertProps = {
   title: string
   message: string
   onConfirm?: () => void
+  size?: DialogSize
 }
 
 export function DialogAlert(props: DialogAlertProps) {
   const dialog = useDialog()
   const theme = useTheme().surface("dialog")
+
+  if (props.size) {
+    dialog.setSize(props.size)
+  }
 
   const confirm = () => {
     props.onConfirm?.()

@@ -12,7 +12,7 @@ interface AccountMenuContext {
   readonly ui: {
     readonly dialog: {
       prompt(options: { title: string; description?: string }): Promise<string | undefined>
-      alert(options: { title: string; message: string }): Promise<void>
+      alert(options: { title: string; message: string; size?: "medium" | "large" | "xlarge" }): Promise<void>
       confirm(options: { title: string; message: string }): Promise<boolean | undefined>
       select<Value>(options: { title: string; options: ReadonlyArray<{ title: string; value: Value; description?: string; category?: string; disabled?: boolean }> }): Promise<Value | undefined>
     }
@@ -112,7 +112,7 @@ export const AntigravityTuiPlugin = {
         (account) => id || !account.disabled,
       )
       if (reports.length <= 1) {
-        await ctx.ui.dialog.alert({ title: "Antigravity quotas", message: reports[0]?.report ?? result.report })
+        await ctx.ui.dialog.alert({ title: "Antigravity quotas", message: reports[0]?.report ?? result.report, size: "large" })
         return
       }
       while (true) {
@@ -126,7 +126,7 @@ export const AntigravityTuiPlugin = {
         })
         const report = reports.find((account) => account.id === selected)
         if (!report) return
-        await ctx.ui.dialog.alert({ title: report.email, message: report.report })
+        await ctx.ui.dialog.alert({ title: report.email, message: report.report, size: "large" })
       }
     }
 

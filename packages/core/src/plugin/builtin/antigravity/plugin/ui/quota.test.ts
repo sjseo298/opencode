@@ -4,18 +4,26 @@ import {
   formatQuotaCountdown,
   wrapCalloutText,
   formatAccountQuotaReport,
+  getQuotaColorCode,
 } from "./quota.ts"
 
 describe("Antigravity Quota UI Formatter", () => {
   test("renders 50-width progress bar accurately", () => {
-    const bar = renderQuotaProgressBar(0.391)
+    const bar = renderQuotaProgressBar(0.391, 50, false)
     expect(bar).toBe("[████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 39.10%")
 
-    const full = renderQuotaProgressBar(1.0)
+    const full = renderQuotaProgressBar(1.0, 50, false)
     expect(full).toBe("[██████████████████████████████████████████████████] 100.00%")
 
-    const empty = renderQuotaProgressBar(0)
+    const empty = renderQuotaProgressBar(0, 50, false)
     expect(empty).toBe("[░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 0.00%")
+  })
+
+  test("computes dynamic colors by threshold: green > 50%, yellow 20-50%, red <= 20%", () => {
+    expect(getQuotaColorCode(0.8)).toBe("\x1b[32m") // green
+    expect(getQuotaColorCode(0.35)).toBe("\x1b[33m") // yellow
+    expect(getQuotaColorCode(0.15)).toBe("\x1b[31m") // red
+    expect(getQuotaColorCode(0.0)).toBe("\x1b[31m") // red
   })
 
   test("formats countdown times", () => {
@@ -103,17 +111,17 @@ describe("Antigravity Quota UI Formatter", () => {
     expect(report).toContain("GEMINI MODELS")
     expect(report).toContain("Models within this group: Gemini Flash, Gemini Pro")
     expect(report).toContain("Weekly Limit Remaining")
-    expect(report).toContain("[████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 39.10%")
+    expect(report).toContain("39.10%")
     expect(report).toContain("Refreshes in 94h 37m")
     expect(report).toContain("Five Hour Limit Remaining")
-    expect(report).toContain("[██████████████████████████████████████████░░░░░░░░] 83.17%")
+    expect(report).toContain("83.17%")
     expect(report).toContain("Refreshes in 3h 17m")
     expect(report).toContain("CLAUDE AND GPT MODELS")
     expect(report).toContain("Models within this group: Claude Opus, Claude Sonnet, GPT-OSS")
     expect(report).toContain("Quota available")
     expect(report).toContain("GEMINI 4 ARGON")
     expect(report).toContain("Gemini 4 Argon Weekly Limit")
-    expect(report).toContain("[█████████████████████████████████████████████░░░░░] 90.74%")
+    expect(report).toContain("90.74%")
     expect(report).toContain("Refreshes in 94h 56m")
     expect(report).toContain("  │Within each group, models share a weekly limit")
   })
