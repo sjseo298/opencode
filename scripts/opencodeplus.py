@@ -1689,15 +1689,18 @@ def action_select_model() -> None:
         if filter_text:
             hint += " · f sin texto limpia el filtro"
         console.print(f"\n  [dim]Navegación: {nav} | {hint}[/dim]\n")
+        return page
 
     page = 0
-    render_page(page)
+    page = render_page(page)
 
     while True:
         raw = Prompt.ask("  ¿Número de modelo o filtro?")
         cmd = (raw or "").strip().lower()
         models = filtered_models()
         num_pages = max(1, (len(models) + page_size - 1) // page_size)
+        if not isinstance(page, int):
+            page = 0
 
         if cmd in ("q", "quit"):
             console.print("[yellow]⚠ Cancelado.[/]")
@@ -1705,7 +1708,7 @@ def action_select_model() -> None:
         elif cmd in ("f", "/", "filter", "filtrar"):
             filter_text = (Prompt.ask("  Filtro por nombre (Enter para limpiar)") or "").strip()
             page = 0
-            render_page(page)
+            page = render_page(page)
             continue
         elif cmd in ("n", "next"):
             page = render_page(min(page + 1, num_pages - 1))
@@ -1739,7 +1742,7 @@ def action_select_model() -> None:
         except ValueError:
             filter_text = (raw or "").strip()
             page = 0
-            render_page(page)
+            page = render_page(page)
 
 
 def action_run_build() -> None:
