@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-opencodeplus — Menú interactivo para gestionar modelos de LLM locales.
+opencodeplus — Menú interactivo para gestionar modelos de LLM locales y de proveedores de OpenCode.
 
-Consulta LlamaCPP y LM Studio, genera la configuración de opencode,
-compara con la actual y actualiza si hay cambios.
+Consulta LlamaCPP, LM Studio y proveedores habilitados en OpenCode (GitHub Copilot, Google, etc.),
+genera la configuración de opencode, compara con la actual y actualiza si hay cambios.
 
 Requiere: pip install rich
 """
 
+import base64
 import json
 import os
 import glob
@@ -1428,36 +1429,169 @@ def action_sync_models() -> None:
         action_sync_model(server, url, extractor)
 
 
-def action_select_model() -> None:
-    """Select the default model from the user config."""
-    config = load_user_config()
-    providers = config.get("provider", {})
+def fetch_opencode_service_models() -> Optional[list[dict]]:
+    """Fetch model list from OpenCode daemon API (/api/model)."""
+    import urllib.request
 
-    if not providers:
-        console.print("[yellow]⚠ No hay proveedores configurados.[/]")
-        return
+    try:
+        status_proc = subprocess.run(
+            ["opencode", "service", "status"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if status_proc.returncode != 0 or not status_proc.stdout.strip():
+            return None
+        base_url = status_proc.stdout.strip()
 
-    all_models: list[dict] = []
-    for provider_name, provider_data in providers.items():
-        for model_id, model_data in provider_data.get("models", {}).items():
-            inner = model_data if isinstance(model_data, dict) else {}
-            modalities = inner.get("modalities", {})
-            author = inner.get("author", "")
-            all_models.append({
-                "provider": provider_name,
-                "id": model_id,
-                "name": inner.get("name", model_id),
+        pw_proc = subprocess.run(
+            ["opencode", "service", "get", "password"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        password = pw_proc.stdout.strip() if pw_proc.returncode == 0 else ""
+
+        req = urllib.request.Request(f"{base_url}/api/model")
+        if password:
+            auth_str = base64.b64encode(f"opencode:{password}".encode()).decode()
+            req.add_header("Authorization", f"Basic {auth_str}")
+
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                return data["data"]
+    except Exception:
+        pass
+    return None
+
+
+def fetch_opencode_cli_models() -> Optional[list[str]]:
+    """Fetch model identifiers using `opencode models` CLI."""
+    try:
+        proc = subprocess.run(
+            ["opencode", "models"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return [line.strip() for line in proc.stdout.strip().splitlines() if line.strip()]
+    except Exception:
+        pass
+    return None
+
+
+def fetch_all_available_models(config: dict) -> list[dict]:
+    """Gather all models from OpenCode service/CLI and configured providers."""
+    models_map: dict[tuple[str, str], dict] = {}
+
+    # 1. Try querying OpenCode service API for rich model information
+    api_models = fetch_opencode_service_models()
+    if api_models:
+        for m in api_models:
+            if not isinstance(m, dict):
+                continue
+            if not m.get("enabled", True):
+                continue
+            prov = m.get("providerID", "")
+            mid = m.get("id", "")
+            if not prov or not mid:
+                continue
+            caps = m.get("capabilities", {}) if isinstance(m.get("capabilities"), dict) else {}
+            limits = m.get("limit", {}) if isinstance(m.get("limit"), dict) else {}
+            inputs = caps.get("input", []) if isinstance(caps.get("input"), list) else []
+            variants = m.get("variants", []) if isinstance(m.get("variants"), list) else []
+            author = m.get("author") or infer_author_from_model_id(mid) or m.get("family", "") or prov
+
+            models_map[(prov, mid)] = {
+                "provider": prov,
+                "id": mid,
+                "name": m.get("name", mid),
                 "author": author,
-                "ctx": inner.get("limit", {}).get("context", 0),
-                "output": inner.get("limit", {}).get("output", 0),
-                "tool_call": inner.get("tool_call", False),
-                "attachment": inner.get("attachment", False),
-                "reasoning": inner.get("reasoning", False),
-                "modalities": "/".join(modalities.get("input", [])) if modalities else "—",
-            })
+                "ctx": limits.get("context", 0),
+                "output": limits.get("output", 0),
+                "tool_call": bool(caps.get("tools", False)),
+                "attachment": bool("pdf" in inputs or "image" in inputs),
+                "reasoning": bool(variants or caps.get("reasoning", False)),
+                "modalities": "/".join(inputs) if inputs else "—",
+            }
+    else:
+        # Fallback to `opencode models` CLI
+        cli_models = fetch_opencode_cli_models()
+        if cli_models:
+            for item in cli_models:
+                if "/" in item:
+                    prov, mid = item.split("/", 1)
+                    models_map[(prov, mid)] = {
+                        "provider": prov,
+                        "id": mid,
+                        "name": mid,
+                        "author": infer_author_from_model_id(mid) or prov,
+                        "ctx": 0,
+                        "output": 0,
+                        "tool_call": False,
+                        "attachment": False,
+                        "reasoning": False,
+                        "modalities": "—",
+                    }
+
+    # 2. Merge/enrich with models from user config (e.g. custom llamacpp / lmstudio)
+    providers = config.get("provider", {})
+    if isinstance(providers, dict):
+        for provider_name, provider_data in providers.items():
+            if not isinstance(provider_data, dict):
+                continue
+            models_dict = provider_data.get("models", {})
+            if not isinstance(models_dict, dict):
+                continue
+            for model_id, model_data in models_dict.items():
+                inner = model_data if isinstance(model_data, dict) else {}
+                modalities = inner.get("modalities", {})
+                author = inner.get("author", "")
+                key = (provider_name, model_id)
+                if key in models_map:
+                    existing = models_map[key]
+                    if not existing.get("ctx") and inner.get("limit", {}).get("context"):
+                        existing["ctx"] = inner.get("limit", {}).get("context", 0)
+                    if not existing.get("output") and inner.get("limit", {}).get("output"):
+                        existing["output"] = inner.get("limit", {}).get("output", 0)
+                    if not existing.get("author") and author:
+                        existing["author"] = author
+                    if inner.get("tool_call"):
+                        existing["tool_call"] = True
+                    if inner.get("attachment"):
+                        existing["attachment"] = True
+                    if inner.get("reasoning"):
+                        existing["reasoning"] = True
+                    if modalities and existing.get("modalities") in ("—", ""):
+                        existing["modalities"] = "/".join(modalities.get("input", []))
+                else:
+                    models_map[key] = {
+                        "provider": provider_name,
+                        "id": model_id,
+                        "name": inner.get("name", model_id),
+                        "author": author or infer_author_from_model_id(model_id) or provider_name,
+                        "ctx": inner.get("limit", {}).get("context", 0),
+                        "output": inner.get("limit", {}).get("output", 0),
+                        "tool_call": inner.get("tool_call", False),
+                        "attachment": inner.get("attachment", False),
+                        "reasoning": inner.get("reasoning", False),
+                        "modalities": "/".join(modalities.get("input", [])) if modalities else "—",
+                    }
+
+    return sorted(models_map.values(), key=lambda m: (m["provider"], m["id"]))
+
+
+def action_select_model() -> None:
+    """Select the default model from available OpenCode providers and user config."""
+    config = load_user_config()
+
+    with console.status("[bold cyan]Consultando modelos de OpenCode y proveedores configurados...[/]"):
+        all_models = fetch_all_available_models(config)
 
     if not all_models:
-        console.print("[yellow]⚠ No hay modelos disponibles.[/]")
+        console.print("[yellow]⚠ No hay modelos disponibles ni proveedores configurados.[/]")
         return
 
     current = config.get("model", "(ninguno)")
@@ -1623,24 +1757,30 @@ def action_run_build() -> None:
 
     # Try to generate an LLM summary for upstream updates
     model_info = get_default_model_from_config()
+    summary = None
     if not model_info:
-        console.print("[red]✗ Cancelando build: no se encontró modelo por defecto en la config.[/]")
-        return
+        console.print("[yellow]⚠ El modelo configurado no tiene endpoint HTTP directo para resumen de commits.[/]")
+        if not Confirm.ask("  ¿Deseas continuar con el build sin resumen LLM?", default=True):
+            console.print("[yellow]⚠ Build cancelado por el usuario.[/]")
+            return
+    else:
+        console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
+        console.print("[dim]Generando resumen con LLM...[/]")
+        summary = summarize_with_llm(upstream_commits, model_info)
+        if not summary:
+            console.print("[yellow]⚠ No se pudo obtener el resumen del LLM.[/]")
+            if not Confirm.ask("  ¿Deseas continuar con el build sin resumen LLM?", default=True):
+                console.print("[yellow]⚠ Build cancelado por el usuario.[/]")
+                return
 
-    console.print(f"[green]✓ Usando modelo: {model_info['provider']}/{model_info['model_id']}[/]")
-    console.print("[dim]Generando resumen con LLM...[/]")
-    summary = summarize_with_llm(upstream_commits, model_info)
-    if not summary:
-        console.print("[red]✗ Cancelando build: no se pudo obtener el resumen del LLM.[/]")
-        return
+    # Display summary and ask for confirmation if generated
+    if summary:
+        console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
+        console.print(Panel(Markdown(summary), border_style="green"))
 
-    # Display summary and ask for confirmation
-    console.print("\n[bold green]✓ Resumen de cambios de upstream:[/]\n")
-    console.print(Panel(Markdown(summary), border_style="green"))
-
-    if not Confirm.ask("\n  ¿Confirmas que has leído los cambios y deseas continuar con el build?"):
-        console.print("[yellow]⚠ Build cancelado por el usuario.[/]")
-        return
+        if not Confirm.ask("\n  ¿Confirmas que has leído los cambios y deseas continuar con el build?"):
+            console.print("[yellow]⚠ Build cancelado por el usuario.[/]")
+            return
 
     # Proceed with full sync + build
     build_script = str(SCRIPT_DIR.parent / "build.sh")
