@@ -91,7 +91,7 @@ def _pos_int(value: object, default: int) -> int:
 
 
 def derive_host_base(url: str) -> str:
-    """Return scheme://host[:port] from a URL like http://host:9999/v1."""
+    """Return scheme://host[:port] from a URL like http://host:29999/v1."""
     p = urlsplit(url)
     if not p.scheme or not p.netloc:
         return ""

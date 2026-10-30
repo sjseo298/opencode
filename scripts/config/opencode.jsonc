@@ -5,7 +5,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "LlamaCPP",
       "options": {
-        "baseURL": "http://Mac-Studio-de-Juan.local:9999/v1"
+        "baseURL": "http://Mac-Studio-de-Juan.local:29999/v1"
       },
       "models": {
         "esca/Qwen3.6-35B-A3B-Escha-W2": {
@@ -1537,5 +1537,5 @@
       }
     }
   },
-  "model": "llamacpp/gguf/DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q4_K_M.gguf"
+  "model": "llamacpp/gguf/unsloth/Qwen3.8-27B-UD-Q5_K_XL.gguf"
 }

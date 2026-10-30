@@ -51,7 +51,7 @@ console = Console()
 
 # ── constants ────────────────────────────────────────────────────────────────
 
-LLAMACPP_URL = os.environ.get("OPENCODEPLUS_LLAMACPP_URL", "http://Mac-Studio-de-Juan.local:9999/v1/models")
+LLAMACPP_URL = os.environ.get("OPENCODEPLUS_LLAMACPP_URL", "http://Mac-Studio-de-Juan.local:29999/v1/models")
 LM_STUDIO_URL = os.environ.get("OPENCODEPLUS_LMSTUDIO_URL", "http://Mac-Studio-de-Juan.local:1234/api/v1/models")
 
 # SCRIPT_DIR defaults to the scripts directory of this module;
