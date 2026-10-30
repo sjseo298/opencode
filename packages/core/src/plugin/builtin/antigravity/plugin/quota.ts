@@ -56,6 +56,27 @@ interface RetrieveUserQuotaResponse {
 
 export type AccountQuotaStatus = "ok" | "disabled" | "error";
 
+export interface UserQuotaSummaryBucket {
+  bucketId?: string;
+  displayName?: string;
+  window?: string;
+  resetTime?: string;
+  description?: string;
+  remainingFraction?: number;
+}
+
+export interface UserQuotaSummaryGroup {
+  displayName?: string;
+  description?: string;
+  buckets?: UserQuotaSummaryBucket[];
+}
+
+export interface UserQuotaSummaryResponse {
+  groups?: UserQuotaSummaryGroup[];
+  description?: string;
+  error?: string;
+}
+
 export interface AccountQuotaResult {
   index: number;
   email?: string;
@@ -64,6 +85,7 @@ export interface AccountQuotaResult {
   disabled?: boolean;
   quota?: QuotaSummary;
   geminiCliQuota?: GeminiCliQuotaSummary;
+  quotaSummary?: UserQuotaSummaryResponse;
   updatedAccount?: AccountMetadataV3;
 }
 
@@ -254,6 +276,35 @@ async function fetchAvailableModels(
   throw new Error(errors.join("; ") || "fetchAvailableModels failed");
 }
 
+async function fetchUserQuotaSummary(
+  accessToken: string,
+  projectId: string,
+): Promise<UserQuotaSummaryResponse> {
+  const endpoint = ANTIGRAVITY_ENDPOINT;
+  const quotaUserAgent = getAntigravityUserAgent();
+  const body = projectId ? { project: projectId } : {};
+
+  try {
+    const response = await fetchWithTimeout(`${endpoint}/v1internal:retrieveUserQuotaSummary`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "User-Agent": quotaUserAgent,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) {
+      return (await response.json()) as UserQuotaSummaryResponse;
+    }
+    const message = await response.text().catch(() => "");
+    return { error: `HTTP ${response.status}${message ? `: ${message.slice(0, 100)}` : ""}` };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function fetchGeminiCliQuota(
   accessToken: string,
   projectId: string,
@@ -384,13 +435,17 @@ export async function checkAccountsQuota(
 
       let quotaResult: QuotaSummary;
       let geminiCliQuotaResult: GeminiCliQuotaSummary;
+      let userQuotaSummaryResult: UserQuotaSummaryResponse | undefined;
       
-      // Fetch both Antigravity and Gemini CLI quotas in parallel
-      const [antigravityResponse, geminiCliResponse] = await Promise.all([
+      // Fetch Antigravity models, Gemini CLI quotas, and Antigravity Quota Summary in parallel
+      const [antigravityResponse, geminiCliResponse, userQuotaSummaryResponse] = await Promise.all([
         fetchAvailableModels(auth.access ?? "", projectContext.effectiveProjectId)
           .catch((error): FetchAvailableModelsResponse => ({ models: undefined })),
         fetchGeminiCliQuota(auth.access ?? "", projectContext.effectiveProjectId),
+        fetchUserQuotaSummary(auth.access ?? "", projectContext.effectiveProjectId),
       ]);
+
+      userQuotaSummaryResult = userQuotaSummaryResponse;
 
       // Process Antigravity quota
       if (antigravityResponse.models === undefined) {
@@ -422,6 +477,7 @@ export async function checkAccountsQuota(
         disabled,
         quota: quotaResult,
         geminiCliQuota: geminiCliQuotaResult,
+        quotaSummary: userQuotaSummaryResult,
         updatedAccount,
       });
       

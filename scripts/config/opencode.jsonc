@@ -1537,5 +1537,5 @@
       }
     }
   },
-  "model": "llamacpp/gguf/unsloth/Qwen3.8-27B-UD-Q5_K_XL.gguf"
+  "model": "google/antigravity-gemini-3.8-flash-low"
 }
