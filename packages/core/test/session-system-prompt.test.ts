@@ -16,6 +16,8 @@ test("renders Protocolo de Objetivos guidance when objective_manage is present",
   expect(prompt).toContain("Order of Operations: You MUST construct the objective plan FIRST")
   expect(prompt).toContain("Dynamic Secondary Objective Discovery")
   expect(prompt).toContain("Before delivering the final response to the user, your first action must be to update and reconcile all objectives")
+  expect(prompt).toContain("deliver your answer directly without calling `objective_manage` retroactively")
+  expect(prompt).toContain("Only offer to export exploration documents (EXPLORATION_<topic>.md)")
   expect(prompt).toContain("complete_primary")
   expect(prompt).toContain("Immediately after a compaction finishes, you must first review the preserved objective progress")
   expect(prompt).toContain("Iterative Objective Sync")

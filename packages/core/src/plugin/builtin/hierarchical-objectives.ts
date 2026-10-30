@@ -195,7 +195,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented. The tool auto-creates this documentation objective when it detects public-surface file changes and no documentation objective exists.",
   "7. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
   "8. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
-  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Leaving open objectives in the graphical interface when concluding is strictly unacceptable (status `presented_awaiting_confirmation` is the only approved paused state). You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective.",
+  "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage` when an objective tree is active in the session. Leaving open objectives in the graphical interface when concluding is strictly unacceptable (status `presented_awaiting_confirmation` is the only approved paused state). You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective. For purely read-only informational queries or single-step operations where no objective tree was established, deliver your answer directly without calling `objective_manage` retroactively.",
   "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. MANDATORY DELEGATION REASONING RULE: every secondary objective, tertiary objective, AND finding is a candidate for delegation; the agent MUST explicitly evaluate and record its delegation decision (`delegation: { mode: 'main' | 'subagent', justification: '...' }`). Delegation to subagents is CRITICAL TO PRESERVE YOUR CONTEXT WINDOW: executing context-heavy, repetitive, or exploratory tasks in the main session rapidly exhausts available context tokens. Delegation assessment is MANDATORY when transitioning an objective to 'exploring' or 'resolved', and when registering any finding via 'add_finding'. The decision ([main] or [subagent]) is displayed compactly beside each objective and finding in the objective tree and sidebar. Delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists (`max_subagents = total_slots - 1`), which protects your primary session's context; execute in the main thread only when the task is small or tightly coupled, always recording the concrete justification upon moving to `exploring` (no blind main-thread execution). CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING RULE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. If a task is large, split it into several smaller subagent tasks whenever possible; only as a last resort, when a task cannot be divided, delegate it to the subagent so it does what it needs to do.",
   "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
   "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Newly created findings start in 'open' status and auto-associate with the active Secondary Objective (soRef); NO secondary objective can be resolved while it has associated OPEN findings (close them via action: 'update_finding' with status: 'closed'). Furthermore, no Primary Objective can close while any finding in the tree remains OPEN. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
@@ -204,7 +204,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "15. Compliance audit: the tool runs a mechanical audit on every resolved/blocked/discarded transition and on complete_primary (typed proof present, no unvalidated root-cause phrasing such as 'should pass' / 'logically' / 'the root cause is' without adjacent execution evidence, EXPLORING options have a live Result, findings are complete). A failed audit REJECTS the transition with the violation list — fix the violations and retry. Run `action: 'audit'` on demand to inspect the current violations.",
   "16. Plan pause & checkpoints: before multi-step work present the plan with `action: 'present_plan'` (or `presentPlan: true` on `set_primary`) — the tree FREEZES until the user explicitly confirms, then resume with `action: 'resume_plan'` carrying the user's instruction. After each significant phase call `action: 'checkpoint'`: the report is derived ONLY from the objective tree (no parallel mental model), and the tree pauses until the user's next instruction.",
   "17. Blocker fingerprints & anti-loop: when a finding resolves a blocker, register its fingerprint with `action: 'add_fingerprint'` so future sessions answer 'did we solve this before?' in a lookup instead of re-analysis. The tool tracks repeated read actions per SO and warns on duplicates; opening an SO whose title matches a resolved/discarded fingerprint requires an explicit `justification`.",
-  "18. Cross-session persistence: the whole tree (objectives, findings, options, fingerprints, DoD criteria) is auto-persisted and auto-hydrated; `action: 'export_tree'` returns the serialized document plus the auto-rendered EXPLORATION-style projection, and `action: 'import_tree'` hydrates a session from a topic key or a serialized document. The EXPLORATION document is ALWAYS an auto-rendered projection of the live tree — never a hand-maintained mirror with its own vocabulary.",
+  "18. Cross-session persistence: the whole tree (objectives, findings, options, fingerprints, DoD criteria) is auto-persisted and auto-hydrated; `action: 'export_tree'` returns the serialized document plus the auto-rendered EXPLORATION-style projection, and `action: 'import_tree'` hydrates a session from a topic key or a serialized document. The EXPLORATION document is ALWAYS an auto-rendered projection of the live tree — never a hand-maintained mirror with its own vocabulary. Only offer or export an exploration document for complex architectural, diagnostic, or deep engineering investigations; never ask or offer export for routine Q&A, ephemeral listings, or simple support queries.",
   "19. Iterative Objective Synchronization (mechanically enforced): Work strictly one Secondary Objective at a time. Transition it to `exploring` before beginning implementation, and only resolve it after validation with concrete proof. A `pending -> resolved` jump (anti-batch resolution) and a second simultaneous `exploring` SO (single active target invariant) are mechanically rejected by the tool. These gates govern the objective lifecycle without intrusive edit limits and without modifying `event.system`, preserving llama.cpp prefix-cache stability across turns.",
 ].join("\n")
 
@@ -2245,7 +2245,16 @@ function checkUnexpectedDoDKeys(raw: any): string[] {
 
 function normalizeDoDInput(raw: any, existingDod?: DoDCriterion[], secondaries?: Array<{ id: string; status: string; validationProof?: string }>): DoDCriterion[] | undefined {
   if (!raw) return undefined
-  const list = Array.isArray(raw) ? raw : typeof raw === "object" ? [raw] : []
+  let parsedRaw = raw
+  if (typeof parsedRaw === "string") {
+    const trimmed = parsedRaw.trim()
+    if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+      try {
+        parsedRaw = JSON.parse(trimmed)
+      } catch {}
+    }
+  }
+  const list = Array.isArray(parsedRaw) ? parsedRaw : typeof parsedRaw === "object" ? [parsedRaw] : []
   if (list.length === 0) return undefined
 
   // Pre-merge incoming items that share the same ID (e.g. one item defines statement, another defines satisfiedBy)
@@ -2571,7 +2580,7 @@ export const ObjectiveInputSchema = Schema.Struct({
   action: ObjectiveActionSchema.pipe(
     Schema.annotate({
       description:
-        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary'/'update_secondary' (manage SOs), 'add_tertiary' (add a tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage TOs: 'id' is the TO's own id), 'add_finding'/'update_finding'/'search_findings' (epistemic findings F-NNN with typed evidence and search-before-write), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod'/'proof_dod' (decomposed Definition of Done criteria and direct proof attaching), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), or 'list'. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef.",
+        "Action to perform: 'set_primary' (establish Primary Objective and optional initial secondaries), 'complete_primary' (close resolved Primary Objective), 'add_secondary'/'update_secondary' (manage SOs), 'add_tertiary' (add a tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage TOs: 'id' is the TO's own id), 'add_finding'/'update_finding'/'search_findings' (epistemic findings F-NNN with typed evidence and search-before-write), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod'/'proof_dod' (decomposed Definition of Done criteria and direct proof attaching), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), or 'list'. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef. When an objective tree is active, call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
     }),
   ),
   title: Schema.optional(
@@ -2638,7 +2647,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   plannedSecondaryCount: Schema.optional(
-    Schema.NullOr(Schema.Number).pipe(
+    Schema.NullOr(Schema.Union([Schema.Number, Schema.String])).pipe(
       Schema.annotate({
         description:
           "Total number of secondary objectives you plan to establish in this initial plan (e.g. 5). The tool uses this count to detect accidental token cutoffs or omitted items, and alerts you if fewer items were received in 'secondaries'.",
@@ -2654,7 +2663,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     ),
   ),
   dodCriteria: Schema.optional(
-    Schema.NullOr(Schema.Array(DoDCriterionInputSchema)).pipe(
+    Schema.NullOr(Schema.Union([Schema.Array(DoDCriterionInputSchema), Schema.String])).pipe(
       Schema.annotate({
         description:
           "Decomposed Definition of Done criteria as an array of objects ({ id, statement, verifiableBy, satisfiedBy, proofRef }). Each field must be a separate property in the object. Use in 'set_primary' to establish, or in 'update_dod'/'update_primary' to upsert by id",
@@ -2817,7 +2826,7 @@ export const ObjectiveInputSchema = Schema.Struct({
     Schema.NullOr(Schema.Boolean).pipe(
       Schema.annotate({
         description:
-          "Defaults to true on 'set_primary': strictly freezes the tree (status: presented_awaiting_confirmation) to mandate presenting the plan for user approval before execution. All subtasks remain pending until confirmed via resume_plan. Pass false only for automated single-step pipelines.",
+          "Defaults to true on 'set_primary' when secondaries are planned: freezes the tree (status: presented_awaiting_confirmation) to mandate presenting the plan for user approval before execution. When no secondaries are planned or when set to false, execution proceeds directly without freeze.",
       }),
     ),
   ),
@@ -2972,8 +2981,18 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const initialSecondaries = Array.isArray(input.secondaries) ? [] : undefined
-    const dodCriteria = normalizeDoDInput(input.dodCriteria)
-    const created = setPrimaryObjective(sessionID, title, dod, initialSecondaries, {
+    let dodCriteria = normalizeDoDInput(input.dodCriteria)
+    let effectiveDod = dod
+    if (!dodCriteria && typeof dod === "string") {
+      const trimmedDod = dod.trim()
+      if ((trimmedDod.startsWith("[") && trimmedDod.endsWith("]")) || (trimmedDod.startsWith("{") && trimmedDod.endsWith("}"))) {
+        dodCriteria = normalizeDoDInput(trimmedDod)
+        if (dodCriteria && dodCriteria.length > 0) {
+          effectiveDod = dodCriteria.map((c) => `${c.id ? `[${c.id}] ` : ""}${c.statement}`).join("; ")
+        }
+      }
+    }
+    const created = setPrimaryObjective(sessionID, title, effectiveDod, initialSecondaries, {
       topicKey: typeof input.topicKey === "string" ? input.topicKey : undefined,
       dod: dodCriteria,
     })
@@ -3010,7 +3029,9 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const countProvided = Array.isArray(input.secondaries) ? input.secondaries.length : 0
-    const plannedCount = typeof input.plannedSecondaryCount === "number" ? input.plannedSecondaryCount : undefined
+    const rawPlanned = input.plannedSecondaryCount
+    const parsedPlanned = typeof rawPlanned === "number" ? rawPlanned : typeof rawPlanned === "string" && !isNaN(Number(rawPlanned.trim())) ? Number(rawPlanned.trim()) : undefined
+    const plannedCount = parsedPlanned !== undefined && !isNaN(parsedPlanned) ? parsedPlanned : undefined
     let countWarning: string | undefined
     if (plannedCount !== undefined && plannedCount > 0 && countProvided < plannedCount) {
       const missingCount = plannedCount - countProvided
@@ -3024,8 +3045,9 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         `via action: 'add_secondary' with 'secondaries: [{ title: '...', rationale: '...', delegation: {...} }, ...]' and 'draft: true'.`
     }
 
+    const hasSecondaries = (Array.isArray(input.secondaries) && input.secondaries.length > 0) || (plannedCount !== undefined && plannedCount > 0)
     const isTestEnv = typeof process !== "undefined" && (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test" || Boolean(process.env.VITEST))
-    const shouldFreeze = input.presentPlan === true || input.pauseForConfirmation === true || (!isTestEnv && input.presentPlan !== false)
+    const shouldFreeze = input.presentPlan === true || input.pauseForConfirmation === true || (!isTestEnv && input.presentPlan !== false && hasSecondaries)
 
     if (shouldFreeze) {
       // Bloqueo estricto: ningún sub-objetivo inicial puede iniciar en 'exploring' o 'resolved' antes de la aprobación
@@ -3892,7 +3914,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
           name: "objective_manage",
           options: { codemode: false },
           description:
-"Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call. Tertiary sub-objectives are first-class children of a secondary objective (only when an SO proves too large): add them with action 'add_tertiary' ('id' = parent SO, e.g. 'SO-2') and manage them with 'update_tertiary' ('id' = TO id, e.g. 'SO-2-T1'); no SO can be resolved while any of its tertiary sub-objectives is open, and the PO cannot close until every SO and TO is closed (no shortcuts). Ascending Reopening: adding or reopening any sub-objective automatically reopens the PO to 'exploring'. Epistemic layer: register findings with typed evidence ('add_finding' — search-before-write enforced with pluggable LM Studio embeddings, extend with 'update_finding'), manage multi-candidate options with a live Result column ('add_option'/'update_option' — at most one SUCCESSFUL, auto-cancel siblings preserving DISCARDED), decompose the Definition of Done into verifiable criteria ('update_dod' — every criterion needs proofRef before complete_primary), register blocker fingerprints ('add_fingerprint'), and run the compliance audit on demand ('audit'). Cross-session: the tree is auto-persisted; call 'sync' after compaction/resume, 'export_tree' for the serialized document + rendered EXPLORATION projection, 'import_tree' to hydrate from a topic. Plan pause: 'present_plan' freezes the tree until the user confirms ('resume_plan'); 'checkpoint' derives a phase report from the tree only and pauses until the user's instruction. Update the objective list immediately—even mid-execution—whenever new objectives emerge, the user intervenes or corrects direction, or a required step turns out missing. Also register a documentation-update secondary objective whenever any objective makes relevant repository modifications (automatically evaluated via one-shot /btw checks). Mandatory: call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
+"Manage the hierarchical objective tree for the Protocolo de Objetivos (Objectives Protocol): define the Primary Objective, register Secondary Objectives (SO-N) with rationale, record blockers, and attach concrete validation proof before resolving. Supports registering secondaries together with set_primary in a single call. Tertiary sub-objectives are first-class children of a secondary objective (only when an SO proves too large): add them with action 'add_tertiary' ('id' = parent SO, e.g. 'SO-2') and manage them with 'update_tertiary' ('id' = TO id, e.g. 'SO-2-T1'); no SO can be resolved while any of its tertiary sub-objectives is open, and the PO cannot close until every SO and TO is closed (no shortcuts). Ascending Reopening: adding or reopening any sub-objective automatically reopens the PO to 'exploring'. Epistemic layer: register findings with typed evidence ('add_finding' — search-before-write enforced with pluggable LM Studio embeddings, extend with 'update_finding'), manage multi-candidate options with a live Result column ('add_option'/'update_option' — at most one SUCCESSFUL, auto-cancel siblings preserving DISCARDED), decompose the Definition of Done into verifiable criteria ('update_dod' — every criterion needs proofRef before complete_primary), register blocker fingerprints ('add_fingerprint'), and run the compliance audit on demand ('audit'). Cross-session: the tree is auto-persisted; call 'sync' after compaction/resume, 'export_tree' for the serialized document + rendered EXPLORATION projection, 'import_tree' to hydrate from a topic. Plan pause: 'present_plan' freezes the tree until the user confirms ('resume_plan'); 'checkpoint' derives a phase report from the tree only and pauses until the user's instruction. Update the objective list immediately—even mid-execution—whenever new objectives emerge, the user intervenes or corrects direction, or a required step turns out missing. Also register a documentation-update secondary objective whenever any objective makes relevant repository modifications (automatically evaluated via one-shot /btw checks). Mandatory: when an objective tree is active in the session, call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
           input: ObjectiveInputSchema,
           output: ObjectiveOutputSchema,
           execute: async (input: any, toolCtx: any) => {

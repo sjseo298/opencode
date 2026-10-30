@@ -2929,6 +2929,31 @@ describe("hierarchical-objectives plugin", () => {
       expect(res.output.message).toContain("SO-3..SO-5")
     })
 
+    test("plannedSecondaryCount admits numeric strings like '5' and coerces safely", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-planned-count-string")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "String count truncation test",
+          definitionOfDone: "DoD",
+          presentPlan: true,
+          plannedSecondaryCount: "5" as any,
+          secondaries: [
+            { title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Valid reason for task 1" } },
+            { title: "SO-2", rationale: "R2", delegation: { mode: "main", justification: "Valid reason for task 2" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(res.output.success).toBe(true)
+      expect(res.output.message).toContain("⚠️ [Protocol Warning - Incomplete Plan Admission]")
+      expect(res.output.message).toContain("plannedSecondaryCount: 5")
+      expect(res.output.message).toContain("only 2 secondary objective(s) were received")
+    })
+
     test("Improvement 6: normalizeDoDInput merges multiple entries with the same ID in dodCriteria", async () => {
       const { getRegisteredTool } = await setupPluginInstanceLocal()
       const tool = getRegisteredTool()
@@ -2960,6 +2985,75 @@ describe("hierarchical-objectives plugin", () => {
       expect(updateRes.output.tree).toContain("Grep version tags")
       expect(updateRes.output.tree).toContain("grep -rn 'version' .")
       expect(updateRes.output.tree).toContain("SO-1")
+    })
+
+    test("normalizeDoDInput and set_primary parse JSON strings in definitionOfDone and dodCriteria", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-dod-json-string")
+
+      const dodJson = JSON.stringify([
+        { id: "D1", statement: "Identify unread emails", verifiableBy: "date-range" },
+        { id: "D2", statement: "Report list to user", verifiableBy: "final answer" },
+      ])
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Consultar correos sin leer",
+          definitionOfDone: dodJson,
+          presentPlan: false,
+        },
+        { sessionID: sid },
+      )
+      expect(res.output.success).toBe(true)
+      expect(res.output.tree).toContain("[D1]")
+      expect(res.output.tree).toContain("[D2]")
+
+      // Complete primary with dodProofs - should attach proofRef directly to the parsed criteria
+      const completeRes = await tool.execute(
+        {
+          action: "complete_primary",
+          status: "resolved",
+          validationProof: "CLI returned 35 unread emails",
+          dodProofs: {
+            D1: "Found 35 unread emails in window",
+            D2: "Reported table of 35 emails",
+          },
+        },
+        { sessionID: sid },
+      )
+      expect(completeRes.output.success).toBe(true)
+      expect(completeRes.output.tree).toContain("Found 35 unread emails in window")
+      expect(completeRes.output.tree).toContain("Reported table of 35 emails")
+    })
+
+    test("set_primary does not freeze by default when no secondaries are planned", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-no-freeze-without-secondaries")
+
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        const res = await tool.execute(
+          {
+            action: "set_primary",
+            title: "Quick query without secondaries",
+            definitionOfDone: "Answer provided",
+          },
+          { sessionID: sid },
+        )
+        expect(res.output.success).toBe(true)
+        expect(res.output.tree).toContain("Primary Objective [EXPLORING]")
+        expect(res.output.tree).not.toContain("PRESENTED_AWAITING_CONFIRMATION")
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
     })
 
     test("Improvement 7: add_finding falls back to evidence.source when result is omitted", async () => {

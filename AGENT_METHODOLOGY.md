@@ -50,7 +50,7 @@ The Protocolo de Objetivos is triggered under two conditions:
 7. **Mandatory Documentation Update Objective**: When any Primary or Secondary objective makes relevant modifications to the repository (public behavior, APIs, configuration schemas, user-facing features), a Secondary Objective MUST be created — and resolved with proof — that updates the affected documentation before the PO may close.
 8. **Obey "Done means Done"**: No objective may transition to `resolved` without concrete test/execution output attached in `validationProof`.
 9. **Isolate Blockers & Untangle Errors**: Untangle cascading errors and maintain continuous alignment with the objective tree.
-10. **Mandatory Pre-Delivery Reconciliation**: Before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed (status `presented_awaiting_confirmation` is the only approved paused state for user review). Close the Primary Objective using `action: 'complete_primary'` once all subtasks and the Definition of Done are verified.
+10. **Mandatory Pre-Delivery Reconciliation**: When an objective tree is active in the session, before delivering the final result or completing your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage`. Objectives must NEVER be left open, in-progress, or pending if their work was completed (status `presented_awaiting_confirmation` is the only approved paused state for user review). Close the Primary Objective using `action: 'complete_primary'` once all subtasks and the Definition of Done are verified. (For purely read-only informational queries or single-turn questions where no objective tree was established, deliver your answer directly without creating one retroactively).
 11. **Mandatory Post-Compaction Review & Synchronization**: Immediately after context compaction finishes, when resuming the session, the agent MUST first review what has been accomplished in the objectives from the compaction summary (`## Objective` and `## Work State`) and immediately call `objective_manage` to sync and update the active objectives before taking any other action.
 
 ---
@@ -134,7 +134,7 @@ Every objective (PO and SO-N) must transition through rigorous states:
    * Why the agent cannot run it autonomously.
    * The exact command or step the user should execute to confirm.
 6. **Mandatory Pre-Delivery Objective Reconciliation**:
-   Before delivering the final result or answer to the user, the agent's **FIRST action** must be calling `objective_manage` to reconcile and finalize the objective tree. The agent **MUST NOT leave objectives open, in-progress, or pending** if the work has been performed. Every addressed objective must have its definitive status (`resolved` with proof, `cancelled`, or `discarded`) recorded in the system.
+   When an objective tree is active in the session, before delivering the final result or answer to the user, the agent's **FIRST action** must be calling `objective_manage` to reconcile and finalize the objective tree. The agent **MUST NOT leave objectives open, in-progress, or pending** if the work has been performed. Every addressed objective must have its definitive status (`resolved` with proof, `cancelled`, or `discarded`) recorded in the system. For purely read-only informational queries or single-turn questions where no objective tree was established, deliver the answer directly without retroactive planning.
 
 ---
 
@@ -332,7 +332,7 @@ export interface PrimaryObjective {
    * Mandates:
      - Initialization of PO and initial SOs with `objective_manage`.
      - Decomposition into subtasks with explicit rationales and enforcement of *"Done means Done"*.
-     - **Pre-Delivery Reconciliation**: The agent's FIRST action before delivering the final answer to the user must be updating/reconciling all objectives via `objective_manage` (never leave completed work open).
+     - **Pre-Delivery Reconciliation**: When an objective tree is active, the agent's FIRST action before delivering the final answer to the user must be updating/reconciling all objectives via `objective_manage` (never leave completed work open).
      - **Post-Compaction Review & Synchronization**: Immediately upon resuming after compaction, the agent must review objective progress from the summary and execute `objective_manage` to sync active objectives before proceeding.
      - Strict subagent concurrency bound of 1.
    * **Resilience & Memory Recovery**: If in-memory state is absent (e.g. across process restarts or reloaded archived sessions), `reconstructObjectivesFromMessages` automatically parses earlier `objective_manage` tool calls or compaction `<conversation-checkpoint>` summaries to restore the complete objective hierarchy.
