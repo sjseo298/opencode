@@ -2929,6 +2929,91 @@ describe("hierarchical-objectives plugin", () => {
       expect(res.output.message).toContain("SO-3..SO-5")
     })
 
+    test("Improvement 6: set_primary admits initial reconnaissance findings and defaults unassigned soRef to first SO", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-set-primary-findings")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Investigation with Recon Findings",
+          definitionOfDone: "Verify initial findings admission",
+          presentPlan: false,
+          secondaries: [
+            { title: "SO-1 Task", rationale: "First subtask", delegation: { mode: "main", justification: "Main thread execution" } },
+            { title: "SO-2 Task", rationale: "Second subtask", delegation: { mode: "main", justification: "Main thread execution" } },
+          ],
+          findings: [
+            {
+              title: "Early Recon Discovery",
+              result: "Discovered existing cache layer in place during reconnaissance",
+              evidence: "src/cache.ts:15-25",
+              nextAction: "Integrate with cache layer",
+            },
+            {
+              title: "Explicit SO-2 discovery",
+              result: "Found configuration flag in settings module",
+              soRef: "SO-2",
+              evidence: "config/flags.ts:40",
+              nextAction: "Toggle configuration flag",
+            },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      expect(res.output.tree).toContain("**F-001** [SO-1]")
+      expect(res.output.tree).toContain("Early Recon Discovery")
+      expect(res.output.tree).toContain("**F-002** [SO-2]")
+      expect(res.output.tree).toContain("Explicit SO-2 discovery")
+
+      const treeObj = getObjectives(sid)
+      expect(treeObj?.findings?.length).toBe(2)
+      expect(treeObj?.findings?.[0].soRef).toBe("SO-1")
+      expect(treeObj?.findings?.[1].soRef).toBe("SO-2")
+    })
+
+    test("Improvement 7: add_finding without soRef defaults to first SO when no SO is exploring", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("test-add-finding-default-first-so")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Default SO task",
+          definitionOfDone: "Verify first SO default",
+          presentPlan: false,
+          secondaries: [
+            { title: "First SO", rationale: "Initial task", delegation: { mode: "main", justification: "Main thread execution" } },
+            { title: "Second SO", rationale: "Secondary task", delegation: { mode: "main", justification: "Main thread execution" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Both SOs are in pending; none in exploring
+      const addRes = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Subsequent discovery before exploring",
+          result: "Discovered schema discrepancy before beginning work",
+          evidence: "schema/db.ts:10-20",
+          delegation: { mode: "main", justification: "Diagnosed in main session" },
+          nextAction: "Update migration plan",
+        },
+        { sessionID: sid },
+      )
+
+      expect(addRes.output.success).toBe(true)
+      expect(addRes.output.tree).toContain("**F-001** [SO-1]")
+
+      const treeObj = getObjectives(sid)
+      expect(treeObj?.findings?.[0].soRef).toBe("SO-1")
+    })
+
     test("plannedSecondaryCount admits numeric strings like '5' and coerces safely", async () => {
       const { getRegisteredTool } = await setupPluginInstanceLocal()
       const tool = getRegisteredTool()

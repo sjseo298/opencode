@@ -10,7 +10,7 @@
       "models": {
         "esca/Qwen3.6-35B-A3B-Escha-W2": {
           "id": "esca/Qwen3.6-35B-A3B-Escha-W2",
-          "name": "[T]L: [esca] Qwen3.6-35B-A3B-Escha-W2",
+          "name": "[VT]L: [esca] Qwen3.6-35B-A3B-Escha-W2",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -19,6 +19,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -32,7 +33,7 @@
         },
         "esca/Qwen3.8-27B-Escha-W2": {
           "id": "esca/Qwen3.8-27B-Escha-W2",
-          "name": "[T]L: [esca] Qwen3.8-27B-Escha-W2",
+          "name": "[VT]L: [esca] Qwen3.8-27B-Escha-W2",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -41,6 +42,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -54,7 +56,7 @@
         },
         "gguf/bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf": {
           "id": "gguf/bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf",
-          "name": "[T]L: [gguf] bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf",
+          "name": "[VT]L: [gguf] bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
           "reasoning": false,
@@ -63,6 +65,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -76,7 +79,7 @@
         },
         "gguf/bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q5_K_L.gguf": {
           "id": "gguf/bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q5_K_L.gguf",
-          "name": "[T]L: [gguf] bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q5_K_L.gguf",
+          "name": "[VT]L: [gguf] bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
           "reasoning": false,
@@ -85,6 +88,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -98,7 +102,7 @@
         },
         "gguf/bartowski/Laguna-XS-2.1-Q5_K_L.gguf": {
           "id": "gguf/bartowski/Laguna-XS-2.1-Q5_K_L.gguf",
-          "name": "[T]L: [gguf] bartowski/Laguna-XS-2.1-Q5_K_L.gguf",
+          "name": "[VT]L: [gguf] bartowski/Laguna-XS-2.1-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
           "reasoning": false,
@@ -107,6 +111,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -624,9 +629,32 @@
             "output": 65536
           }
         },
-        "gguf/InternScience/Agents-A1-Q4_K_M.gguf": {
-          "id": "gguf/InternScience/Agents-A1-Q4_K_M.gguf",
-          "name": "[T]L: [gguf] InternScience/Agents-A1-Q4_K_M.gguf",
+        "gguf/ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf": {
+          "id": "gguf/ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf",
+          "name": "[VT]L: [gguf] ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf",
+          "author": "ggml-org",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 8192,
+            "output": 8192
+          }
+        },
+        "gguf/InternScience/Sage-A1.5-Q4_K_M.gguf": {
+          "id": "gguf/InternScience/Sage-A1.5-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] InternScience/Sage-A1.5-Q4_K_M.gguf",
           "author": "InternScience",
           "tool_call": true,
           "reasoning": false,
@@ -635,6 +663,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -761,6 +790,29 @@
             "output": 131072
           }
         },
+        "gguf/Qwen/Qwen3VL-2B-Thinking-Q4_K_M.gguf": {
+          "id": "gguf/Qwen/Qwen3VL-2B-Thinking-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] Qwen/Qwen3VL-2B-Thinking-Q4_K_M.gguf",
+          "author": "Qwen",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 131072
+          }
+        },
         "gguf/ukisai/Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf": {
           "id": "gguf/ukisai/Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf",
           "name": "[VT]L: [gguf] ukisai/Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf",
@@ -805,6 +857,52 @@
           "limit": {
             "context": 196608,
             "output": 65536
+          }
+        },
+        "gguf/unsloth/flint-UD-Q4_K_XL.gguf": {
+          "id": "gguf/unsloth/flint-UD-Q4_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/flint-UD-Q4_K_XL.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 116224,
+            "output": 16384
+          }
+        },
+        "gguf/unsloth/gemma-4-12b-it-UD-Q4_K_XL.gguf": {
+          "id": "gguf/unsloth/gemma-4-12b-it-UD-Q4_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/gemma-4-12b-it-UD-Q4_K_XL.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
           }
         },
         "gguf/unsloth/gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf": {
@@ -947,7 +1045,7 @@
         },
         "gguf/unsloth/North-Mini-Code-1.0-UD-Q5_K_XL.gguf": {
           "id": "gguf/unsloth/North-Mini-Code-1.0-UD-Q5_K_XL.gguf",
-          "name": "[T]L: [gguf] unsloth/North-Mini-Code-1.0-UD-Q5_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/North-Mini-Code-1.0-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
           "reasoning": false,
@@ -956,6 +1054,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1080,6 +1179,121 @@
           "limit": {
             "context": 262144,
             "output": 131072
+          }
+        },
+        "gguf/unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf": {
+          "id": "gguf/unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 131072
+          }
+        },
+        "gguf/unsloth/Qwen3.5-2B-Q4_K_S.gguf": {
+          "id": "gguf/unsloth/Qwen3.5-2B-Q4_K_S.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3.5-2B-Q4_K_S.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        },
+        "gguf/unsloth/Qwen3.5-2B-UD-Q8_K_XL.gguf": {
+          "id": "gguf/unsloth/Qwen3.5-2B-UD-Q8_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3.5-2B-UD-Q8_K_XL.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        },
+        "gguf/unsloth/Qwen3.5-4B-Q8_0.gguf": {
+          "id": "gguf/unsloth/Qwen3.5-4B-Q8_0.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3.5-4B-Q8_0.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        },
+        "gguf/unsloth/Qwen3.5-9B-UD-Q4_K_XL.gguf": {
+          "id": "gguf/unsloth/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
           }
         },
         "gguf/unsloth/Qwen3.6-27B-Q5_K_M.gguf": {
@@ -1360,7 +1574,7 @@
         },
         "mlx/Qwen3.8-27B-MLX-5bit": {
           "id": "mlx/Qwen3.8-27B-MLX-5bit",
-          "name": "[T]L: [mlx] Qwen3.8-27B-MLX-5bit",
+          "name": "[VT]L: [mlx] Qwen3.8-27B-MLX-5bit",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -1369,6 +1583,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1382,7 +1597,7 @@
         },
         "mlx/Qwen3.6-27B-4bit": {
           "id": "mlx/Qwen3.6-27B-4bit",
-          "name": "[T]L: [mlx] Qwen3.6-27B-4bit",
+          "name": "[VT]L: [mlx] Qwen3.6-27B-4bit",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -1391,6 +1606,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1404,7 +1620,7 @@
         },
         "mlx/Qwen3.6-27B-5bit": {
           "id": "mlx/Qwen3.6-27B-5bit",
-          "name": "[T]L: [mlx] Qwen3.6-27B-5bit",
+          "name": "[VT]L: [mlx] Qwen3.6-27B-5bit",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -1413,6 +1629,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1426,7 +1643,7 @@
         },
         "mlx/Qwen3.6-35B-A3B-4bit": {
           "id": "mlx/Qwen3.6-35B-A3B-4bit",
-          "name": "[T]L: [mlx] Qwen3.6-35B-A3B-4bit",
+          "name": "[VT]L: [mlx] Qwen3.6-35B-A3B-4bit",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -1435,6 +1652,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1448,7 +1666,7 @@
         },
         "mlx/Qwen3.6-35B-A3B-5bit": {
           "id": "mlx/Qwen3.6-35B-A3B-5bit",
-          "name": "[T]L: [mlx] Qwen3.6-35B-A3B-5bit",
+          "name": "[VT]L: [mlx] Qwen3.6-35B-A3B-5bit",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -1457,6 +1675,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1470,7 +1689,7 @@
         },
         "mlx/Ternary-Bonsai-27B-mlx-2bit": {
           "id": "mlx/Ternary-Bonsai-27B-mlx-2bit",
-          "name": "[T]L: [mlx] Ternary-Bonsai-27B-mlx-2bit",
+          "name": "[VT]L: [mlx] Ternary-Bonsai-27B-mlx-2bit",
           "author": "lmstudio",
           "tool_call": true,
           "reasoning": false,
@@ -1479,6 +1698,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1492,7 +1712,7 @@
         },
         "splash/mlx-community/Qwen3.6-35B-A3B-4bit": {
           "id": "splash/mlx-community/Qwen3.6-35B-A3B-4bit",
-          "name": "[T]L: [splash] mlx-community/Qwen3.6-35B-A3B-4bit",
+          "name": "[VT]L: [splash] mlx-community/Qwen3.6-35B-A3B-4bit",
           "author": "mlx-community",
           "tool_call": true,
           "reasoning": false,
@@ -1501,6 +1721,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1514,7 +1735,7 @@
         },
         "splash/mlx-community/Qwen3.8-27B-4bit": {
           "id": "splash/mlx-community/Qwen3.8-27B-4bit",
-          "name": "[T]L: [splash] mlx-community/Qwen3.8-27B-4bit",
+          "name": "[VT]L: [splash] mlx-community/Qwen3.8-27B-4bit",
           "author": "mlx-community",
           "tool_call": true,
           "reasoning": false,
@@ -1523,6 +1744,7 @@
           "modalities": {
             "input": [
               "text",
+              "image",
               "pdf"
             ],
             "output": [
@@ -1536,6 +1758,5 @@
         }
       }
     }
-  },
-  "model": "google/antigravity-gemini-3.8-flash-low"
+  }
 }

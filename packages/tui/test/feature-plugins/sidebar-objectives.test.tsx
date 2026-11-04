@@ -324,7 +324,7 @@ describe("SidebarObjectives TUI component (Canonical session.metadata architectu
       const frame = app.captureCharFrame()
       expect(frame).toContain("SO-1 [subagent]: Build worker queue")
       expect(frame).toContain("SO-1-T1 [main]: Redis adapter")
-      expect(frame).toContain("F-001 [main]: Redis latency check")
+      expect(frame).toContain("F-001 [SO-1] [main]: Redis latency check")
     } finally {
       app.renderer.destroy()
     }

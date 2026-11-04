@@ -430,6 +430,9 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                         </text>
                         <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
                           <span style={{ fg: theme.text.muted }}>{f.id}</span>
+                          <Show when={f.soRef}>
+                            <span style={{ fg: theme.text.muted }}> [{f.soRef}]</span>
+                          </Show>
                           <Show when={f.delegation}>
                             <span style={{ fg: f.delegation!.mode === "subagent" ? theme.text.feedback.warning.base : theme.text.muted }}> [{f.delegation!.mode}]</span>
                           </Show>

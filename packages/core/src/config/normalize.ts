@@ -395,6 +395,15 @@ function normalizeCompaction(
     : undefined
   const buffer = prefer(legacyBuffer, nativeBuffer, ["compaction", "buffer"], diagnostics)
   if (buffer !== undefined) result.buffer = buffer
+  if (own(input.compaction, "unified_kv")) {
+    const value = decodeEncoded(
+      ConfigCompaction.Info.fields.unified_kv,
+      input.compaction.unified_kv,
+      ["compaction", "unified_kv"],
+      diagnostics,
+    )
+    if (value !== undefined) result.unified_kv = value
+  }
   if (Object.keys(result).length || !Object.keys(input.compaction).length) encoded.compaction = result
 }
 

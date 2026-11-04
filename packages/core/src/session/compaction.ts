@@ -37,6 +37,9 @@ import { toLLMMessages } from "./runner/to-llm-message.js"
 import { SessionRecentText } from "./recent-text.js"
 import { contentFilterError, toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
+// FORK: Unified KV cache tracking for multi-agent local sessions
+// Conflict resolution: Keep this import when upstream updates compaction.ts
+import { UnifiedKV } from "./unified-kv.js"
 
 export type Settings = {
   auto: boolean
@@ -46,6 +49,8 @@ export type Settings = {
   keep: number
   /** Summarize in the background as the context nears the threshold, so automatic compaction can swap it in. */
   precompute: boolean
+  /** When enabled, compaction calculations take into account shared unified KV context across parent and subagents. */
+  unified_kv?: boolean
 }
 
 export type Editor = {
@@ -258,7 +263,7 @@ export const layer = Layer.effect(
 
     const state = State.create<Settings, Editor>({
       name: "session-compaction",
-      initial: () => ({ auto: true, keep: 15_000, precompute: false }),
+      initial: () => ({ auto: true, keep: 15_000, precompute: false, unified_kv: true }),
       editor: (settings) => ({
         configure: (update) => {
           Object.assign(settings, update)
@@ -271,6 +276,7 @@ export const layer = Layer.effect(
       context: SessionContext.Loaded,
       buffer: number | undefined,
       native: boolean,
+      otherTokens = 0,
     ) {
       const agent = native ? undefined : yield* agents.get(Agent.ID.make("compaction"))
       const model =
@@ -279,10 +285,10 @@ export const layer = Layer.effect(
             .resolve({ ...context.session, model: agent.model }, catalog.available)
             .pipe(Effect.orElseSucceed(() => undefined)))) ??
         context.model
-      const ceiling = calculateCeiling(model.limit, buffer)
+      const ceiling = calculateCeiling(model.limit, buffer, otherTokens)
       // An unknown window never triggers auto compaction, but the compaction request still needs a size to aim for.
       const cap = Number.isFinite(ceiling)
-        ? ceiling
+        ? Math.max(RESERVE_MIN, ceiling)
         : calculateCeiling({ ...model.limit, context: UNKNOWN_WINDOW }, buffer)
       return { context: model === context.model ? context : { ...context, model }, cap }
     })
@@ -293,15 +299,17 @@ export const layer = Layer.effect(
 
       // Only the user compacts when automatic compaction is off, overflow included.
       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
+      const otherTokens = isUnifiedKv(settings) ? yield* resolveTreeOtherTokens(db, context.session) : 0
+      const ceiling = calculateCeiling(context.model.limit, settings.buffer, otherTokens)
       if (
         trigger.reason === "auto" &&
-        !due(context, calculateCeiling(context.model.limit, settings.buffer), trigger.estimate)
+        !due(context, ceiling, trigger.estimate)
       )
         return { status: "skipped" }
       const held = precomputed.get(context.session.id)
       precomputed.delete(context.session.id)
       const native = context.model.compaction?.type === "native"
-      const model = yield* selectModel(context, settings.buffer, native)
+      const model = yield* selectModel(context, settings.buffer, native, otherTokens)
       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
       const budget =
         trigger.reason === "overflow"
@@ -342,7 +350,8 @@ export const layer = Layer.effect(
       if (!settings.precompute || !settings.auto) return
       const context = yield* load
       if (context.model.compaction?.type === "native") return
-      const ceiling = calculateCeiling(context.model.limit, settings.buffer)
+      const otherTokens = isUnifiedKv(settings) ? yield* resolveTreeOtherTokens(db, context.session) : 0
+      const ceiling = calculateCeiling(context.model.limit, settings.buffer, otherTokens)
       if (!Number.isFinite(ceiling)) return
       const estimate = given ?? estimatePrompt(context)
       if (due(context, ceiling, estimate)) return
@@ -1125,19 +1134,35 @@ export const estimatePrompt = (context: SessionContext.Loaded): Estimate => {
   }
 }
 
+// FORK: Unified KV Cache Tracking re-exports
+// Conflict resolution: Keep these exports if upstream updates compaction.ts
+export { UnifiedKV } from "./unified-kv.js"
+export const isUnifiedKv = UnifiedKV.isUnifiedKv
+export const estimateSessionTokens = UnifiedKV.estimateSessionTokens
+export const resolveTreeSessionIDs = UnifiedKV.resolveTreeSessionIDs
+export const resolveTreeOtherTokens = UnifiedKV.resolveTreeOtherTokens
+
 /**
  * The largest request the model takes while leaving room for its reply: `RESERVE_SHARE` of the window, or
  * `RESERVE_MIN` when that is more. A summary request that must be shrunk is aimed at the same size. A window too small
  * to give up `RESERVE_MIN` keeps `RESERVE_SHARE`.
  */
-const calculateCeiling = (limit: SessionContext.Loaded["model"]["limit"], buffer: number | undefined) => {
+export const calculateCeiling = (
+  limit: SessionContext.Loaded["model"]["limit"],
+  buffer: number | undefined,
+  otherTreeTokens = 0,
+) => {
   // Unknown limits are reported as 0. An unknown input limit falls back to the context window; with no window at
   // all, only a provider rejection can limit the request.
   const window = limit.input || limit.context
   if (window <= 0) return Number.POSITIVE_INFINITY
-  // A buffer that leaves no room, such as one set for a larger model, is ignored.
-  if (buffer !== undefined && buffer < window) return window - buffer
-  return window - Math.max(Math.floor(window * RESERVE_SHARE), window >= 2 * RESERVE_MIN ? RESERVE_MIN : 0)
+  // Base ceiling before subtracting other sessions in the unified KV pool
+  const base =
+    buffer !== undefined && buffer < window
+      ? window - buffer
+      : window - Math.max(Math.floor(window * RESERVE_SHARE), window >= 2 * RESERVE_MIN ? RESERVE_MIN : 0)
+  // FORK: Adjust ceiling under unified KV mode
+  return UnifiedKV.calculateAdjustedCeiling(base, otherTreeTokens)
 }
 
 /**

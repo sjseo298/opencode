@@ -1384,3 +1384,127 @@ it.effect("compaction summarizes as usual when the background summary no longer 
     expect(yield* compactAfterPrecompute(history.due, switched)).toContain("Third answer")
   }),
 )
+
+test("calculateCeiling adjusts headroom by subtracting otherTreeTokens", () => {
+  const limit = { context: 100_000, output: 10_000 }
+  // without buffer: reserve is max(15%, 16k) = 16k => base is 84,000
+  const baseCeiling = SessionCompaction.calculateCeiling(limit, undefined, 0)
+  expect(baseCeiling).toBe(84_000)
+
+  // with 30,000 tokens used by other sessions in unified KV pool
+  const adjusted = SessionCompaction.calculateCeiling(limit, undefined, 30_000)
+  expect(adjusted).toBe(54_000)
+
+  // with buffer = 10,000 => base is 90,000
+  const withBuffer = SessionCompaction.calculateCeiling(limit, 10_000, 20_000)
+  expect(withBuffer).toBe(70_000)
+
+  // if other sessions exceed base ceiling, it bottoms at 0
+  const exhausted = SessionCompaction.calculateCeiling(limit, undefined, 100_000)
+  expect(exhausted).toBe(0)
+})
+
+test("isUnifiedKv defaults to true and detects config overrides and env flags", () => {
+  // Default is true
+  expect(SessionCompaction.isUnifiedKv({})).toBe(true)
+  expect(SessionCompaction.isUnifiedKv()).toBe(true)
+
+  // Explicit config override
+  expect(SessionCompaction.isUnifiedKv({ unified_kv: false })).toBe(false)
+  expect(SessionCompaction.isUnifiedKv({ unified_kv: true })).toBe(true)
+
+  // Environment variable override to disable
+  process.env.OPENCODE_UNIFIED_KV = "false"
+  expect(SessionCompaction.isUnifiedKv({})).toBe(false)
+  delete process.env.OPENCODE_UNIFIED_KV
+
+  process.env.OPENCODE_KV_UNIFIED = "false"
+  expect(SessionCompaction.isUnifiedKv({})).toBe(false)
+  delete process.env.OPENCODE_KV_UNIFIED
+
+  // Config wins over env
+  process.env.OPENCODE_UNIFIED_KV = "false"
+  expect(SessionCompaction.isUnifiedKv({ unified_kv: true })).toBe(true)
+  delete process.env.OPENCODE_UNIFIED_KV
+})
+
+it.effect("resolveTreeSessionIDs discovers root parent and multiple sibling subagents", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const parentID = Session.ID.make("ses_tree_parent")
+    const subagent1ID = Session.ID.make("ses_tree_sub1")
+    const subagent2ID = Session.ID.make("ses_tree_sub2")
+    const subagentChildID = Session.ID.make("ses_tree_sub1_child")
+
+    yield* insertSession(parentID)
+    yield* insertSession(subagent1ID, { parent_id: parentID })
+    yield* insertSession(subagent2ID, { parent_id: parentID })
+    yield* insertSession(subagentChildID, { parent_id: subagent1ID })
+
+    const treeFromChild = yield* SessionCompaction.resolveTreeSessionIDs(db, {
+      id: subagentChildID,
+      parentID: subagent1ID,
+    })
+    expect(treeFromChild.slice().sort()).toEqual([parentID, subagent1ID, subagent2ID, subagentChildID].slice().sort())
+
+    const treeFromParent = yield* SessionCompaction.resolveTreeSessionIDs(db, { id: parentID })
+    expect(treeFromParent.slice().sort()).toEqual([parentID, subagent1ID, subagent2ID, subagentChildID].slice().sort())
+  }),
+)
+
+it.effect("resolveTreeOtherTokens aggregates context tokens of parent and sibling subagents", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const parentID = Session.ID.make("ses_agg_parent")
+    const sub1ID = Session.ID.make("ses_agg_sub1")
+    const sub2ID = Session.ID.make("ses_agg_sub2")
+
+    yield* insertSession(parentID)
+    yield* insertSession(sub1ID, { parent_id: parentID })
+    yield* insertSession(sub2ID, { parent_id: parentID })
+
+    // Parent has 10,000 input + 100 output = 10,100 measured tokens
+    yield* storeMessages(parentID, [measured("Parent response", 10_000)])
+    // Subagent 1 has 5,000 input + 100 output = 5,100 measured tokens
+    yield* storeMessages(sub1ID, [measured("Sub1 response", 5_000)])
+
+    // When evaluating Subagent 2, other tokens should be 10,100 + 5,100 = 15,200
+    const otherForSub2 = yield* SessionCompaction.resolveTreeOtherTokens(db, { id: sub2ID, parentID })
+    expect(otherForSub2).toBe(15_200)
+
+    // When evaluating Parent, other tokens should be Sub1 (5,100)
+    const otherForParent = yield* SessionCompaction.resolveTreeOtherTokens(db, { id: parentID })
+    expect(otherForParent).toBe(5_100)
+  }),
+)
+
+it.effect("compact triggers on subagent when combined parent and sibling context exhausts unified KV", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) => editor.configure({ unified_kv: true }))
+    const parentID = Session.ID.make("ses_ukv_parent")
+    const sub1ID = Session.ID.make("ses_ukv_sub1")
+    const sub2ID = Session.ID.make("ses_ukv_sub2")
+
+    yield* insertSession(parentID)
+    yield* insertSession(sub1ID, { parent_id: parentID })
+    const sub2Session = yield* insertSession(sub2ID, { parent_id: parentID })
+
+    // Model limit context: 200,000. Reserve 15% (30,000) => Base ceiling: 170,000
+    // Parent takes 100,000 tokens
+    yield* storeMessages(parentID, [measured("Parent work", 100_000)])
+    // Sub1 takes 50,000 tokens
+    yield* storeMessages(sub1ID, [measured("Sub1 work", 50_000)])
+
+    // Total occupied by parent + sub1 = 150,000.
+    // Available ceiling for sub2 = 170,000 - 150,000 = 20,000 tokens!
+
+    // Sub2 has 25,000 tokens (more than the 20,000 available ceiling)
+    const sub2Messages = [measured("Sub2 work", 25_000)]
+    const context = loaded(sub2Session, sub2Messages)
+
+    // With unified_kv: true, sub2 should trigger auto compaction because 25,000 >= 20,000
+    const outcome = yield* compaction.compact({ reason: "auto", context })
+    expect(outcome.status).toBe("completed")
+  }),
+)

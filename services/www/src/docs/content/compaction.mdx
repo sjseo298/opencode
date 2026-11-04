@@ -85,8 +85,28 @@ Add `compaction` to any [OpenCode configuration file](/config):
 | `auto` | `true` | Compact automatically near the context limit, and recover once when a provider rejects a request as too long. Manual compaction always works. |
 | `keep.tokens` | `15000` | Approximate recent conversation kept beside the summary. Larger values preserve more detail but leave less room for new work. |
 | `buffer` | 15% of the limit, at least 16k | Tokens to keep free below the model's limit. Larger values start automatic compaction earlier. A buffer at least as large as the model's limit is ignored. |
+| `unified_kv` | `true` | Account for shared context consumed by parent and sibling sessions in local multi-agent environments with unified KV cache pools. Set to `false` to disable. |
 
 `keep.tokens` and `buffer` accept non-negative integers.
+
+## Unified KV for local models
+
+When running with local model backends (such as llama.cpp, MLX, or LM Studio) that share a unified KV cache pool across concurrent or child sessions, child subagents draw from the same physical memory buffer as their parent session.
+
+`unified_kv` is enabled by default so subagents automatically deduct the context already occupied by the parent session and any active sibling subagents when calculating remaining context headroom before triggering compaction.
+
+To disable this behavior and treat subagent contexts independently, set `unified_kv: false`:
+
+```jsonc title="opencode.jsonc"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "compaction": {
+    "unified_kv": false,
+  },
+}
+```
+
+You can also disable this globally using the `OPENCODE_UNIFIED_KV=false` or `OPENCODE_KV_UNIFIED=false` environment variable.
 
 ## Model
 
