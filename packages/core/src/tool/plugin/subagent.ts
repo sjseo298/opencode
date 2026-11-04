@@ -45,6 +45,21 @@ export const Input = Schema.Struct({
     description:
       "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",
   }),
+  contextBudget: Schema.optionalKey(
+    Schema.Struct({
+      availableHeadroom: Schema.Number.annotate({
+        description:
+          "Available context headroom measured via the context_budget tool. MANDATORY: You must call context_budget first and pass the verified number.",
+      }),
+      estimatedTaskTokens: Schema.optionalKey(Schema.Number).annotate({
+        description:
+          "Optional estimate of tokens this delegated subtask will consume (reads, logs, output).",
+      }),
+    }),
+  ).annotate({
+    description:
+      "MANDATORY context verification: You must run context_budget before delegating to assess headroom and task sizing.",
+  }),
 })
 
 export const Output = Schema.Struct({
@@ -54,6 +69,8 @@ export const Output = Schema.Struct({
 })
 export const description = [
   "Spawns an agent in a child session to work on the specified task.",
+  "MANDATORY REQUIREMENT: You MUST invoke the `context_budget` tool BEFORE calling this tool, and provide `contextBudget: { availableHeadroom: <number> }`.",
+  "Verify that the task fits into `maxRecommendedSubagentBudget`. If it exceeds that budget, decompose the task into tertiary sub-objectives (SO-N-TM) instead of spawning an oversized subagent.",
   "The output includes a sessionID you can pass back later to continue that specific conversation with the subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
   "Foreground (default) runs the subagent to completion and returns its final response.",
@@ -107,6 +124,21 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              if (
+                input.contextBudget?.availableHeadroom === undefined ||
+                typeof input.contextBudget.availableHeadroom !== "number" ||
+                input.contextBudget.availableHeadroom <= 0
+              ) {
+                return yield* new ToolFailure({
+                  message: [
+                    "Delegation blocked: Missing context headroom verification.",
+                    "Before delegating work to any subagent, you MUST call the `context_budget` tool to inspect available tokens and task sizing limits.",
+                    "Then invoke `subagent` including `contextBudget: { availableHeadroom: <measured_number> }`.",
+                    "If the intended task exceeds `maxRecommendedSubagentBudget`, decompose the objective into smaller tertiary subtasks (SO-N-TM) first.",
+                  ].join("\n"),
+                })
+              }
+
               const parent = yield* sessions
                 .get(context.sessionID)
                 .pipe(

@@ -624,6 +624,8 @@ When resolving complex tasks, an agent may leverage the `subagent` tool to offlo
 3. **Subagent Task Sizing & Context Protection (Mandatory)**:
    * **Do NOT delegate overly large tasks to subagents**, or they will exhaust their available context window before finishing.
    * Always assign **medium-sized, achievable tasks** (*tareas medianas y realizables*) with a clear, bounded scope.
+   * **Mandatory Context Budget Gatekeeper**: Before calling `subagent`, you MUST execute the `context_budget` tool to inspect `availableHeadroom` and `maxRecommendedSubagentBudget` (computed dynamically as `(headroom - parentReserve) / maxSubagents`). Pass `contextBudget: { availableHeadroom: <number> }` in the subagent call; calls omitting this parameter are mechanically blocked.
+   * **Mandatory Tertiary Decomposition**: If a task to delegate is estimated to exceed `maxRecommendedSubagentBudget`, you MUST decompose the Secondary Objective into Tertiary Sub-objectives (`SO-N-TM`) via `objective_manage(action: 'add_tertiary')` rather than delegating an oversized monolithic task.
    * If a task is large, **split it into several smaller subagent tasks whenever possible** (*partir esas tareas a los subagentes en varias, si es que es posible*).
    * Only as a **last resort** (*en último caso*)—when a task genuinely cannot be split—delegate the task to the subagent so it does what it needs to do.
 4. **Evidence Integration**: Review each subagent's evidence and output and integrate its findings into the active Secondary Objective (or Tertiary) via `objective_manage`.

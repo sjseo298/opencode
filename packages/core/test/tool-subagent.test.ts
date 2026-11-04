@@ -53,6 +53,7 @@ const overrideModel = Model.Ref.make({
   variant: Model.VariantID.make("fast"),
 })
 const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+const validBudget = { availableHeadroom: 100_000 }
 
 const outputSessionID = (value: unknown) =>
   Schema.decodeUnknownSync(Schema.Struct({ sessionID: Session.ID }))(value).sessionID
@@ -246,7 +247,7 @@ describe("SubagentTool", () => {
               type: "tool-call",
               id: "call-completion-replay",
               name: SubagentTool.name,
-              input: { agent: "reviewer", description: "background review", prompt: "review", background: true },
+              input: { agent: "reviewer", description: "background review", prompt: "review", background: true, contextBudget: validBudget },
             },
           })
           const marker = yield* Deferred.await(admitted)
@@ -306,7 +307,7 @@ describe("SubagentTool", () => {
                 type: "tool-call",
                 id: "call-primary",
                 name: SubagentTool.name,
-                input: { agent: "primary", description: "primary", prompt: "should fail" },
+                input: { agent: "primary", description: "primary", prompt: "should fail", contextBudget: validBudget },
               },
             }),
           ).toEqual({
@@ -341,7 +342,7 @@ describe("SubagentTool", () => {
                 type: "tool-call",
                 id: "call-nested-subagent",
                 name: SubagentTool.name,
-                input: { agent: "reviewer", description: "nested", prompt: "should fail" },
+                input: { agent: "reviewer", description: "nested", prompt: "should fail", contextBudget: validBudget },
               },
             }),
           ).toEqual({
@@ -382,7 +383,7 @@ describe("SubagentTool", () => {
               type: "tool-call",
               id: "call-configured-nested-subagent",
               name: SubagentTool.name,
-              input: { agent: "reviewer", description: "nested", prompt: "should run" },
+              input: { agent: "reviewer", description: "nested", prompt: "should run", contextBudget: validBudget },
             },
           })
 
@@ -424,7 +425,7 @@ describe("SubagentTool", () => {
               type: "tool-call",
               id: "call-subagent",
               name: SubagentTool.name,
-              input: { agent: "reviewer", description: "review", prompt: "review this", model: "", sessionID: "" },
+              input: { agent: "reviewer", description: "review", prompt: "review this", model: "", sessionID: "", contextBudget: validBudget },
             },
           })
 
@@ -454,7 +455,7 @@ describe("SubagentTool", () => {
               type: "tool-call",
               id: "call-subagent-fallback",
               name: SubagentTool.name,
-              input: { agent: "fallback", description: "fallback", prompt: "fallback" },
+              input: { agent: "fallback", description: "fallback", prompt: "fallback", contextBudget: validBudget },
             },
           })
           const fallbackChild = yield* sessions.get(outputSessionID(fallback.metadata))
@@ -485,7 +486,7 @@ describe("SubagentTool", () => {
               type: "tool-call",
               id: "call-subagent-first",
               name: SubagentTool.name,
-              input: { agent: "reviewer", description: "review", prompt: "review this" },
+              input: { agent: "reviewer", description: "review", prompt: "review this", contextBudget: validBudget },
             },
           })
           const childID = outputSessionID(first.metadata)
@@ -502,6 +503,7 @@ describe("SubagentTool", () => {
                 prompt: "continue this",
                 sessionID: childID,
                 model: "",
+                contextBudget: validBudget,
               },
             },
           })
@@ -555,6 +557,7 @@ describe("SubagentTool", () => {
                 prompt: "continue while running",
                 sessionID: child.id,
                 background: true,
+                contextBudget: validBudget,
               },
             },
           })
@@ -606,7 +609,7 @@ describe("SubagentTool", () => {
                 type: "tool-call" as const,
                 id,
                 name: SubagentTool.name,
-                input: { agent, description: "follow up", prompt: "continue", sessionID },
+                input: { agent, description: "follow up", prompt: "continue", sessionID, contextBudget: validBudget },
               },
             })
 
@@ -626,7 +629,7 @@ describe("SubagentTool", () => {
                 type: "tool-call",
                 id: "call-malformed-child-id",
                 name: SubagentTool.name,
-                input: { agent: "reviewer", description: "follow up", prompt: "continue", sessionID: "placeholder" },
+                input: { agent: "reviewer", description: "follow up", prompt: "continue", sessionID: "placeholder", contextBudget: validBudget },
               },
             }),
           ).toMatchObject({
@@ -690,7 +693,7 @@ describe("SubagentTool", () => {
                 type: "tool-call" as const,
                 id,
                 name: SubagentTool.name,
-                input: { agent: "reviewer", description: "review", prompt: "review this", ...input },
+                input: { agent: "reviewer", description: "review", prompt: "review this", contextBudget: validBudget, ...input },
               },
             })
 
@@ -748,7 +751,7 @@ describe("SubagentTool", () => {
                 type: "tool-call",
                 id: "call-subagent-failure",
                 name: SubagentTool.name,
-                input: { agent: "reviewer", description: "fail review", prompt: "please fail" },
+                input: { agent: "reviewer", description: "fail review", prompt: "please fail", contextBudget: validBudget },
               },
             }),
           ).toEqual({
@@ -791,7 +794,7 @@ describe("SubagentTool", () => {
               type: "tool-call",
               id: "call-background-subagent",
               name: SubagentTool.name,
-              input: { agent: "reviewer", description: "background review", prompt: "review", background: true },
+              input: { agent: "reviewer", description: "background review", prompt: "review", background: true, contextBudget: validBudget },
             },
           })
           const childID = outputSessionID(settled.metadata)
@@ -820,6 +823,38 @@ describe("SubagentTool", () => {
           expect(synthetic).toHaveLength(1)
           expect(synthetic[0]?.text).toContain(`<subagent sessionID="${childID}" state="completed"`)
           expect(synthetic[0]?.text).toContain(childText)
+        }),
+      ),
+    ),
+  )
+
+  it.live("blocks delegation when contextBudget is missing", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const result = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-gate-missing",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "review", prompt: "review" },
+            },
+          })
+
+          expect(result.status).toBe("error")
+          expect(result.error?.message).toContain("Delegation blocked: Missing context headroom verification")
         }),
       ),
     ),

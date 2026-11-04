@@ -50,6 +50,11 @@ ${concurrencyBullets}
   * Always assign **medium-sized, achievable tasks** (tareas medianas y realizables) with a bounded scope.
   * If a task is large, **split it into several smaller subagent tasks whenever possible** (partir las tareas grandes en varias subtareas si es posible).
   * Only as a **last resort** (en último caso)—when a task genuinely cannot be split—delegate the task to the subagent so it does what it needs to do.
+- MANDATORY CONTEXT BUDGET VERIFICATION (GATEKEEPER):
+  * You MUST invoke the \`context_budget\` tool BEFORE calling \`subagent\`.
+  * Read \`availableHeadroom\` and \`maxRecommendedSubagentBudget\` (calculated dynamically based on available context and concurrency slots: \`(headroom - parentReserve) / maxSubagents\`).
+  * Pass the measured value into \`subagent({ ..., contextBudget: { availableHeadroom: <number> } })\`. Omitting this parameter causes the tool to reject the delegation call.
+  * If the task to delegate is estimated to exceed \`maxRecommendedSubagentBudget\`, you MUST decompose it into smaller tertiary subtasks (SO-N-TM) rather than delegating an oversized monolithic task.
 
 ## Structured Prompt Format (Required)
 
