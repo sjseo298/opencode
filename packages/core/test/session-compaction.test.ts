@@ -1478,6 +1478,42 @@ it.effect("resolveTreeOtherTokens aggregates context tokens of parent and siblin
   }),
 )
 
+it.effect("resolveTreeOtherTokens ignores completed subagents whose slots have been freed", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const parentID = Session.ID.make("ses_freed_parent")
+    const completedSubID = Session.ID.make("ses_freed_sub1")
+    const runningSubID = Session.ID.make("ses_freed_sub2")
+
+    yield* insertSession(parentID)
+    yield* insertSession(completedSubID, { parent_id: parentID })
+    yield* insertSession(runningSubID, { parent_id: parentID })
+
+    // Parent has measured tokens + a completed synthetic delivery from completedSubID
+    yield* storeMessages(parentID, [
+      measured("Parent response", 10_000),
+      SessionMessage.Synthetic.make({
+        id: SessionMessage.ID.create(),
+        type: "synthetic",
+        text: `<subagent sessionID="${completedSubID}" state="completed">done</subagent>`,
+        time: { created: DateTime.makeUnsafe(2) },
+      }),
+    ])
+
+    // completedSubID has 5,000 tokens
+    yield* storeMessages(completedSubID, [measured("Sub1 response", 5_000)])
+
+    // When evaluating runningSubID, other tokens should ONLY be Parent (10,100)
+    // because completedSubID has already delivered state="completed" and freed its KV cache!
+    const otherForRunningSub = yield* SessionCompaction.resolveTreeOtherTokens(db, { id: runningSubID, parentID })
+    expect(otherForRunningSub).toBe(10_100)
+
+    // When evaluating Parent, other tokens should be 0 because completedSubID is finished!
+    const otherForParent = yield* SessionCompaction.resolveTreeOtherTokens(db, { id: parentID })
+    expect(otherForParent).toBe(0)
+  }),
+)
+
 it.effect("compact triggers on subagent when combined parent and sibling context exhausts unified KV", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service

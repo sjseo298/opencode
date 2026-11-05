@@ -91,26 +91,26 @@ export const Plugin = {
               const unifiedKvTreeTokens = currentSessionTokens + otherTreeTokens
 
               // Available headroom calculation
-              const buffer = Math.max(16_000, Math.floor(contextLimit * 0.15))
-              const ceiling = UnifiedKV.calculateAdjustedCeiling(contextLimit - buffer, otherTreeTokens)
+              // Buffer preserves 15% (minimum 16k) of context window as safety margin
+              const safetyReserveTokens = Math.max(16_000, Math.floor(contextLimit * 0.15))
+              const ceiling = UnifiedKV.calculateAdjustedCeiling(contextLimit - safetyReserveTokens, otherTreeTokens)
               const availableHeadroom = Math.max(0, ceiling - currentSessionTokens)
 
               // Slot capacity & concurrency
               const { totalSlots, maxSubagents } = getDetectedSubagentCapacity()
 
               // Dynamic budget calculation:
-              // Headroom after leaving parent headroom to process results
-              const parentReserveTokens = Math.max(8_192, Math.floor(contextLimit * 0.15))
-              const effectiveHeadroom = Math.max(0, availableHeadroom - parentReserveTokens)
+              // availableHeadroom already protects the safety reserve.
+              // We divide availableHeadroom across available subagent slots.
               const maxRecommendedSubagentBudget = Math.max(
                 1_024,
-                Math.floor(effectiveHeadroom / Math.max(1, maxSubagents)),
+                Math.floor(availableHeadroom / Math.max(1, maxSubagents)),
               )
 
-              const isTight = effectiveHeadroom <= 4_096
+              const isTight = availableHeadroom <= 8_192
               const recommendation = isTight
                 ? `CRITICAL: Remaining context headroom is critically tight (${availableHeadroom} tokens). Delegating large tasks will trigger immediate overflow or compaction. Split into minimal atomic subtasks or compact parent first.`
-                : `Verified: ${availableHeadroom} tokens available in unified tree. With ${maxSubagents} subagent slot(s) and a parent safety reserve of ${parentReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into tertiary subtasks (SO-N-TM) before delegating.`
+                : `Verified: ${availableHeadroom} tokens available in unified tree. With ${maxSubagents} subagent slot(s) and a safety reserve of ${safetyReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into tertiary subtasks (SO-N-TM) before delegating.`
 
               const result = {
                 contextLimit,
@@ -120,7 +120,7 @@ export const Plugin = {
                 availableHeadroom,
                 maxSubagents,
                 totalSlots,
-                parentReserveTokens,
+                parentReserveTokens: safetyReserveTokens,
                 maxRecommendedSubagentBudget,
                 recommendation,
               }
