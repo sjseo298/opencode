@@ -290,9 +290,10 @@ clean_turbo() {
 typecheck_report() {
   echo "🔍  Running typecheck..."
   cd "$REPO_ROOT"
-  local TYPECHECK_OUTPUT
-  TYPECHECK_OUTPUT=$(bun typecheck 2>&1) || true
-  local TYPECHECK_EXIT=$?
+  local TYPECHECK_OUTPUT=""
+  local TYPECHECK_EXIT=0
+  # '|| true' would swallow the real exit code ($? becomes 0); capture it explicitly.
+  TYPECHECK_OUTPUT=$(bun typecheck 2>&1) || TYPECHECK_EXIT=$?
 
   if [ $TYPECHECK_EXIT -ne 0 ]; then
     echo ""
