@@ -147,9 +147,10 @@ sync_repo() {
     git checkout -f dev 2>/dev/null || git checkout -B dev origin/dev
     git reset --hard origin/dev
 
-    # Drop any leftover temporary build-sync stash if present
-    local stash_idx
-    stash_idx=$(git stash list 2>/dev/null | grep "build-sync: temporary stash" | head -n1 | cut -d: -f1)
+    # Drop any leftover temporary build-sync stash if present.
+    # '|| true': with no stashes, grep exits 1 and pipefail+set -e would abort the sync silently.
+    local stash_idx=""
+    stash_idx=$(git stash list 2>/dev/null | grep "build-sync: temporary stash" | head -n1 | cut -d: -f1 || true)
     if [ -n "$stash_idx" ]; then
       git stash drop "$stash_idx" 2>/dev/null || true
     fi
@@ -232,15 +233,41 @@ sync_repo() {
   echo "✅ Synced."
 }
 
-# ── install dependencies ──────────────────────────────────────────
+# ── install dependencies + freshness guard ────────────────────────
+# Records a fingerprint (bun.lock hash + bun version) after each successful
+# install. When it no longer matches — new lockfile from sync, bun upgrade, or
+# an interrupted/skipped incremental install — force a clean reinstall so stale
+# node_modules never reach the compile step. The stamp lives inside
+# node_modules (gitignored), so wiping deps removes it automatically.
+LOCK_STAMP="$REPO_ROOT/node_modules/.opencodeplus-lock-fingerprint"
+
+lock_fingerprint() {
+  local bun_ver lock_hash="missing"
+  bun_ver="$(bun --version 2>/dev/null || echo none)"
+  if [[ -f "$REPO_ROOT/bun.lock" ]]; then
+    lock_hash="$(sha256sum "$REPO_ROOT/bun.lock" | cut -d' ' -f1)"
+  fi
+  printf '%s %s\n' "$bun_ver" "$lock_hash"
+}
+
 install_deps() {
   echo "📦  Installing dependencies (this may take a few minutes)..."
   cd "$REPO_ROOT"
   ensure_bun_version "HEAD"
+  local expected current=""
+  expected="$(lock_fingerprint)"
+  if [[ -f "$LOCK_STAMP" ]]; then
+    current="$(cat "$LOCK_STAMP")"
+  fi
+  if [[ "$current" != "$expected" ]]; then
+    echo "🔄 Lockfile or bun changed since the last successful install — forcing clean reinstall..."
+    rm -rf node_modules
+  fi
   if ! bun install; then
     echo "⚠️  bun install failed with exit code $?" >&2
     exit 1
   fi
+  printf '%s\n' "$expected" > "$LOCK_STAMP"
   echo "✅ Dependencies installed."
 }
 
@@ -318,13 +345,52 @@ test_plugins() {
   return 0  # Never fail the build
 }
 
-# ── build ─────────────────────────────────────────────────────────
-build() {
-  echo "🔨  Building opencode (single target)..."
+# ── build + automatic dependency recovery ─────────────────────────
+run_single_build() {
   cd "$OPENCODE_DIR"
   bun run script/build.ts --single
-  clean_residuals
-  echo "✅ Build complete."
+}
+
+reinstall_node_modules() {
+  echo "🧹  Cleaning node_modules and reinstalling..."
+  rm -rf node_modules
+  if ! bun install; then
+    echo "⚠️  bun install failed during auto-recovery" >&2
+    return 1
+  fi
+  printf '%s\n' "$(lock_fingerprint)" > "$LOCK_STAMP"
+}
+
+build() {
+  local log="${TMPDIR:-/tmp}/opencodeplus-build.$$.log"
+  echo "🔨  Building opencode (single target)..."
+  if run_single_build >"$log" 2>&1; then
+    rm -f "$log"
+    clean_residuals
+    echo "✅ Build complete."
+    return 0
+  fi
+  if ! grep -qE 'Cannot find module|Failed to resolve import' "$log"; then
+    echo "⚠️  Build failed (no dependency-resolution symptom). Last lines of $log:" >&2
+    tail -n 30 "$log" >&2
+    return 1
+  fi
+  echo "⚠️  Dependency resolution error — auto-recovery: clean reinstall + one retry..."
+  if ! reinstall_node_modules; then
+    rm -f "$log"
+    return 1
+  fi
+  if run_single_build >"$log" 2>&1; then
+    echo "✅ Auto-recovered (clean node_modules)."
+    rm -f "$log"
+    clean_residuals
+    echo "✅ Build complete."
+    return 0
+  fi
+  # Keep the log on /tmp for inspection after a failed retry.
+  echo "⚠️  Build still failing after auto-recovery. Last lines of $log:" >&2
+  tail -n 30 "$log" >&2
+  return 1
 }
 
 # ── main ──────────────────────────────────────────────────────────
