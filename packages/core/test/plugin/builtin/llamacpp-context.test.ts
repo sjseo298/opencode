@@ -133,8 +133,6 @@ describe("llamacpp-context", () => {
   })
 
   describe("plugin lifecycle & hooks", () => {
-    const originalEnv = { ...process.env }
-
     afterEach(() => {
       delete process.env.OPENCODE_LLAMACPP_CONTEXT
       delete process.env.OPENCODE_LLMACPP_CONTEXT
