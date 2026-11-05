@@ -136,7 +136,8 @@ describe("llamacpp-context", () => {
     const originalEnv = { ...process.env }
 
     afterEach(() => {
-      process.env = { ...originalEnv }
+      delete process.env.OPENCODE_LLAMACPP_CONTEXT
+      delete process.env.OPENCODE_LLMACPP_CONTEXT
     })
 
     test("respects OPENCODE_LLAMACPP_CONTEXT=off", async () => {
@@ -153,6 +154,7 @@ describe("llamacpp-context", () => {
 
       await plugin.setup(mockCtx)
       expect(modelTransformCalled).toBe(false)
+      delete process.env.OPENCODE_LLAMACPP_CONTEXT
     })
 
     test("registers model transform, hooks, and commands", async () => {
