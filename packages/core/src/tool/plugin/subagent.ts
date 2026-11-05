@@ -139,6 +139,17 @@ export const Plugin = {
                 })
               }
 
+              const MIN_SUBAGENT_BUDGET = 16_000
+              if (input.contextBudget.availableHeadroom < MIN_SUBAGENT_BUDGET) {
+                return yield* new ToolFailure({
+                  message: [
+                    `Delegation rejected: Insufficient context budget (${input.contextBudget.availableHeadroom} tokens available, minimum required is ${MIN_SUBAGENT_BUDGET} tokens).`,
+                    "The server cannot allocate a safe KV context for a subagent without risking immediate context exhaustion.",
+                    "You must perform this task directly in the main thread (mode: 'main'), or voluntarily trigger compaction on the parent session first to reclaim working context.",
+                  ].join("\n"),
+                })
+              }
+
               const parent = yield* sessions
                 .get(context.sessionID)
                 .pipe(

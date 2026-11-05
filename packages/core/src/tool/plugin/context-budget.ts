@@ -18,6 +18,8 @@ import { getDetectedSubagentCapacity } from "../../plugin/builtin/subagent-manda
 
 export const name = "context_budget"
 
+export const MIN_SUBAGENT_BUDGET = 16_000
+
 export const Input = Schema.Struct({
   targetAgent: Schema.optionalKey(Schema.String).annotate({
     description: "Optional subagent agent ID to calculate budget for (defaults to current session model).",
@@ -33,7 +35,9 @@ export const Output = Schema.Struct({
   maxSubagents: Schema.Number,
   totalSlots: Schema.Number,
   parentReserveTokens: Schema.Number,
+  minSubagentBudget: Schema.Number,
   maxRecommendedSubagentBudget: Schema.Number,
+  canDelegate: Schema.Boolean,
   recommendation: Schema.String,
 })
 export type Output = typeof Output.Type
@@ -42,6 +46,7 @@ export const description = [
   "Measures the current context consumption across the session tree and computes the dynamic safe budget for subagent tasks.",
   "MANDATORY REQUIREMENT: You MUST invoke this tool before delegating work to any subagent.",
   "The returned availableHeadroom MUST be passed to the subagent tool under contextBudget.availableHeadroom.",
+  "If availableHeadroom < minSubagentBudget (16,000 tokens), delegation is blocked (canDelegate: false); the primary session must execute the task directly in the main thread (mode: 'main') or voluntarily compact first.",
   "If the task you intend to delegate exceeds maxRecommendedSubagentBudget, decompose the objective into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) first.",
 ].join("\n")
 
@@ -99,6 +104,9 @@ export const Plugin = {
               // Slot capacity & concurrency
               const { totalSlots, maxSubagents } = getDetectedSubagentCapacity()
 
+              // Delegation threshold & minimum budget
+              const canDelegate = availableHeadroom >= MIN_SUBAGENT_BUDGET
+
               // Dynamic budget calculation:
               // availableHeadroom already protects the safety reserve.
               // We divide availableHeadroom across available subagent slots.
@@ -107,10 +115,10 @@ export const Plugin = {
                 Math.floor(availableHeadroom / Math.max(1, maxSubagents)),
               )
 
-              const isTight = availableHeadroom <= 8_192
+              const isTight = availableHeadroom < MIN_SUBAGENT_BUDGET
               const recommendation = isTight
-                ? `CRITICAL: Remaining context headroom is critically tight (${availableHeadroom} tokens). Delegating large tasks will trigger immediate overflow or compaction. Split into minimal atomic subtasks or compact parent first.`
-                : `Verified: ${availableHeadroom} tokens available in unified tree. With ${maxSubagents} subagent slot(s) and a safety reserve of ${safetyReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) before delegating.`
+                ? `DELEGATION_BLOCKED: Context headroom (${availableHeadroom} tokens) is below the minimum viable subagent budget (${MIN_SUBAGENT_BUDGET} tokens). Do NOT delegate to a subagent (canDelegate: false). Execute this task directly in the main thread (mode: 'main'), or if the primary session has extensive accumulated history that can be pruned, voluntarily trigger compaction first.`
+                : `Verified: ${availableHeadroom} tokens available in unified tree. Delegation allowed (canDelegate: true). With ${maxSubagents} subagent slot(s) and a safety reserve of ${safetyReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) before delegating.`
 
               const result = {
                 contextLimit,
@@ -121,7 +129,9 @@ export const Plugin = {
                 maxSubagents,
                 totalSlots,
                 parentReserveTokens: safetyReserveTokens,
+                minSubagentBudget: MIN_SUBAGENT_BUDGET,
                 maxRecommendedSubagentBudget,
+                canDelegate,
                 recommendation,
               }
 

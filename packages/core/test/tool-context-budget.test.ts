@@ -81,6 +81,8 @@ describe("ContextBudgetTool", () => {
           expect(budget1.maxRecommendedSubagentBudget).toBeGreaterThan(0)
           // With 1 subagent slot, the recommended budget matches available headroom directly (no double deduction)
           expect(budget1.maxRecommendedSubagentBudget).toBe(budget1.availableHeadroom)
+          expect(budget1.minSubagentBudget).toBe(16_000)
+          expect(budget1.canDelegate).toBe(budget1.availableHeadroom >= 16_000)
 
           // 2. Run with 4 slots (3 subagents) -> budget per subagent should scale inversely with concurrency
           g.__OPENCODE_TOTAL_SLOTS__ = 4

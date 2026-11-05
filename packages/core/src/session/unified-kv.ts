@@ -128,38 +128,57 @@ export const resolveTreeSessionIDs = (
 /**
  * Determines whether a subagent session has completed its execution and delivered
  * its result back to the parent session. Completed subagents have released their KV cache slot.
+ *
+ * Checks both database lifecycle state (SessionTable) and message metadata.
  */
 export const isSubagentCompleted = (
-  parentMessages: ReadonlyArray<SessionMessage.Info>,
-  subagentID: string,
+  sessionRow: {
+    time_idle?: number | null
+    idle_outcome?: string | null
+    time_suspended?: number | null
+  } | undefined,
+  parentMessages?: ReadonlyArray<SessionMessage.Info>,
+  subagentID?: string,
 ): boolean => {
-  return parentMessages.some((msg) => {
-    // Check synthetic subagent completion notification messages
-    if (msg.type === "synthetic") {
-      const text = (msg as any).text ?? (msg as any).payload?.text ?? ""
-      if (
-        typeof text === "string" &&
-        text.includes(`sessionID="${subagentID}"`) &&
-        (text.includes('state="completed"') || text.includes('state="error"') || text.includes('state="cancelled"'))
-      ) {
-        return true
-      }
-    }
-    // Also check assistant message tool completion metadata
-    if (msg.type === "assistant" && Array.isArray((msg as any).content)) {
-      for (const part of (msg as any).content) {
+  // 1. Authoritative check via SessionTable lifecycle fields:
+  // A subagent has completed and freed its KV cache if it reached an idle state with an outcome
+  if (sessionRow) {
+    if (sessionRow.time_idle !== null && sessionRow.time_idle !== undefined) return true
+    if (sessionRow.idle_outcome !== null && sessionRow.idle_outcome !== undefined) return true
+  }
+
+  // 2. Check via parent messages if available (synthetic or tool completion)
+  if (parentMessages && subagentID) {
+    return parentMessages.some((msg) => {
+      // Check synthetic subagent completion notification messages
+      if (msg.type === "synthetic") {
+        const text = (msg as any).text ?? (msg as any).payload?.text ?? ""
         if (
-          part.type === "tool" &&
-          part.name === "subagent" &&
-          part.state?.metadata?.sessionID === subagentID &&
-          part.state?.status === "completed"
+          typeof text === "string" &&
+          text.includes(`sessionID="${subagentID}"`) &&
+          (text.includes('state="completed"') || text.includes('state="error"') || text.includes('state="cancelled"'))
         ) {
           return true
         }
       }
-    }
-    return false
-  })
+      // Also check assistant message tool completion metadata
+      if (msg.type === "assistant" && Array.isArray((msg as any).content)) {
+        for (const part of (msg as any).content) {
+          if (
+            part.type === "tool" &&
+            part.name === "subagent" &&
+            part.state?.metadata?.sessionID === subagentID &&
+            part.state?.status === "completed"
+          ) {
+            return true
+          }
+        }
+      }
+      return false
+    })
+  }
+
+  return false
 }
 
 /**
@@ -186,7 +205,7 @@ export const resolveTreeOtherTokens = (
       currParentID = parent?.parent_id ?? null
     }
 
-    // Load parent messages once to detect completed subagents
+    // Load parent messages once as secondary fallback
     const parentMessages = yield* SessionHistory.load(db, rootID, "latest").pipe(Effect.orDie)
 
     let totalOther = 0
@@ -194,8 +213,20 @@ export const resolveTreeOtherTokens = (
       if (sid === currentSession.id) continue
       // If sid is a child subagent and it already completed and delivered back to parent,
       // its KV cache slot has been freed by the local inference engine.
-      if (sid !== rootID && isSubagentCompleted(parentMessages, sid)) {
-        continue
+      if (sid !== rootID) {
+        const [subRow] = yield* db
+          .select({
+            time_idle: SessionTable.time_idle,
+            idle_outcome: SessionTable.idle_outcome,
+            time_suspended: SessionTable.time_suspended,
+          })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sid))
+          .limit(1)
+          .pipe(Effect.orDie)
+        if (isSubagentCompleted(subRow, parentMessages, sid)) {
+          continue
+        }
       }
       const messages = yield* SessionHistory.load(db, sid, "latest").pipe(Effect.orDie)
       totalOther += estimateSessionTokens(messages)

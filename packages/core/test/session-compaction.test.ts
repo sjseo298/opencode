@@ -1514,6 +1514,29 @@ it.effect("resolveTreeOtherTokens ignores completed subagents whose slots have b
   }),
 )
 
+it.effect("resolveTreeOtherTokens detects completed subagents via SessionTable idle state without parent message match", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const parentID = Session.ID.make("ses_db_idle_parent")
+    const subID = Session.ID.make("ses_db_idle_sub")
+
+    yield* insertSession(parentID)
+    // Subagent has time_idle and idle_outcome recorded directly in SessionTable
+    yield* insertSession(subID, {
+      parent_id: parentID,
+      time_idle: Date.now(),
+      idle_outcome: "succeeded",
+    })
+
+    yield* storeMessages(parentID, [measured("Parent message", 8_000)])
+    yield* storeMessages(subID, [measured("Subagent message", 12_000)])
+
+    // Parent evaluating other tokens should see 0 because subID is completed in DB!
+    const otherForParent = yield* SessionCompaction.resolveTreeOtherTokens(db, { id: parentID })
+    expect(otherForParent).toBe(0)
+  }),
+)
+
 it.effect("compact triggers on subagent when combined parent and sibling context exhausts unified KV", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service
