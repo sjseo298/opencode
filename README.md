@@ -52,13 +52,13 @@ Cuando se ejecuta sin `--skip-sync`, el script:
 - Fusiona automáticamente los cambios con `git merge upstream/dev --no-edit`.
 - Verifica si existen commits locales propios y los empuja a `origin/dev` automáticamente. Esto permite que el fork público se mantenga actualizado con tus modificaciones sin necesidad de acciones manuales.
 
-**2. Instalación de dependencias**
+**2. Instalación de dependencias (con auto-reparación)**
 
-Ejecuta `bun install` para instalar todas las dependencias del proyecto. Si la instalación falla, el script muestra un mensaje de error y se detiene.
+Ejecuta `bun install` para instalar todas las dependencias del proyecto. Tras cada instalación exitosa se graba una huella (`bun.lock` + versión de bun) en `node_modules/.opencodeplus-lock-fingerprint`; si al arrancar la huella no coincide (el sync trajo un lockfile nuevo o cambió la versión de bun), el script fuerza una reinstalación limpia borrando `node_modules`. Si la instalación falla, muestra un mensaje de error y se detiene.
 
-**3. Construcción**
+**3. Construcción (con reintento automático)**
 
-Ejecuta el script de construcción de opencode (`bun run script/build.ts --single`) para generar el binario para la plataforma actual.
+Ejecuta el script de construcción de opencode (`bun run script/build.ts --single`) para generar el binario para la plataforma actual. Si el build falla por resolución de dependencias (por ejemplo, `Cannot find module`), limpia automáticamente `node_modules`, reinstala y reintenta una sola vez; si vuelve a fallar, muestra el final del log (conservado en `/tmp/opencodeplus-build.<pid>.log`) y se detiene.
 
 **4. Configuración de PATH (solo Linux)**
 
