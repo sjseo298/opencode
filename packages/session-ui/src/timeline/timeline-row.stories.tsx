@@ -1,8 +1,14 @@
-import type { SessionMessageAssistant, SessionMessageInfo } from "@opencode/client/promise"
-import { createMemo, onCleanup, onMount } from "solid-js"
+import type {
+  PromptAttachment,
+  SessionMessageAssistant,
+  SessionMessageInfo,
+  SessionMessageUser,
+} from "@opencode/client/promise"
+import { createMemo, For, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { SessionDocument } from "../document"
 import { SessionTimeline } from "./session-timeline"
+import { CommentCard, commentCardTarget } from "../message/comment-card"
 import type { ReasoningMode } from "./projection"
 import { CurrentSessionProviders, CurrentSessionTimelineStory } from "../storybook/current-session-story"
 import {
@@ -53,6 +59,67 @@ export const StreamingReasoningAndText = {
       description="The active turn contains a reasoning summary and a partial response."
       document={streamingDocument}
       width="560px"
+    />
+  ),
+}
+
+export const ResponseSpeed = {
+  args: { measured: true, steered: false },
+  render: (args: { measured: boolean; steered: boolean }) => (
+    <CurrentSessionTimelineStory
+      title="Response speed"
+      description="Hover the response to reveal tokens per second across both model steps."
+      width="720px"
+      document={{
+        sessionID: CURRENT_SESSION_ID,
+        status: { type: "idle" },
+        diffs: [],
+        messages: [
+          {
+            id: "msg_speed_user",
+            type: "user",
+            text: "Check the timeline performance.",
+            time: { created: STORY_TIME },
+          },
+          {
+            id: "msg_speed_inspect",
+            type: "assistant",
+            agent: "build",
+            model: STORY_MODEL,
+            content: [{ type: "text", text: "I'll inspect the timeline before checking the results." }],
+            tokens: { input: 1000, output: 270, reasoning: 30, cache: { read: 0, write: 0 } },
+            time: {
+              created: STORY_TIME + 100,
+              streamed: args.measured ? STORY_TIME + 3100 : undefined,
+              completed: STORY_TIME + 290_000,
+            },
+          },
+          ...(args.steered
+            ? [
+                {
+                  id: "msg_speed_steer",
+                  type: "user" as const,
+                  text: "Include narrow layouts in the check.",
+                  time: { created: STORY_TIME + 290_000 },
+                },
+              ]
+            : []),
+          {
+            id: "msg_speed_reply",
+            type: "assistant",
+            agent: "build",
+            model: STORY_MODEL,
+            content: [{ type: "text", text: "The timeline checks passed. No performance regressions were found." }],
+            tokens: { input: 2000, output: 500, reasoning: 100, cache: { read: 0, write: 0 } },
+            time: {
+              created: STORY_TIME + 290_000,
+              streamed: STORY_TIME + 302_000,
+              completed: STORY_TIME + 302_000,
+            },
+          },
+          { id: "msg_speed_idle", type: "idle", outcome: "succeeded", time: { created: STORY_TIME + 302_000 } },
+        ],
+      }}
     />
   ),
 }
@@ -544,6 +611,79 @@ export const PromptWithAttachments = {
   ),
 }
 
+export const QuoteAttachments = {
+  render: () => (
+    <div
+      style={{
+        padding: "24px",
+        display: "grid",
+        "grid-template-columns": "minmax(0, 1fr)",
+        gap: "8px",
+        width: "360px",
+        "max-width": "100%",
+      }}
+    >
+      <CommentCard comment="Remove this" target={{ type: "quote", text: "The menu is hovered." }} wide />
+      <CommentCard
+        comment="Can we make this smaller?"
+        target={{
+          type: "quote",
+          text: "It has a 32px minimum, capped at the track height. The remaining space is reserved for the timeline content.",
+        }}
+        wide
+      />
+    </div>
+  ),
+}
+
+export const NoteAttachments = {
+  render: () => {
+    const [state, setState] = createStore({ selected: "None" })
+
+    const notes = [
+      { name: "Named", label: "button#save", title: "button#save", subtitle: "Browser annotation" },
+      { name: "Unnamed", label: "button", title: "button.icon-only", subtitle: "Browser annotation", comment: " \t " },
+      { name: "Legacy", label: "Legacy element" },
+      { name: "Whitespace", label: "Fallback element", title: " \n ", subtitle: " \t " },
+      { name: "Title only", label: "Original label", title: "button#save" },
+      {
+        name: "Commented",
+        label: "Original selector",
+        title: "Ignored title",
+        subtitle: "Browser annotation",
+        comment: "Fix this",
+      },
+      { name: "RTL subtitle", label: "زر الحفظ", title: "button#save", subtitle: "تعليق المتصفح", rtl: true },
+      { name: "RTL legacy", label: "العنصر الأصلي", rtl: true },
+      {
+        name: "Long selector",
+        label: 'main > section.settings-panel > form > button[data-action="save-all-account-preferences"]',
+        title: 'main > section.settings-panel > form > button[data-action="save-all-account-preferences"]',
+        subtitle: "Browser annotation",
+      },
+    ]
+
+    return (
+      <div style={{ padding: "24px", display: "flex", "flex-wrap": "wrap", gap: "24px", "max-width": "800px" }}>
+        <For each={notes}>
+          {(note) => (
+            <section aria-label={note.name} dir={note.rtl ? "rtl" : "ltr"}>
+              <h2 style={{ "font-size": "13px", "margin-bottom": "8px" }}>{note.name}</h2>
+              <CommentCard
+                target={commentCardTarget({ type: "note", icon: "code", ...note })}
+                comment={note.comment ?? ""}
+                tooltip
+                onClick={() => setState("selected", note.name)}
+              />
+            </section>
+          )}
+        </For>
+        <output aria-label="Selected attachment">{state.selected}</output>
+      </div>
+    )
+  },
+}
+
 export const VoiceMessages = {
   render: () => (
     <CurrentSessionTimelineStory
@@ -741,6 +881,53 @@ const UserMessageLinks = {
   ),
 }
 
+const storyChart = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 160 120"><rect width="160" height="120" fill="#f3f4f6"/><path d="M16 96h128" stroke="#9ca3af"/><rect x="28" y="56" width="20" height="40" fill="#009fff"/><rect x="60" y="36" width="20" height="60" fill="#009fff"/><rect x="92" y="68" width="20" height="28" fill="#009fff"/><rect x="124" y="24" width="12" height="72" fill="#009fff"/></svg>',
+)}`
+
+const flakyMedia = `media:${"a".repeat(64)}`
+
+const mediaFiles: PromptAttachment[] = [
+  { mime: "image/svg+xml", name: "flaky.svg", source: { type: "inline" }, uri: flakyMedia },
+  { mime: "image/svg+xml", name: "ready.svg", source: { type: "inline" }, uri: `media:${"b".repeat(64)}` },
+]
+
+const MediaAttachmentRetry = {
+  render: () => {
+    // The first read of `flakyMedia` fails, as an offline server would; a retry reads it.
+    const failed = new Set<string>()
+
+    return (
+      <CurrentSessionTimelineStory
+        title="Prompt with unreadable media"
+        description="A stored image that fails to load shows a failed tile; clicking it reads the image again."
+        readMedia={(uri) => {
+          if (uri !== flakyMedia || failed.has(uri)) return Promise.resolve(storyChart)
+          failed.add(uri)
+
+          return Promise.reject(new Error("offline"))
+        }}
+        document={{
+          ...thinkingDocument,
+          status: { type: "idle" },
+          messages: [
+            {
+              id: "msg_story_media_user",
+              type: "user",
+              text: "Compare these charts",
+              agents: [],
+              // SAFETY: stored files reach the timeline as `media:` refs, a variant the generated message type does not list.
+              files: mediaFiles as SessionMessageUser["files"],
+              time: { created: 1_735_689_633_000 },
+            },
+          ],
+        }}
+        width="620px"
+      />
+    )
+  },
+}
+
 const conversationScenarios = {
   reasoning: AgentReasoning,
   hidden: WorkingWithoutReasoningDetails,
@@ -752,6 +939,7 @@ const conversationScenarios = {
   models: AliasedModelNotices,
   attachments: RichUserAttachments,
   links: UserMessageLinks,
+  media: MediaAttachmentRetry,
 }
 
 export const Conversation = {
