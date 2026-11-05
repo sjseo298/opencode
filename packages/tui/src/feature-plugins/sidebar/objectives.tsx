@@ -297,6 +297,13 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                   ⏸ {po().checkpointNote}
                 </text>
               </Show>
+              <Show when={po().status === "presented_awaiting_confirmation"}>
+                <box paddingTop={0} paddingBottom={0}>
+                  <text fg={theme.text.feedback.warning.base} wrapMode="word">
+                    <b>⏸ Plan pendiente de aprobación</b> — escribe <i>/plan</i> para abrir el diálogo
+                  </text>
+                </box>
+              </Show>
             </box>
 
             {/* Secondary Objectives List */}

@@ -93,6 +93,23 @@ export interface SecondaryObjective {
   updatedAt: number
 }
 
+export interface ContextMetrics {
+  tokensUsed?: number
+  contextWindow?: number
+  percentUsed?: number
+  recommendFreshSession: boolean
+  secondaryCount: number
+  findingsCount: number
+}
+
+export interface PlanHandoffPayload {
+  version: number
+  originSessionID: string
+  transferredAt: number
+  tree: PrimaryObjective
+  suggestedPrompt: string
+}
+
 export interface PrimaryObjective {
   title: string
   status: PrimaryObjectiveStatus
@@ -105,6 +122,9 @@ export interface PrimaryObjective {
   options?: Option[] // Multi-candidate options with a live Result column (F-5)
   fingerprints?: Fingerprint[] // Normalized blocker fingerprints (F-7/C-4)
   phase?: PhaseState // Plan-pause / checkpoint state (F-6)
+  unattended?: boolean // Unattended / headless automation mode flag
+  contextMetrics?: ContextMetrics // Diagnostic metrics computed upon presenting plan
+  originSessionID?: string // Traceability link if this session was spawned from another
   touchedFiles?: string[] // Session-level record of files modified via edit/write
   relevantDocumentableFiles?: string[] // Files judged (via one-shot /btw or heuristic) to require documentation
   createdAt: number
@@ -189,7 +209,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "ORDER OF OPERATIONS (PLAN FIRST, EXECUTE SECOND): You MUST construct the objective plan FIRST via `objective_manage` before executing code modifications, running mutating tasks, or attempting fixes. Never execute first and document objectives after the fact. READ-ONLY RECONNAISSANCE PERMITTED (RECON PHASE): You ARE permitted and encouraged to perform read-only reconnaissance (reading files, directory listings, searching code, checking configuration, or running a read-only scout subagent) BEFORE calling `set_primary`. Gathering structural facts to establish a grounded, accurate plan does NOT violate planning-first; only mutating operations (edits, writes, mutating commands, builds) are prohibited prior to plan creation and approval.",
   "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
   "2. Decompose the task into initial **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
-  "3. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, and `secondaries: [{ title: '...', rationale: '...' }, ...]`. Optional reconnaissance findings discovered before planning can be ingested immediately via `findings: [{ title: '...', result: '...', evidence: '...' }, ...]`; if `soRef` is omitted, they default to the first SO. MANDATORY PLAN PRESENTATION & APPROVAL: You MUST present the initial plan to the user for review and refinement before executing mutating tasks (either by passing `presentPlan: true` in `set_primary` or immediately calling `action: 'present_plan'`). The tree FREEZES in status `presented_awaiting_confirmation`. Present the plan clearly in your response, pause your turn, and wait for confirmation or adjustments (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves or adjusts, call `action: 'resume_plan'` with their instructions to begin execution.",
+  "3. Incremental Plan Construction & Mandatory Plan Presentation: Construct the plan incrementally to avoid oversized monolithic payloads that risk token cutoff (stop reason: length) or long generation hangs. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, `dodCriteria`, and `plannedSecondaryCount: N` declaring the intended number of subtasks. Then register initial secondary objectives via `add_secondary` (in batches of 2-3) and initial reconnaissance findings via `add_finding`. Once the draft is complete, call `action: 'present_plan'` (or let `set_primary` freeze if all secondaries were provided) to transition the tree to `presented_awaiting_confirmation`. Draft planning actions (`add_secondary` in pending, `add_finding`, `update_dod`) are automatically permitted during planning and review without requiring 'draft: true'. MANDATORY PLAN PRESENTATION & STRICT ANTI-SIMULATION DIRECTIVE: Whenever the user requests planning ('presentame un plan', 'haz un plan', 'diseña un plan', etc.) or whenever a task requires planning/implementation, you MUST strictly use `objective_manage` to construct and present the plan. You MUST NEVER simulate informal proposals in markdown text, present numbered phase lists in chat, or ask conversational questions like '¿Deseas que implemente?' or '¿Cómo deseas proceder?'. Doing so bypasses the protocol and prevents OpenCode's native UI dialog (`DialogPlanApproval`) from appearing. Present the plan clearly in your response, pause your turn, and wait for confirmation via the native modal dialog (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves or adjusts, call `action: 'resume_plan'` with their instructions to begin execution.",
   "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: whenever you discover new secondary or tertiary objectives, WHENEVER the user intervenes and changes or corrects direction, scope, or approach, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
   "5. Subtasks / Level-3 Decomposition (Cardinality Note): A Secondary Objective may be decomposed into Level-3 subtasks (TO-N) ONLY when it proves too large to execute as a single unit (broad scope, multiple independent steps, or high context cost). CARDINALITY RULE: 'Tertiary' refers strictly to the 3rd hierarchical depth level (PO [1] -> SO [2] -> TO [3]), NEVER a fixed quantity of 3. You may and should create as many subtasks (`SO-N-T1`, `SO-N-T2` ... `SO-N-TN`, e.g. 2, 4, 7, 10...) as needed so each fits safely within the subagent budget. Do NOT pre-create subtasks for small secondaries. They are FIRST-CLASS children of their parent SO: register them with `objective_manage` (`action: 'add_tertiary'`, passing the parent SO id in `id`, e.g. `SO-2`, plus title and rationale) and manage them with `action: 'update_tertiary'` using each tertiary's own id (e.g. `SO-2-T1`). They inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy. CLOSURE RULE (NO SHORTCUTS): a secondary objective can only be resolved when ALL of its tertiary objectives are closed (resolved/discarded/cancelled), and the Primary Objective can only be completed when EVERY secondary objective — including all of their tertiary objectives — is closed; the tool rejects both shortcuts.",
   "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented. The tool auto-creates this documentation objective when it detects public-surface file changes and no documentation objective exists.",
@@ -1578,7 +1598,15 @@ function trackTouchedFile(sessionID: string, path: string): void {
 }
 
 // F-6: plan pause / resume / checkpoint state machine.
-export function presentPlan(sessionID: string, reason?: string): { success: boolean; error?: string; po?: PrimaryObjective } {
+export function presentPlan(
+  sessionID: string,
+  reason?: string,
+  options?: {
+    tokensUsed?: number
+    contextWindow?: number
+    unattended?: boolean
+  },
+): { success: boolean; error?: string; po?: PrimaryObjective; contextMetrics?: ContextMetrics } {
   const po = sessionObjectives.get(sessionID)
   if (!po) {
     return { success: false, error: `No active objective tree found for session ${sessionID}.` }
@@ -1586,9 +1614,33 @@ export function presentPlan(sessionID: string, reason?: string): { success: bool
   const now = Date.now()
   po.status = "presented_awaiting_confirmation"
   po.phase = { paused: true, since: now, checkpointAt: po.phase?.checkpointAt, reason: reason?.trim() || undefined }
+
+  if (options?.unattended !== undefined) {
+    po.unattended = options.unattended
+  }
+
+  const tokensUsed = options?.tokensUsed
+  const contextWindow = options?.contextWindow
+  const percentUsed =
+    typeof tokensUsed === "number" && typeof contextWindow === "number" && contextWindow > 0
+      ? Math.round((tokensUsed / contextWindow) * 100)
+      : undefined
+  const recommendFreshSession =
+    (percentUsed !== undefined && percentUsed >= 35) ||
+    (typeof tokensUsed === "number" && tokensUsed >= 30000)
+
+  const contextMetrics: ContextMetrics = {
+    tokensUsed,
+    contextWindow,
+    percentUsed,
+    recommendFreshSession,
+    secondaryCount: po.secondaries.length,
+    findingsCount: (po.findings ?? []).length,
+  }
+  po.contextMetrics = contextMetrics
   po.updatedAt = now
   persistSessionObjectives(sessionID)
-  return { success: true, po }
+  return { success: true, po, contextMetrics }
 }
 
 export function resumePlan(sessionID: string, note?: string): { success: boolean; error?: string; po?: PrimaryObjective } {
@@ -1602,6 +1654,52 @@ export function resumePlan(sessionID: string, note?: string): { success: boolean
   po.updatedAt = now
   persistSessionObjectives(sessionID)
   return { success: true, po }
+}
+
+export function createPlanHandoff(
+  sessionID: string,
+  targetSessionID?: string,
+): { success: boolean; error?: string; payload?: PlanHandoffPayload; targetSessionID?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const now = Date.now()
+  const clonedTree: PrimaryObjective = JSON.parse(JSON.stringify(po))
+  clonedTree.status = "exploring"
+  clonedTree.phase = { paused: false, since: now, checkpointAt: clonedTree.phase?.checkpointAt, reason: "Transferred to fresh session" }
+  clonedTree.originSessionID = sessionID
+  clonedTree.updatedAt = now
+
+  const suggestedPrompt =
+    `<plan-handoff>\n` +
+    `Execution session launched from approved plan in session ${sessionID}.\n` +
+    `Primary Objective: ${clonedTree.title}\n` +
+    `Definition of Done: ${clonedTree.definitionOfDone}\n` +
+    `Imported: ${clonedTree.secondaries.length} Secondary Objective(s), ${(clonedTree.findings ?? []).length} Finding(s).\n` +
+    `Context headroom: 100% clean (0 prior conversational chat tokens).\n` +
+    `Instruction: Begin execution of the first pending secondary objective (SO-1) immediately.\n` +
+    `</plan-handoff>`
+
+  const payload: PlanHandoffPayload = {
+    version: 1,
+    originSessionID: sessionID,
+    transferredAt: now,
+    tree: clonedTree,
+    suggestedPrompt,
+  }
+
+  if (targetSessionID?.trim()) {
+    sessionObjectives.set(targetSessionID.trim(), clonedTree)
+    persistSessionObjectives(targetSessionID.trim())
+  }
+
+  return {
+    success: true,
+    payload,
+    targetSessionID: targetSessionID?.trim(),
+    po: clonedTree,
+  }
 }
 
 export function makeCheckpoint(sessionID: string, note?: string): { success: boolean; error?: string; report?: string; po?: PrimaryObjective } {
@@ -1842,6 +1940,33 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
     for (const fp of po.fingerprints ?? []) {
       lines.push(`- **${fp.key}** [${fp.status}] ${fp.symptom} (${fp.soRef}, fix: ${fp.fixRef})`)
     }
+  }
+
+  if (po.status === "presented_awaiting_confirmation") {
+    lines.push(``, `---`, `**📊 Plan Presentation & Context Diagnostics:**`)
+    if (po.contextMetrics) {
+      const cm = po.contextMetrics
+      const tokensStr =
+        typeof cm.tokensUsed === "number"
+          ? typeof cm.contextWindow === "number"
+            ? `${cm.tokensUsed.toLocaleString()} / ${cm.contextWindow.toLocaleString()} tokens (${cm.percentUsed ?? 0}% used)`
+            : `${cm.tokensUsed.toLocaleString()} tokens used`
+          : "Unmeasured"
+      lines.push(`- **Context consumption:** ${tokensStr}`)
+      lines.push(
+        `- **Session recommendation:** ${
+          cm.recommendFreshSession
+            ? "⚠️ High context consumption during exploration. Starting execution in a **Fresh Session** is strongly recommended to maximize token headroom."
+            : "✅ Sufficient context headroom available."
+        }`,
+      )
+    }
+    lines.push(
+      `- **Interactive Confirmation Options (Choose one before execution):**`,
+      `  1. **[Fresh Session]** Approve plan and launch in a fresh execution session with clean context and all objectives/findings preserved.`,
+      `  2. **[Same Session]** Approve plan and continue execution in the current session.`,
+      `  3. **[Refine Plan]** Request adjustments (the agent will update the plan draft without executing code).`,
+    )
   }
 
   return lines.join("\n")
@@ -2446,6 +2571,8 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("sync"),
   Schema.Literal("present_plan"),
   Schema.Literal("resume_plan"),
+  Schema.Literal("approve_plan"),
+  Schema.Literal("handoff_plan"),
   Schema.Literal("checkpoint"),
   Schema.Literal("audit"),
   Schema.Literal("list"),
@@ -2893,6 +3020,52 @@ export const ObjectiveInputSchema = Schema.Struct({
       }),
     ),
   ),
+  unattended: Schema.optional(
+    Schema.NullOr(Schema.Boolean).pipe(
+      Schema.annotate({
+        description:
+          "When true (or when OPENCODE_UNATTENDED=true), enables autonomous execution mode: plan auto-approves without freezing in presented_awaiting_confirmation, skipping human approval.",
+      }),
+    ),
+  ),
+  tokensUsed: Schema.optional(
+    Schema.NullOr(Schema.Number).pipe(
+      Schema.annotate({
+        description:
+          "Tokens consumed during exploration/planning phase, used to compute context metrics and fresh session recommendation.",
+      }),
+    ),
+  ),
+  contextWindow: Schema.optional(
+    Schema.NullOr(Schema.Number).pipe(
+      Schema.annotate({
+        description:
+          "Total context window limit of the model, used with tokensUsed to compute percent context consumption.",
+      }),
+    ),
+  ),
+  approveMode: Schema.optional(
+    Schema.NullOr(
+      Schema.Union([
+        Schema.Literal("fresh_session"),
+        Schema.Literal("same_session"),
+        Schema.Literal("refine_plan"),
+      ]),
+    ).pipe(
+      Schema.annotate({
+        description:
+          "Approval mode for 'approve_plan': 'fresh_session' (initiates handoff with clean context), 'same_session' (resumes in current session), or 'refine_plan' (keeps plan in draft).",
+      }),
+    ),
+  ),
+  targetSessionID: Schema.optional(
+    Schema.NullOr(Schema.String).pipe(
+      Schema.annotate({
+        description:
+          "Target session ID when executing 'handoff_plan' to transfer the objective tree into a fresh session.",
+      }),
+    ),
+  ),
 })
 
 export const ObjectiveOutputSchema = Schema.Struct({
@@ -2905,12 +3078,28 @@ export const ObjectiveOutputSchema = Schema.Struct({
   payload: Schema.optional(
     Schema.String.pipe(Schema.annotate({ description: "Serialized tree document (JSON) for 'export_tree'" })),
   ),
+  mode: Schema.optional(Schema.String),
+  targetSessionID: Schema.optional(Schema.String),
+  contextMetrics: Schema.optional(Schema.Unknown),
+  confirmationOptions: Schema.optional(Schema.Unknown),
+  handoffPayload: Schema.optional(Schema.Unknown),
 })
 
 // ---------- Tool execution ----------
 
 type ToolResult = {
-  output: { success: boolean; message: string; tree: string; report?: string; payload?: string }
+  output: {
+    success: boolean
+    message: string
+    tree: string
+    report?: string
+    payload?: string
+    mode?: string
+    targetSessionID?: string
+    contextMetrics?: any
+    confirmationOptions?: any
+    handoffPayload?: any
+  }
   content: string
 }
 
@@ -2968,8 +3157,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   const po = sessionObjectives.get(sessionID)
 
   // F-6: the plan-pause state machine freezes execution mutations until the user confirms.
-  // Planning draft mutations (adding/updating secondary definitions in pending status, or refining DoD)
-  // are allowed during presented_awaiting_confirmation if 'draft: true' or 'refinePlan: true' is passed.
+  // Planning draft actions (adding secondary definitions in pending status, recording findings, or refining DoD)
+  // are allowed during presented_awaiting_confirmation (even if 'draft: true' was omitted by the agent),
+  // ensuring the plan can be enriched and refined without artificial tool rejections.
+  // Execution mutations (moving any objective to 'exploring' or 'resolved', complete_primary, etc.) remain strictly frozen.
   if (po?.status === "presented_awaiting_confirmation") {
     const isDraftPlanAction =
       rawAction === "add_secondary" ||
@@ -2980,23 +3171,22 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       rawAction === "update_finding"
     const isDraftUpdateAction = rawAction === "update_secondary" || rawAction === "update_secondaries"
 
-    const allowDraft = input.draft === true || input.allowDraft === true || input.refinePlan === true
+    if (isDraftPlanAction || isDraftUpdateAction) {
+      const targetStatus = input.status ? String(input.status).toLowerCase() : undefined
+      const secondariesList = Array.isArray(input.secondaries) ? input.secondaries : []
+      const hasNonPending =
+        (targetStatus && targetStatus !== "pending") ||
+        secondariesList.some((s: any) => s?.status && String(s.status).toLowerCase() !== "pending")
 
-    if (allowDraft && (isDraftPlanAction || isDraftUpdateAction)) {
-      if (isDraftUpdateAction) {
-        const targetStatus = input.status ? String(input.status).toLowerCase() : undefined
-        const secondariesList = Array.isArray(input.secondaries) ? input.secondaries : []
-        const hasNonPending = (targetStatus && targetStatus !== "pending") || secondariesList.some((s: any) => s.status && String(s.status).toLowerCase() !== "pending")
-        if (hasNonPending) {
-          return {
-            output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
-            content: FROZEN_MESSAGE,
-          }
+      if (hasNonPending) {
+        return {
+          output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
+          content: FROZEN_MESSAGE,
         }
       }
-      // Permitted to refine draft!
+      // Permitted to refine draft! Execution remains frozen.
     } else {
-      if (PAUSED_MUTATING_ACTIONS.has(rawAction) || isDraftPlanAction || isDraftUpdateAction) {
+      if (PAUSED_MUTATING_ACTIONS.has(rawAction)) {
         return {
           output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
           content: FROZEN_MESSAGE,
@@ -3103,22 +3293,45 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     const rawPlanned = input.plannedSecondaryCount
     const parsedPlanned = typeof rawPlanned === "number" ? rawPlanned : typeof rawPlanned === "string" && !isNaN(Number(rawPlanned.trim())) ? Number(rawPlanned.trim()) : undefined
     const plannedCount = parsedPlanned !== undefined && !isNaN(parsedPlanned) ? parsedPlanned : undefined
-    let countWarning: string | undefined
-    if (plannedCount !== undefined && plannedCount > 0 && countProvided < plannedCount) {
-      const missingCount = plannedCount - countProvided
-      const receivedRange = countProvided > 0 ? `SO-1..SO-${countProvided}` : "none"
-      countWarning =
-        `\n\n⚠️ [Protocol Warning - Incomplete Plan Admission]: You declared 'plannedSecondaryCount: ${plannedCount}', ` +
-        `but only ${countProvided} secondary objective(s) were received (${receivedRange}). ` +
-        `${missingCount} objective(s) (SO-${countProvided + 1}..SO-${plannedCount}) are missing (likely cut off mid-generation). ` +
-        `The received objectives were registered and the tree is currently FROZEN in 'presented_awaiting_confirmation'. ` +
-        `ACTION REQUIRED: Before presenting the plan to the user, add the remaining ${missingCount} objective(s) in batch ` +
-        `via action: 'add_secondary' with 'secondaries: [{ title: '...', rationale: '...', delegation: {...} }, ...]' and 'draft: true'.`
+    const isIncompletePlan = plannedCount !== undefined && plannedCount > 0 && countProvided < plannedCount
+    const hasCompleteSecondaries = Array.isArray(input.secondaries) && input.secondaries.length > 0 && !isIncompletePlan
+
+    const isUnattended =
+      input.unattended === true ||
+      created.unattended === true ||
+      (typeof process !== "undefined" &&
+        (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
+
+    if (isUnattended) {
+      created.unattended = true
     }
 
-    const hasSecondaries = (Array.isArray(input.secondaries) && input.secondaries.length > 0) || (plannedCount !== undefined && plannedCount > 0)
     const isTestEnv = typeof process !== "undefined" && (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test" || Boolean(process.env.VITEST))
-    const shouldFreeze = input.presentPlan === true || input.pauseForConfirmation === true || (!isTestEnv && input.presentPlan !== false && hasSecondaries)
+    const shouldFreeze =
+      !isUnattended &&
+      (input.presentPlan === true || input.pauseForConfirmation === true || (!isTestEnv && input.presentPlan !== false && hasCompleteSecondaries))
+
+    let countWarning: string | undefined
+    if (isIncompletePlan) {
+      const missingCount = plannedCount! - countProvided
+      const receivedRange = countProvided > 0 ? `SO-1..SO-${countProvided}` : "none"
+      if (shouldFreeze) {
+        countWarning =
+          `\n\n⚠️ [Protocol Warning - Incomplete Plan Admission]: You declared 'plannedSecondaryCount: ${plannedCount}', ` +
+          `but only ${countProvided} secondary objective(s) were received (${receivedRange}). ` +
+          `${missingCount} objective(s) (SO-${countProvided + 1}..SO-${plannedCount}) are missing (likely cut off mid-generation). ` +
+          `The received objectives were registered and the tree is currently FROZEN in 'presented_awaiting_confirmation'. ` +
+          `ACTION REQUIRED: Before presenting the plan to the user, add the remaining ${missingCount} objective(s) ` +
+          `via action: 'add_secondary' with 'secondaries: [{ title: '...', rationale: '...', delegation: {...} }, ...]'.`
+      } else {
+        countWarning =
+          `\n\n⚠️ [Protocol Notice - Incremental Plan Construction]: You declared 'plannedSecondaryCount: ${plannedCount}', ` +
+          `and received ${countProvided} secondary objective(s) (${receivedRange}). ` +
+          `${missingCount} objective(s) (SO-${countProvided + 1}..SO-${plannedCount}) remain to be registered. ` +
+          `Tree status is 'exploring' (draft preparation). ACTION REQUIRED: Add the remaining ${missingCount} objective(s) ` +
+          `via action: 'add_secondary', add initial findings via 'add_finding', and then call action: 'present_plan' to freeze the tree and present the plan to the user.`
+      }
+    }
 
     if (shouldFreeze) {
       // Bloqueo estricto: ningún sub-objetivo inicial puede iniciar en 'exploring' o 'resolved' antes de la aprobación
@@ -3138,20 +3351,55 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     if (shouldFreeze) {
-      presentPlan(sessionID, input.reason)
+      const presented = presentPlan(sessionID, input.reason, {
+        tokensUsed: input.tokensUsed,
+        contextWindow: input.contextWindow,
+        unattended: false,
+      })
       const frozenTree = treeOf(sessionID)
       const message =
-        "Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval. Present the plan to the user and call action 'resume_plan' once confirmed." +
+        "Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval. Present the plan to the user and call action 'resume_plan' or 'approve_plan' once confirmed." +
         (countWarning ?? "")
+      const confirmationOptions = [
+        {
+          mode: "fresh_session",
+          label: "Approve & launch in Fresh Session (Recommended to maximize token headroom)",
+          description: "Spawns a clean session with 100% token headroom, transferring all objectives and findings.",
+        },
+        {
+          mode: "same_session",
+          label: "Approve & continue in Current Session",
+          description: "Unfreezes execution in the current session thread.",
+        },
+        {
+          mode: "refine_plan",
+          label: "Request Adjustments / Refine Plan",
+          description: "Keeps plan in draft mode to receive user corrections without executing code.",
+        },
+      ]
       return {
-        output: { success: true, message, tree: frozenTree },
+        output: {
+          success: true,
+          message,
+          tree: frozenTree,
+          contextMetrics: presented.contextMetrics,
+          confirmationOptions,
+        },
         content: frozenTree + (countWarning ?? ""),
       }
     }
 
+    if (isUnattended) {
+      created.status = "exploring"
+      persistSessionObjectives(sessionID)
+    }
+
     const tree = renderObjectiveTree(created)
+    const establishedMsg = isUnattended
+      ? "Primary Objective and secondaries established in unattended mode (auto-approved). Execution proceeds autonomously."
+      : "Primary Objective and secondaries established."
     return {
-      output: { success: true, message: `Primary Objective and secondaries established.` + (countWarning ?? ""), tree },
+      output: { success: true, message: establishedMsg + (countWarning ?? ""), tree },
       content: tree + (countWarning ?? ""),
     }
   }
@@ -3898,16 +4146,76 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   }
 
   if (rawAction === "present_plan") {
-    const presented = presentPlan(sessionID, input.reason)
+    const isUnattended =
+      input.unattended === true ||
+      sessionObjectives.get(sessionID)?.unattended === true ||
+      (typeof process !== "undefined" &&
+        (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
+
+    if (isUnattended) {
+      const po = sessionObjectives.get(sessionID)
+      if (po) {
+        po.unattended = true
+        po.status = "exploring"
+        po.phase = { ...po.phase, paused: false, reason: input.reason?.trim() || "Unattended auto-approval" }
+        po.updatedAt = Date.now()
+        persistSessionObjectives(sessionID)
+      }
+      const tree = treeOf(sessionID)
+      const message = "Plan presented in unattended mode (auto-approved). Execution proceeds autonomously."
+      return { output: { success: true, message, tree }, content: tree }
+    }
+
+    const presented = presentPlan(sessionID, input.reason, {
+      tokensUsed: input.tokensUsed,
+      contextWindow: input.contextWindow,
+      unattended: false,
+    })
     if (!presented.success) {
       return { output: { success: false, message: presented.error || "Failed to present plan.", tree: "" }, content: presented.error || "Failed to present plan." }
     }
     const tree = treeOf(sessionID)
-    const message = "Plan presented. The tree is FROZEN until the user explicitly confirms. Present the plan to the user and call action 'resume_plan' with their instruction to continue."
-    return { output: { success: true, message, tree }, content: tree }
+    const confirmationOptions = [
+      {
+        mode: "fresh_session",
+        label: "Approve & launch in Fresh Session (Recommended to maximize token headroom)",
+        description: "Spawns a clean session with 100% token headroom, transferring all objectives and findings.",
+      },
+      {
+        mode: "same_session",
+        label: "Approve & continue in Current Session",
+        description: "Unfreezes execution in the current session thread.",
+      },
+      {
+        mode: "refine_plan",
+        label: "Request Adjustments / Refine Plan",
+        description: "Keeps plan in draft mode to receive user corrections without executing code.",
+      },
+    ]
+    const message = "Plan presented. The tree is FROZEN until the user explicitly confirms. Present the plan to the user and call action 'resume_plan' or 'approve_plan' with their instruction to continue."
+    return { output: { success: true, message, tree, contextMetrics: presented.contextMetrics, confirmationOptions }, content: tree }
   }
 
   if (rawAction === "resume_plan") {
+    const isUnattended =
+      input.unattended === true ||
+      sessionObjectives.get(sessionID)?.unattended === true ||
+      (typeof process !== "undefined" &&
+        (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
+
+    if (!isUnattended && (!input.note || input.note.trim().length < 2)) {
+      return {
+        output: {
+          success: false,
+          message:
+            "Deterministic Guardrail Block: 'resume_plan' requires explicit user confirmation ('note') documenting the user's approval before execution can begin (or enable 'unattended: true' for headless automation).",
+          tree: treeOf(sessionID),
+        },
+        content:
+          "Deterministic Guardrail Block: 'resume_plan' requires explicit user confirmation ('note') documenting the user's approval before execution can begin.",
+      }
+    }
+
     const resumed = resumePlan(sessionID, input.note)
     if (!resumed.success) {
       return { output: { success: false, message: resumed.error || "Failed to resume plan.", tree: "" }, content: resumed.error || "Failed to resume plan." }
@@ -3915,6 +4223,67 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     const tree = treeOf(sessionID)
     const message = `Plan resumed${input.note ? ` — user instruction: ${input.note}` : ""}. Continue execution.`
     return { output: { success: true, message, tree }, content: tree }
+  }
+
+  if (rawAction === "approve_plan") {
+    const mode = input.approveMode || (input.targetSessionID ? "fresh_session" : "same_session")
+    if (mode === "refine_plan") {
+      const tree = treeOf(sessionID)
+      const message = "Plan retained in draft mode for refinement. Update objectives using draft: true."
+      return { output: { success: true, message, tree, mode: "refine_plan" }, content: tree }
+    }
+
+    if (mode === "fresh_session") {
+      const handoff = createPlanHandoff(sessionID, input.targetSessionID)
+      if (!handoff.success) {
+        return { output: { success: false, message: handoff.error || "Failed to create plan handoff.", tree: "" }, content: handoff.error || "Failed to create plan handoff." }
+      }
+      const tree = treeOf(sessionID)
+      const message = input.targetSessionID
+        ? `Plan approved and transferred to fresh session '${input.targetSessionID}'. Context is clean (100% headroom). Begin execution of SO-1 in the new session.`
+        : `Plan approved for fresh session. Handoff payload generated with clean context and all objectives/findings preserved.`
+      return {
+        output: {
+          success: true,
+          message,
+          tree,
+          mode: "fresh_session",
+          targetSessionID: input.targetSessionID,
+          handoffPayload: handoff.payload,
+        },
+        content: message + "\n\n" + (handoff.payload?.suggestedPrompt ?? ""),
+      }
+    }
+
+    // Default: same_session
+    const resumed = resumePlan(sessionID, input.note ?? "Approved by user in current session")
+    if (!resumed.success) {
+      return { output: { success: false, message: resumed.error || "Failed to approve plan.", tree: "" }, content: resumed.error || "Failed to approve plan." }
+    }
+    const tree = treeOf(sessionID)
+    const message = "Plan approved. Tree unfrozen in current session. Continue execution."
+    return { output: { success: true, message, tree, mode: "same_session" }, content: tree }
+  }
+
+  if (rawAction === "handoff_plan") {
+    const handoff = createPlanHandoff(sessionID, input.targetSessionID)
+    if (!handoff.success) {
+      return { output: { success: false, message: handoff.error || "Failed to create plan handoff.", tree: "" }, content: handoff.error || "Failed to create plan handoff." }
+    }
+    const tree = treeOf(sessionID)
+    const message = input.targetSessionID
+      ? `Plan handed off into fresh session '${input.targetSessionID}' with 100% clean context. Execution ready.`
+      : `Plan handoff payload created. Use payload to hydrate fresh execution session.`
+    return {
+      output: {
+        success: true,
+        message,
+        tree,
+        targetSessionID: input.targetSessionID,
+        handoffPayload: handoff.payload,
+      },
+      content: message + "\n\n" + (handoff.payload?.suggestedPrompt ?? ""),
+    }
   }
 
   if (rawAction === "checkpoint") {
@@ -3996,6 +4365,12 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             const po = sessionObjectives.get(sessionID)
             if (po) {
               await syncSessionObjectivesMetadata(sessionID, po)
+            }
+            if (input.targetSessionID && typeof input.targetSessionID === "string") {
+              const targetPo = sessionObjectives.get(input.targetSessionID.trim())
+              if (targetPo) {
+                await syncSessionObjectivesMetadata(input.targetSessionID.trim(), targetPo)
+              }
             }
             return withWarnings(sessionID, result)
           },

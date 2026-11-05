@@ -69,6 +69,7 @@ import { DialogImagePreview } from "../../component/dialog-image-preview"
 import { statusLabel } from "../../component/dialog-workspace-file-changes"
 import { DialogMessage } from "./dialog-message"
 import { DialogFork } from "./dialog-fork"
+import { DialogPlanApproval } from "./dialog-plan-approval"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogGoUpsell } from "../../component/dialog-go-upsell"
 import { UsageLimitNotice, useLimitNotice, useUsageAlerts } from "../../component/usage"
@@ -743,6 +744,35 @@ export function Session(props: {
         })
     }),
   )
+
+  // One-shot Event Trigger: When the objective plan transitions to presented_awaiting_confirmation,
+  // and the assistant finishes generating (session becomes idle),
+  // automatically deploy the DialogPlanApproval popup without requiring agent text intervention.
+  let lastPlanStatus: string | undefined = undefined
+  createEffect(() => {
+    const objectives: any = session()?.metadata?.objectives
+    const currentStatus = objectives?.status
+    const isRunning = data.session.status(route.sessionID) === "running"
+
+    if (
+      !isRunning &&
+      currentStatus === "presented_awaiting_confirmation" &&
+      lastPlanStatus !== "presented_awaiting_confirmation"
+    ) {
+      if (dialog.stack.length === 0) {
+        lastPlanStatus = currentStatus
+        dialog.replace(() => (
+          <DialogPlanApproval
+            sessionID={route.sessionID}
+            po={objectives}
+          />
+        ))
+      }
+    } else if (currentStatus !== "presented_awaiting_confirmation") {
+      lastPlanStatus = currentStatus
+    }
+  })
+
   const runPendingAction = createSingleFlight<string>()
   const mutatePending = async (action: PendingAction, inboxID: string, failureLabel?: string) => {
     const result = await runPendingAction(inboxID, async () => {
@@ -1074,6 +1104,24 @@ export function Session(props: {
             }}
           />
         ))
+      },
+    },
+    {
+      title: "Review pending plan",
+      id: "session.plan.review",
+      group: "Plan",
+      slash: { name: "plan" },
+      disabled: () => {
+        const obj: any = session()?.metadata?.objectives
+        return obj?.status !== "presented_awaiting_confirmation"
+      },
+      run: () => {
+        const objectives: any = session()?.metadata?.objectives
+        if (objectives?.status === "presented_awaiting_confirmation") {
+          dialog.replace(() => <DialogPlanApproval sessionID={route.sessionID} po={objectives} />)
+        } else {
+          toast.show({ message: "No hay ningún plan pendiente de aprobación.", variant: "info", duration: 3000 })
+        }
       },
     },
     {

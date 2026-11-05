@@ -1398,27 +1398,19 @@ describe("hierarchical-objectives plugin", () => {
       expect(res.output.success).toBe(true)
       expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
 
-      // Adding SO-2 without draft flag is rejected
-      const blockedAdd = await tool.execute(
+      // Adding SO-2 without draft flag is now accepted seamlessly during presented_awaiting_confirmation
+      const draftAddWithoutFlag = await tool.execute(
         { action: "add_secondary", id: "SO-2", title: "Task 2", rationale: "Why 2" },
         { sessionID: sid },
       )
-      expect(blockedAdd.output.success).toBe(false)
-      expect(blockedAdd.output.message).toContain("FROZEN")
-
-      // Adding SO-2 with draft: true succeeds
-      const draftAdd = await tool.execute(
-        { action: "add_secondary", id: "SO-2", title: "Task 2", rationale: "Why 2", draft: true },
-        { sessionID: sid },
-      )
-      expect(draftAdd.output.success).toBe(true)
+      expect(draftAddWithoutFlag.output.success).toBe(true)
       const po = getObjectives(sid)!
       expect(po.status).toBe("presented_awaiting_confirmation")
       expect(po.secondaries.length).toBe(2)
 
-      // Refining DoD with draft: true succeeds
+      // Refining DoD succeeds
       const draftDoD = await tool.execute(
-        { action: "update_dod", dodCriteria: [{ id: "D1", statement: "New criterion" }], draft: true },
+        { action: "update_dod", dodCriteria: [{ id: "D1", statement: "New criterion" }] },
         { sessionID: sid },
       )
       expect(draftDoD.output.success).toBe(true)
@@ -1430,6 +1422,7 @@ describe("hierarchical-objectives plugin", () => {
         { sessionID: sid },
       )
       expect(blockedExplore.output.success).toBe(false)
+      expect(blockedExplore.output.message).toContain("FROZEN")
     })
 
     test("documentation gate bypasses self-contained report and analysis deliverables", async () => {
@@ -1673,7 +1666,7 @@ describe("hierarchical-objectives plugin", () => {
       expect(getObjectives(sid)!.phase?.paused).toBe(true)
 
       const frozen = await tool.execute(
-        { action: "add_secondary", title: "Add a new subtask while paused", rationale: "Should be rejected" },
+        { action: "complete_primary", validationProof: "Premature completion while paused" },
         { sessionID: sid },
       )
       expect(frozen.output.success).toBe(false)
@@ -2777,8 +2770,8 @@ describe("hierarchical-objectives plugin", () => {
       expect(setRes.output.success).toBe(true)
       expect(setRes.output.message).toContain("FROZEN")
 
-      // Attempt add_finding without draft -> rejected
-      const rejectRes = await tool.execute(
+      // Attempt add_finding without draft -> accepted seamlessly during freeze
+      const acceptRes = await tool.execute(
         {
           action: "add_finding",
           title: "Latent dead code bug",
@@ -2790,26 +2783,21 @@ describe("hierarchical-objectives plugin", () => {
         },
         { sessionID: sid },
       )
-      expect(rejectRes.output.success).toBe(false)
-      expect(rejectRes.output.message).toContain("FROZEN")
+      expect(acceptRes.output.success).toBe(true)
+      expect(acceptRes.output.tree).toContain("F-001")
+      expect(acceptRes.output.tree).toContain("Latent dead code bug")
 
-      // Attempt add_finding with draft: true -> accepted!
-      const draftRes = await tool.execute(
+      // But attempting execution mutation (moving to exploring) without resuming is rejected
+      const blockedExplore = await tool.execute(
         {
-          action: "add_finding",
-          draft: true,
-          title: "Latent dead code bug",
-          result: "Dead code never executed in production environment",
-          soRef: "SO-1",
-          evidence: { type: "FILE_READ", source: "src/file.ts:20-30" },
-          delegation: { mode: "main", justification: "Verified by direct file inspection in main session" },
-          nextAction: "Remove dead code in SO-1",
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
         },
         { sessionID: sid },
       )
-      expect(draftRes.output.success).toBe(true)
-      expect(draftRes.output.tree).toContain("F-001")
-      expect(draftRes.output.tree).toContain("Latent dead code bug")
+      expect(blockedExplore.output.success).toBe(false)
+      expect(blockedExplore.output.message).toContain("FROZEN")
     })
 
     test("Improvement 3: findings with status 'deferred' or 'out_of_scope' do not block complete_primary", async () => {
@@ -3175,6 +3163,307 @@ describe("hierarchical-objectives plugin", () => {
       expect(findRes.output.success).toBe(true)
       expect(findRes.output.tree).toContain("F-001")
       expect(findRes.output.tree).toContain("src/docker/Dockerfile:L20-30")
+    })
+
+    test("Feature: unattended mode auto-approves plan without freezing in presented_awaiting_confirmation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("unattended-mode")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "CI Pipeline Task",
+          definitionOfDone: "Automated deploy complete",
+          presentPlan: true,
+          unattended: true,
+          secondaries: [
+            { title: "Run build", rationale: "Prepare bundle", delegation: { mode: "main", justification: "Local build execution" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      expect(res.output.message).toContain("unattended mode (auto-approved)")
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("exploring")
+      expect(po.unattended).toBe(true)
+    })
+
+    test("Feature: OPENCODE_UNATTENDED env variable automatically activates unattended mode", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("unattended-env")
+
+      const prevEnv = process.env.OPENCODE_UNATTENDED
+      try {
+        process.env.OPENCODE_UNATTENDED = "true"
+        const res = await tool.execute(
+          {
+            action: "set_primary",
+            title: "Autonomous Agent Task",
+            definitionOfDone: "Autonomous completion",
+            presentPlan: true,
+            secondaries: [
+              { title: "Auto step", rationale: "Autonomous run", delegation: { mode: "main", justification: "Autonomous execution" } },
+            ],
+          },
+          { sessionID: sid },
+        )
+
+        expect(res.output.success).toBe(true)
+        expect(res.output.message).toContain("unattended mode (auto-approved)")
+        const po = getObjectives(sid)!
+        expect(po.status).toBe("exploring")
+      } finally {
+        if (prevEnv === undefined) delete process.env.OPENCODE_UNATTENDED
+        else process.env.OPENCODE_UNATTENDED = prevEnv
+      }
+    })
+
+    test("Feature: interactive plan presentation emits context metrics, recommendations, and 3 confirmation options", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("interactive-confirmation")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Complex Architecture Overhaul",
+          definitionOfDone: "Full test suite passes",
+          presentPlan: true,
+          tokensUsed: 65000,
+          contextWindow: 128000,
+          secondaries: [
+            { title: "Refactor core", rationale: "Clean architecture", delegation: { mode: "main", justification: "Main thread architectural refactor" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      expect(res.output.message).toContain("presented_awaiting_confirmation")
+      expect(res.output.contextMetrics).toBeDefined()
+      expect(res.output.contextMetrics.tokensUsed).toBe(65000)
+      expect(res.output.contextMetrics.percentUsed).toBe(51)
+      expect(res.output.contextMetrics.recommendFreshSession).toBe(true)
+      expect(res.output.confirmationOptions).toHaveLength(3)
+      expect(res.output.confirmationOptions[0].mode).toBe("fresh_session")
+      expect(res.output.confirmationOptions[1].mode).toBe("same_session")
+      expect(res.output.confirmationOptions[2].mode).toBe("refine_plan")
+
+      // Check rendered tree projection includes diagnostics
+      expect(res.output.tree).toContain("Context consumption:")
+      expect(res.output.tree).toContain("Starting execution in a **Fresh Session** is strongly recommended")
+      expect(res.output.tree).toContain("Interactive Confirmation Options")
+    })
+
+    test("Feature: deterministic guardrail blocks resume_plan without explicit user confirmation note in interactive mode", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("guardrail-resume")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Critical Migration",
+          definitionOfDone: "Zero downtime achieved",
+          presentPlan: true,
+          secondaries: [
+            { title: "Task 1", rationale: "Rationale 1", delegation: { mode: "main", justification: "Main thread execution" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Autonomous attempt to resume without user note must be blocked
+      const failedResume = await tool.execute(
+        { action: "resume_plan" },
+        { sessionID: sid },
+      )
+      expect(failedResume.output.success).toBe(false)
+      expect(failedResume.output.message).toContain("Deterministic Guardrail Block")
+
+      // Resume with explicit user note succeeds
+      const successfulResume = await tool.execute(
+        { action: "resume_plan", note: "User approved the plan explicitly" },
+        { sessionID: sid },
+      )
+      expect(successfulResume.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("exploring")
+    })
+
+    test("Feature: approve_plan supports same_session, refine_plan, and fresh_session handoff", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("approve-3-ways")
+      const freshSid = uniqueSessionID("target-fresh-session")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Full Stack Service",
+          definitionOfDone: "Deployed and verified",
+          presentPlan: true,
+          secondaries: [
+            { title: "Backend API", rationale: "Core logic", delegation: { mode: "main", justification: "API logic implementation" } },
+          ],
+        },
+        { sessionID: sid },
+      )
+
+      // Test refine_plan keeps tree frozen in draft
+      const refineRes = await tool.execute(
+        { action: "approve_plan", approveMode: "refine_plan" },
+        { sessionID: sid },
+      )
+      expect(refineRes.output.success).toBe(true)
+      expect(refineRes.output.mode).toBe("refine_plan")
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // Test fresh_session handoff into a fresh session ID
+      const handoffRes = await tool.execute(
+        { action: "approve_plan", approveMode: "fresh_session", targetSessionID: freshSid },
+        { sessionID: sid },
+      )
+      expect(handoffRes.output.success).toBe(true)
+      expect(handoffRes.output.mode).toBe("fresh_session")
+      expect(handoffRes.output.handoffPayload).toBeDefined()
+      expect(handoffRes.output.handoffPayload.originSessionID).toBe(sid)
+      expect(handoffRes.output.handoffPayload.suggestedPrompt).toContain("<plan-handoff>")
+
+      // Verify the target fresh session was populated with an active (exploring) tree
+      const freshPo = getObjectives(freshSid)!
+      expect(freshPo).toBeDefined()
+      expect(freshPo.status).toBe("exploring")
+      expect(freshPo.originSessionID).toBe(sid)
+      expect(freshPo.secondaries).toHaveLength(1)
+      expect(freshPo.secondaries[0].title).toBe("Backend API")
+    })
+
+    test("Incremental plan construction: set_primary with plannedSecondaryCount does not freeze prematurely, permits draft secondaries and findings without draft: true, and freezes on present_plan", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("incremental-plan-flow")
+
+      // Step 1: Lightweight set_primary with plannedSecondaryCount: 2 and NO secondaries
+      const step1 = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Incremental Architecture Plan",
+          definitionOfDone: "Deliver complete spec with diagrams and tests",
+          plannedSecondaryCount: 2,
+          dodCriteria: [
+            { id: "D1", statement: "Spec document exists", verifiableBy: "file check" },
+            { id: "D2", statement: "Tests green", verifiableBy: "bun test" },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(step1.output.success).toBe(true)
+      expect(step1.output.message).toContain("⚠️ [Protocol Notice - Incremental Plan Construction]")
+      expect(getObjectives(sid)!.status).toBe("exploring") // Not frozen prematurely!
+
+      // Step 2: Add SO-1 incrementally
+      const step2 = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-1",
+          title: "Audit current couplings",
+          rationale: "Discover dependencies before designing",
+          delegation: { mode: "main", justification: "Local repository search in main thread" },
+        },
+        { sessionID: sid },
+      )
+      expect(step2.output.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
+
+      // Step 3: Add SO-2 incrementally
+      const step3 = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-2",
+          title: "Author decoupling spec",
+          rationale: "Define clean interfaces",
+          delegation: { mode: "main", justification: "Architecture document drafting" },
+        },
+        { sessionID: sid },
+      )
+      expect(step3.output.success).toBe(true)
+      expect(getObjectives(sid)!.secondaries).toHaveLength(2)
+
+      // Step 4: Add finding during drafting
+      const step4 = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Single shared database holds both domains",
+          result: "OIPA_PDN schema hosts SC 01 and SC 02 policies concurrently",
+          soRef: "SO-1",
+          evidence: { type: "FILE_READ", source: "docs/architecture.md:40-60" },
+          delegation: { mode: "main", justification: "Verified via architecture doc read" },
+          nextAction: "Propose separate schemas in SO-2",
+        },
+        { sessionID: sid },
+      )
+      expect(step4.output.success).toBe(true)
+      expect(getObjectives(sid)!.findings).toHaveLength(1)
+
+      // Step 5: Explicit present_plan freezes the tree and returns confirmation options
+      const step5 = await tool.execute(
+        {
+          action: "present_plan",
+          reason: "Plan complete and ready for review",
+        },
+        { sessionID: sid },
+      )
+      expect(step5.output.success).toBe(true)
+      expect(step5.output.message).toContain("Plan presented. The tree is FROZEN")
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+      expect(step5.output.confirmationOptions).toBeDefined()
+      expect(step5.output.confirmationOptions).toHaveLength(3)
+
+      // Step 6: In freeze, adding a finding without draft: true succeeds smoothly
+      const step6 = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Secondary discovery during review",
+          result: "Shared table ASPOLICY joins via MasterPolicyNumber text field",
+          soRef: "SO-1",
+          evidence: { type: "FILE_READ", source: "schema.sql:10-20" },
+          delegation: { mode: "main", justification: "Direct schema inspection" },
+          nextAction: "Document in spec",
+        },
+        { sessionID: sid },
+      )
+      expect(step6.output.success).toBe(true)
+      expect(getObjectives(sid)!.findings).toHaveLength(2)
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // Step 7: Attempting execution without user confirmation is strictly rejected
+      const step7 = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+        },
+        { sessionID: sid },
+      )
+      expect(step7.output.success).toBe(false)
+      expect(step7.output.message).toContain("FROZEN")
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // Step 8: Resume plan unfreezes execution
+      const step8 = await tool.execute(
+        {
+          action: "resume_plan",
+          note: "User approved execution of SO-1",
+        },
+        { sessionID: sid },
+      )
+      expect(step8.output.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
     })
   })
 

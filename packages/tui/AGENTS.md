@@ -13,3 +13,10 @@
   3. Received by `@opencode/client` Solid data layer (`packages/client/src/solid/data.ts`), which reconciles `store.session.info[sessionID].metadata` upon receiving `session.metadata.updated`.
   4. Reactively listened in `SidebarObjectives` via Solid's `context.data.session.get(sessionID)`, ensuring immediate zero-latency updates across process boundaries.
   5. Live active-objective status feedback displayed in the collapsed header (`view.open = false`) to ensure users never perceive an empty or lost tree when collapsed.
+
+## Reactive Plan Approval Architecture (`DialogPlanApproval`)
+
+- When an objective tree transitions to `presented_awaiting_confirmation`:
+  1. An event-driven one-shot trigger in `packages/tui/src/routes/session/index.tsx` detects the state transition on `session().metadata.objectives.status`.
+  2. The application automatically renders `DialogPlanApproval` (`packages/tui/src/routes/session/dialog-plan-approval.tsx`) as a native modal popup without requiring agent text intervention.
+  3. When the user selects "Sesión Fresca", a completely standalone top-level session (`parentID: undefined`) is created, the objective tree is imported, and `route.navigate` switches the active session immediately to the fresh session with 100% token headroom.
