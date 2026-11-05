@@ -29,6 +29,7 @@ target
 /scripts/opencode
 .cache
 .direnv/
+__pycache__/
 
 # Local dev files
 opencode-dev

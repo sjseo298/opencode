@@ -128,49 +128,33 @@ resolve_conflicts_with_llm() {
 
 # ── sync ──────────────────────────────────────────────────────────
 # Syncs the fork with upstream and/or origin depending on the sync mode.
-# - "fork": only sync with origin (the fork)
+# - "fork": sync with origin (the fork), overwriting any local changes
 # - "full": sync with both origin and upstream (the original repo)
 sync_repo() {
   local sync_mode="$1"
   cd "$REPO_ROOT"
 
   if [ "$sync_mode" = "fork" ]; then
-    echo "⬇️  Syncing fork (origin) only..."
+    echo "⬇️  Syncing fork (origin) only (sobrescribiendo cambios locales con lo remoto)..."
     git fetch origin
 
-    # Stash local changes so merges can proceed
-    if ! git stash push -m "build-sync: temporary stash" --include-untracked 2>/dev/null; then
-      echo "⚠️  No local changes to stash."
+    # Abort any pending merge or rebase
+    git merge --abort 2>/dev/null || true
+    git rebase --abort 2>/dev/null || true
+
+    # Reset hard to origin/dev, discarding all uncommitted/divergent local changes
+    echo "🔄 Restableciendo rama dev al estado exacto de origin/dev..."
+    git checkout -f dev 2>/dev/null || git checkout -B dev origin/dev
+    git reset --hard origin/dev
+
+    # Drop any leftover temporary build-sync stash if present
+    local stash_idx
+    stash_idx=$(git stash list 2>/dev/null | grep "build-sync: temporary stash" | head -n1 | cut -d: -f1)
+    if [ -n "$stash_idx" ]; then
+      git stash drop "$stash_idx" 2>/dev/null || true
     fi
 
-    # Merge origin/dev so local commits are integrated
-    if ! git merge origin/dev --no-edit; then
-      echo "⚠️  Merge conflict with origin/dev — attempting LLM auto-resolution..."
-      if resolve_conflicts_with_llm; then
-        git add -A
-        git commit --no-edit
-        echo "✅ Merge conflict resolved."
-      else
-        echo "  Please resolve conflicts manually and run: git push origin dev"
-        exit 1
-      fi
-    fi
-
-    # Restore stashed changes (attempt LLM auto-resolution if conflicts)
-    if ! git stash pop 2>/dev/null; then
-      echo "⚠️  Stash conflict — attempting LLM auto-resolution..."
-      if resolve_conflicts_with_llm; then
-        git add -A
-        # Retry stash pop after resolution
-        if git stash pop 2>/dev/null; then
-          echo "✅ Stash conflict resolved."
-        else
-          echo "⚠️  Stash conflict persists — please resolve manually after the build."
-        fi
-      else
-        echo "  Please resolve conflicts manually after the build."
-      fi
-    fi
+    echo "✅ Cambios locales sobrescritos. Rama local dev sincronizada con origin/dev."
 
     echo ""
     echo "  Skipping push (fork-only sync)."

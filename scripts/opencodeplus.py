@@ -1795,20 +1795,33 @@ def action_run_build() -> None:
 
 
 def action_sync_fork() -> None:
-    """Sync fork (origin) only + install deps + build."""
+    """Sync fork (origin) overwriting local changes with remote + install deps + build."""
     console.print("\n[bold]Sync de fork (origin) — sync + install + build...[/]")
 
     repo_dir = SCRIPT_DIR.parent
     try:
         subprocess.run(["git", "-C", str(repo_dir), "fetch", "origin"], capture_output=True)
-        res = subprocess.run(
+        res_behind = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-list", "--count", "HEAD..origin/dev"],
             capture_output=True,
             text=True,
         )
-        origin_count = int(res.stdout.strip() or "0")
-        if origin_count == 0:
-            console.print("[green]⚡ [Fast-Exit] El fork ya está al día con origin/dev. No hay cambios nuevos.[/]")
+        res_ahead = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-list", "--count", "origin/dev..HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        res_status = subprocess.run(
+            ["git", "-C", str(repo_dir), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        behind_count = int(res_behind.stdout.strip() or "0")
+        ahead_count = int(res_ahead.stdout.strip() or "0")
+        has_local_changes = bool(res_status.stdout.strip())
+
+        if behind_count == 0 and ahead_count == 0 and not has_local_changes:
+            console.print("[green]⚡ [Fast-Exit] El fork ya está al día con origin/dev y sin cambios locales.[/]")
             return
     except Exception:
         pass
