@@ -54,7 +54,7 @@ ${concurrencyBullets}
   * You MUST invoke the \`context_budget\` tool BEFORE calling \`subagent\`.
   * Read \`availableHeadroom\` and \`maxRecommendedSubagentBudget\` (calculated dynamically based on available context and concurrency slots: \`(headroom - parentReserve) / maxSubagents\`).
   * Pass the measured value into \`subagent({ ..., contextBudget: { availableHeadroom: <number> } })\`. Omitting this parameter causes the tool to reject the delegation call.
-  * If the task to delegate is estimated to exceed \`maxRecommendedSubagentBudget\`, you MUST decompose it into smaller tertiary subtasks (SO-N-TM) rather than delegating an oversized monolithic task.
+  * If the task to delegate is estimated to exceed \`maxRecommendedSubagentBudget\`, you MUST decompose it into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) rather than delegating an oversized monolithic task. (Note: 'Tertiary' denotes Level-3 hierarchy depth [PO -> SO -> TO], NEVER a fixed count of 3; create 2, 4, 6 or as many subtasks as required).
 
 ## Structured Prompt Format (Required)
 

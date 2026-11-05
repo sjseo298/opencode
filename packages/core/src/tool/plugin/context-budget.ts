@@ -42,7 +42,7 @@ export const description = [
   "Measures the current context consumption across the session tree and computes the dynamic safe budget for subagent tasks.",
   "MANDATORY REQUIREMENT: You MUST invoke this tool before delegating work to any subagent.",
   "The returned availableHeadroom MUST be passed to the subagent tool under contextBudget.availableHeadroom.",
-  "If the task you intend to delegate exceeds maxRecommendedSubagentBudget, decompose the objective into smaller tertiary subtasks (SO-N-TM) first.",
+  "If the task you intend to delegate exceeds maxRecommendedSubagentBudget, decompose the objective into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) first.",
 ].join("\n")
 
 export const Plugin = {
@@ -110,7 +110,7 @@ export const Plugin = {
               const isTight = availableHeadroom <= 8_192
               const recommendation = isTight
                 ? `CRITICAL: Remaining context headroom is critically tight (${availableHeadroom} tokens). Delegating large tasks will trigger immediate overflow or compaction. Split into minimal atomic subtasks or compact parent first.`
-                : `Verified: ${availableHeadroom} tokens available in unified tree. With ${maxSubagents} subagent slot(s) and a safety reserve of ${safetyReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into tertiary subtasks (SO-N-TM) before delegating.`
+                : `Verified: ${availableHeadroom} tokens available in unified tree. With ${maxSubagents} subagent slot(s) and a safety reserve of ${safetyReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) before delegating.`
 
               const result = {
                 contextLimit,

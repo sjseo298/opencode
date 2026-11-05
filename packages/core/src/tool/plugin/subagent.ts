@@ -70,7 +70,7 @@ export const Output = Schema.Struct({
 export const description = [
   "Spawns an agent in a child session to work on the specified task.",
   "MANDATORY REQUIREMENT: You MUST invoke the `context_budget` tool BEFORE calling this tool, and provide `contextBudget: { availableHeadroom: <number> }`.",
-  "Verify that the task fits into `maxRecommendedSubagentBudget`. If it exceeds that budget, decompose the task into tertiary sub-objectives (SO-N-TM) instead of spawning an oversized subagent.",
+  "Verify that the task fits into `maxRecommendedSubagentBudget`. If it exceeds that budget, decompose the task into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) instead of spawning an oversized subagent.",
   "The output includes a sessionID you can pass back later to continue that specific conversation with the subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
   "Foreground (default) runs the subagent to completion and returns its final response.",
@@ -134,7 +134,7 @@ export const Plugin = {
                     "Delegation blocked: Missing context headroom verification.",
                     "Before delegating work to any subagent, you MUST call the `context_budget` tool to inspect available tokens and task sizing limits.",
                     "Then invoke `subagent` including `contextBudget: { availableHeadroom: <measured_number> }`.",
-                    "If the intended task exceeds `maxRecommendedSubagentBudget`, decompose the objective into smaller tertiary subtasks (SO-N-TM) first.",
+                    "If the intended task exceeds `maxRecommendedSubagentBudget`, decompose the objective into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) first.",
                   ].join("\n"),
                 })
               }
