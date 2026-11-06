@@ -46,11 +46,131 @@ const PermissionParams = {
   ),
 }
 
+const ObjectivesParams = {
+  objectivesConfig: Flag.String("objectives-config").pipe(
+    Flag.withDescription(
+      "JSON string or path to a .json file (e.g. session .json or config .json) overriding Protocolo de Objetivos parameters",
+    ),
+    Flag.optional,
+  ),
+  objectivesMaxActionsWithoutSync: Flag.Int("objectives-max-actions-without-sync").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription(
+      "Max consecutive tool operations (reads, searches, commands, edits) allowed without synchronizing the objective tree before throwing Objective Sync Warning (default: 15)",
+    ),
+    Flag.optional,
+  ),
+  objectivesRepeatedActionThreshold: Flag.Int("objectives-repeated-action-threshold").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription(
+      "Identical read actions on the same Secondary Objective before emitting a repeated-action warning (default: 2)",
+    ),
+    Flag.optional,
+  ),
+  objectivesSearchAttachThreshold: Flag.String("objectives-search-attach-threshold").pipe(
+    Flag.mapTryCatch(
+      (value) => {
+        const num = Number(value)
+        if (!Number.isFinite(num) || num < 0 || num > 1) throw new Error("Invalid threshold")
+        return num
+      },
+      () => "Expected a number between 0.0 and 1.0",
+    ),
+    Flag.withDescription(
+      "Similarity threshold (0.0-1.0) at or above which add_finding rejects duplicates and requires update_finding (default: 0.68)",
+    ),
+    Flag.optional,
+  ),
+  objectivesSearchNovelThreshold: Flag.String("objectives-search-novel-threshold").pipe(
+    Flag.mapTryCatch(
+      (value) => {
+        const num = Number(value)
+        if (!Number.isFinite(num) || num < 0 || num > 1) throw new Error("Invalid threshold")
+        return num
+      },
+      () => "Expected a number between 0.0 and 1.0",
+    ),
+    Flag.withDescription(
+      "Similarity threshold (0.0-1.0) at or above which add_finding emits a similarity warning and links seeAlso (default: 0.55)",
+    ),
+    Flag.optional,
+  ),
+  objectivesFindingMinChars: Flag.Int("objectives-finding-min-chars").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription(
+      "Minimum characters required for finding title, result, and nextAction (default: 15)",
+    ),
+    Flag.optional,
+  ),
+  objectivesDelegationMinChars: Flag.Int("objectives-delegation-min-chars").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription(
+      "Minimum characters required for delegation.justification (default: 10)",
+    ),
+    Flag.optional,
+  ),
+  objectivesFreshSessionPercent: Flag.Int("objectives-fresh-session-percent").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+    Flag.withDescription(
+      "Context percentage consumed during planning at which present_plan recommends a Fresh Session (default: 35)",
+    ),
+    Flag.optional,
+  ),
+  objectivesFreshSessionTokens: Flag.Int("objectives-fresh-session-tokens").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))),
+    Flag.withDescription(
+      "Tokens consumed during planning at which present_plan recommends a Fresh Session (default: 30000)",
+    ),
+    Flag.optional,
+  ),
+  objectivesRelevanceCooldownMs: Flag.Int("objectives-relevance-cooldown-ms").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    Flag.withDescription(
+      "Cooldown in ms between isolated documentation relevance evaluations on llama.cpp (default: 3000)",
+    ),
+    Flag.optional,
+  ),
+  objectivesPrimaryCompactionThreshold: Flag.Int("objectives-primary-compaction-threshold").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 10, maximum: 100 }))),
+    Flag.withDescription(
+      "Context ceiling percentage at which the primary session receives a pre-compaction advisory (default: 85)",
+    ),
+    Flag.optional,
+  ),
+  objectivesSubagentCompactionThreshold: Flag.Int("objectives-subagent-compaction-threshold").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 10, maximum: 100 }))),
+    Flag.withDescription(
+      "Context ceiling percentage at which a subagent receives a pre-compaction advisory (default: 90)",
+    ),
+    Flag.optional,
+  ),
+  objectivesMinSubagentBudget: Flag.Int("objectives-min-subagent-budget").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))),
+    Flag.withDescription(
+      "Minimum token budget required in context_budget to allow subagent delegation (default: 16000)",
+    ),
+    Flag.optional,
+  ),
+  objectivesEmbeddings: Flag.Boolean("objectives-embeddings").pipe(
+    Flag.withDescription(
+      "Enable or disable local LM Studio semantic embeddings for findings (default: true; disable with --no-objectives-embeddings)",
+    ),
+    Flag.optional,
+  ),
+  objectivesUnattended: Flag.Boolean("objectives-unattended").pipe(
+    Flag.withDescription(
+      "Enable unattended mode where plans auto-approve without freezing for user confirmation (default: false)",
+    ),
+    Flag.optional,
+  ),
+}
+
 const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : "opencode", {
   description: "OpenCode command line interface",
   params: {
     ...ServerParams,
     ...PermissionParams,
+    ...ObjectivesParams,
     directory: Argument.String("directory").pipe(
       Argument.withDescription("Directory to start OpenCode in"),
       Argument.optional,
@@ -447,6 +567,7 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         ),
         thinking: Flag.Boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
         ...PermissionParams,
+        ...ObjectivesParams,
       },
     }),
     Spec.make("session", {
@@ -588,6 +709,7 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         ),
         service: Flag.Boolean("service").pipe(Flag.withDefault(false)),
         stdio: Flag.Boolean("stdio").pipe(Flag.withDefault(false)),
+        ...ObjectivesParams,
       },
     }),
   ],

@@ -329,9 +329,94 @@ export function createSoundSettingsController() {
   }
 }
 
+export type ObjectivesConfigValues = {
+  max_actions_without_sync: number
+  repeated_action_warning_threshold: number
+  search_attach_threshold: number
+  search_novel_threshold: number
+  finding_min_chars: number
+  delegation_justification_min_chars: number
+  fresh_session_percent_threshold: number
+  fresh_session_tokens_threshold: number
+  relevance_cooldown_ms: number
+  primary_pre_compaction_threshold: number
+  subagent_pre_compaction_threshold: number
+  min_subagent_budget: number
+  embeddings_enabled: boolean
+  unattended: boolean
+}
+
+export const DEFAULT_OBJECTIVES_UI_CONFIG: ObjectivesConfigValues = {
+  max_actions_without_sync: 15,
+  repeated_action_warning_threshold: 2,
+  search_attach_threshold: 0.68,
+  search_novel_threshold: 0.55,
+  finding_min_chars: 15,
+  delegation_justification_min_chars: 10,
+  fresh_session_percent_threshold: 35,
+  fresh_session_tokens_threshold: 30000,
+  relevance_cooldown_ms: 3000,
+  primary_pre_compaction_threshold: 85,
+  subagent_pre_compaction_threshold: 90,
+  min_subagent_budget: 16000,
+  embeddings_enabled: true,
+  unattended: false,
+}
+
+export function createServerObjectivesController(server: Accessor<ServerConnection.Any | undefined>) {
+  const language = useLanguage()
+
+  const setting = createOptimisticSetting({
+    source: useServerCtx(server),
+    initial: DEFAULT_OBJECTIVES_UI_CONFIG,
+    initialMeta: undefined,
+    load: async (context) => {
+      const entries = await context.sdk.api.config.get().catch(() => [])
+      const merged: ObjectivesConfigValues = { ...DEFAULT_OBJECTIVES_UI_CONFIG }
+      for (const entry of entries) {
+        if (entry.type !== "document" || !entry.info.objectives) continue
+        const obj = entry.info.objectives
+        for (const [k, v] of Object.entries(obj)) {
+          if (v !== undefined && k in merged) {
+            ;(merged as Record<string, unknown>)[k] = v
+          }
+        }
+      }
+      return {
+        meta: undefined,
+        value: merged,
+      }
+    },
+    write: async (value, context) => {
+      await context.sdk.api.experimental.config.update({ objectives: value })
+    },
+    onError: (failure) =>
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description:
+          failure.kind === "timeout"
+            ? language.t("home.sessions.load.timeout")
+            : failure.message || language.t("common.requestFailed"),
+      }),
+  })
+
+  return {
+    current: setting.value,
+    update: <K extends keyof ObjectivesConfigValues>(key: K, value: ObjectivesConfigValues[K]) => {
+      setting.select({ ...setting.value(), [key]: value })
+    },
+    resetDefaults: () => {
+      setting.select({ ...DEFAULT_OBJECTIVES_UI_CONFIG })
+    },
+  }
+}
+
 export type ShellSettingsController = ReturnType<typeof createServerShellController>
 
 export type CompactionModelSettingsController = ReturnType<typeof createServerCompactionModelController>
+
+export type ObjectivesSettingsController = ReturnType<typeof createServerObjectivesController>
 
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 

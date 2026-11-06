@@ -2480,6 +2480,22 @@ export type ConfigEntry =
           precompute?: boolean
           unified_kv?: boolean
         }
+        objectives?: {
+          max_actions_without_sync?: number
+          repeated_action_warning_threshold?: number
+          search_attach_threshold?: number
+          search_novel_threshold?: number
+          finding_min_chars?: number
+          delegation_justification_min_chars?: number
+          fresh_session_percent_threshold?: number
+          fresh_session_tokens_threshold?: number
+          relevance_cooldown_ms?: number
+          primary_pre_compaction_threshold?: number
+          subagent_pre_compaction_threshold?: number
+          min_subagent_budget?: number
+          embeddings_enabled?: boolean
+          unattended?: boolean
+        }
         skills?: Array<string>
         commands?: {
           [x: string]: {
@@ -4862,6 +4878,24 @@ export type ConfigShellsOutput = Array<ConfigShellOption>
 export type ExperimentalConfigUpdateInput = {
   readonly shell?: string | null | undefined
   readonly compaction?: { readonly model?: string | null } | undefined
+  readonly objectives?:
+    | {
+        readonly max_actions_without_sync?: number | null
+        readonly repeated_action_warning_threshold?: number | null
+        readonly search_attach_threshold?: number | null
+        readonly search_novel_threshold?: number | null
+        readonly finding_min_chars?: number | null
+        readonly delegation_justification_min_chars?: number | null
+        readonly fresh_session_percent_threshold?: number | null
+        readonly fresh_session_tokens_threshold?: number | null
+        readonly relevance_cooldown_ms?: number | null
+        readonly primary_pre_compaction_threshold?: number | null
+        readonly subagent_pre_compaction_threshold?: number | null
+        readonly min_subagent_budget?: number | null
+        readonly embeddings_enabled?: boolean | null
+        readonly unattended?: boolean | null
+      }
+    | undefined
 }
 
 export type ExperimentalConfigUpdateOutput = void

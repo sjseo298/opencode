@@ -2788,6 +2788,24 @@ export interface ConfigApi<E = never> {
 export type ExperimentalConfigUpdateInput = {
   readonly shell?: string | null | undefined
   readonly compaction?: { readonly model?: string | null | undefined } | undefined
+  readonly objectives?:
+    | {
+        readonly max_actions_without_sync?: number | null | undefined
+        readonly repeated_action_warning_threshold?: number | null | undefined
+        readonly search_attach_threshold?: number | null | undefined
+        readonly search_novel_threshold?: number | null | undefined
+        readonly finding_min_chars?: number | null | undefined
+        readonly delegation_justification_min_chars?: number | null | undefined
+        readonly fresh_session_percent_threshold?: number | null | undefined
+        readonly fresh_session_tokens_threshold?: number | null | undefined
+        readonly relevance_cooldown_ms?: number | null | undefined
+        readonly primary_pre_compaction_threshold?: number | null | undefined
+        readonly subagent_pre_compaction_threshold?: number | null | undefined
+        readonly min_subagent_budget?: number | null | undefined
+        readonly embeddings_enabled?: boolean | null | undefined
+        readonly unattended?: boolean | null | undefined
+      }
+    | undefined
 }
 export type ExperimentalConfigUpdateOutput = void
 export type ExperimentalConfigUpdateOperation<E = never> = (

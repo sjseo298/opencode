@@ -482,11 +482,18 @@ export const layer = (options?: Options) =>
                 patch.shell === undefined
                   ? text
                   : applyEdits(text, modify(text, ["shell"], patch.shell ?? undefined, options))
-              if (patch.compaction?.model === undefined) return withShell
-              return applyEdits(
-                withShell,
-                modify(withShell, ["compaction", "model"], patch.compaction.model ?? undefined, options),
-              )
+              const withCompaction =
+                patch.compaction?.model === undefined
+                  ? withShell
+                  : applyEdits(
+                      withShell,
+                      modify(withShell, ["compaction", "model"], patch.compaction.model ?? undefined, options),
+                    )
+              if (!patch.objectives) return withCompaction
+              return Object.entries(patch.objectives).reduce((acc, [key, val]) => {
+                if (val === undefined) return acc
+                return applyEdits(acc, modify(acc, ["objectives", key], val ?? undefined, options))
+              }, withCompaction)
             },
             catch: (cause) => new FSUtil.FileSystemError({ method: "config.update", cause }),
           })

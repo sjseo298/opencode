@@ -395,6 +395,184 @@ export const settings: Setting[] = [
     labels: ["off", "on"],
     keywords: ["debug bar", "developer tools"],
   },
+  {
+    title: "Acciones máx. sin sincronizar",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "max_actions_without_sync"],
+    description:
+      "Operaciones consecutivas (lecturas, búsquedas, comandos o ediciones) permitidas sin actualizar el árbol de objetivos antes de emitir Objective Sync Warning (por defecto: 15)",
+    default: 15,
+    step: 1,
+    min: 1,
+    max: 100,
+    format: (value) => `${value} acciones (def: 15)`,
+    keywords: ["objectives", "objetivos", "sync", "warning", "reads", "anti-loop", "max_actions_without_sync"],
+  },
+  {
+    title: "Umbral de acción repetida",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "repeated_action_warning_threshold"],
+    description:
+      "Lecturas idénticas sobre el mismo objetivo secundario antes de emitir advertencia de repetición (por defecto: 2)",
+    default: 2,
+    step: 1,
+    min: 1,
+    max: 20,
+    format: (value) => `${value} repeticiones (def: 2)`,
+    keywords: ["objectives", "objetivos", "repeated", "repeated_action_warning_threshold"],
+  },
+  {
+    title: "Umbral similitud duplicado (add_finding)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "search_attach_threshold"],
+    description:
+      "Puntaje de similitud (0.0–1.0) desde el cual add_finding rechaza duplicados y exige update_finding (por defecto: 0.68)",
+    default: 0.68,
+    step: 0.02,
+    min: 0.1,
+    max: 1,
+    format: (value) => `${Number(value).toFixed(2)} (def: 0.68)`,
+    keywords: ["objectives", "objetivos", "finding", "similarity", "search_attach_threshold"],
+  },
+  {
+    title: "Umbral similitud advertencia (seeAlso)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "search_novel_threshold"],
+    description:
+      "Puntaje de similitud (0.0–1.0) desde el cual add_finding advierte similitud y enlaza seeAlso automáticamente (por defecto: 0.55)",
+    default: 0.55,
+    step: 0.02,
+    min: 0.05,
+    max: 0.98,
+    format: (value) => `${Number(value).toFixed(2)} (def: 0.55)`,
+    keywords: ["objectives", "objetivos", "finding", "novel", "search_novel_threshold"],
+  },
+  {
+    title: "Longitud mín. de hallazgos (chars)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "finding_min_chars"],
+    description:
+      "Caracteres mínimos exigidos en title, result y nextAction de cada hallazgo contra placeholders (por defecto: 15)",
+    default: 15,
+    step: 1,
+    min: 3,
+    max: 100,
+    format: (value) => `${value} chars (def: 15)`,
+    keywords: ["objectives", "objetivos", "finding", "placeholder", "finding_min_chars"],
+  },
+  {
+    title: "Longitud mín. justificación delegación",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "delegation_justification_min_chars"],
+    description:
+      "Caracteres mínimos exigidos en delegation.justification para modo main o subagent (por defecto: 10)",
+    default: 10,
+    step: 1,
+    min: 3,
+    max: 100,
+    format: (value) => `${value} chars (def: 10)`,
+    keywords: ["objectives", "objetivos", "delegation", "delegation_justification_min_chars"],
+  },
+  {
+    title: "Umbral % Fresh Session (present_plan)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "fresh_session_percent_threshold"],
+    description:
+      "Porcentaje de ventana de contexto consumido en planificación desde el cual se recomienda Fresh Session (por defecto: 35%)",
+    default: 35,
+    step: 5,
+    min: 5,
+    max: 95,
+    format: (value) => `${value}% (def: 35%)`,
+    keywords: ["objectives", "objetivos", "fresh session", "fresh_session_percent_threshold"],
+  },
+  {
+    title: "Umbral tokens Fresh Session",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "fresh_session_tokens_threshold"],
+    description:
+      "Tokens consumidos en planificación desde los cuales present_plan recomienda Fresh Session (por defecto: 30000)",
+    default: 30000,
+    step: 5000,
+    min: 5000,
+    max: 200000,
+    format: (value) => `${Number(value).toLocaleString()} tokens (def: 30,000)`,
+    keywords: ["objectives", "objetivos", "fresh session", "tokens", "fresh_session_tokens_threshold"],
+  },
+  {
+    title: "Cooldown evaluación relevancia docs",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "relevance_cooldown_ms"],
+    description:
+      "Tiempo mínimo en ms entre evaluaciones one-shot de relevancia documental sobre llama.cpp (por defecto: 3000 ms)",
+    default: 3000,
+    step: 500,
+    min: 0,
+    max: 30000,
+    format: (value) => `${value} ms (def: 3000 ms)`,
+    keywords: ["objectives", "objetivos", "cooldown", "llamacpp", "relevance_cooldown_ms"],
+  },
+  {
+    title: "Aviso pre-compactación hilo principal",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "primary_pre_compaction_threshold"],
+    description:
+      "Porcentaje del techo de contexto donde el hilo principal recibe aviso para consolidar objetivos e invocar session_compact (por defecto: 85%)",
+    default: 85,
+    step: 5,
+    min: 50,
+    max: 99,
+    format: (value) => `${value}% (def: 85%)`,
+    keywords: ["objectives", "objetivos", "compaction", "primary_pre_compaction_threshold"],
+  },
+  {
+    title: "Aviso pre-compactación subagentes",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "subagent_pre_compaction_threshold"],
+    description:
+      "Porcentaje del techo de contexto donde los subagentes reciben aviso para detener exploración y emitir <OUTPUT> (por defecto: 90%)",
+    default: 90,
+    step: 5,
+    min: 50,
+    max: 99,
+    format: (value) => `${value}% (def: 90%)`,
+    keywords: ["objectives", "objetivos", "subagent", "subagent_pre_compaction_threshold"],
+  },
+  {
+    title: "Presupuesto mín. tokens subagente",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "min_subagent_budget"],
+    description:
+      "Presupuesto mínimo de tokens libres requerido en context_budget para permitir delegación a subagentes (por defecto: 16000)",
+    default: 16000,
+    step: 2000,
+    min: 2000,
+    max: 100000,
+    format: (value) => `${Number(value).toLocaleString()} tokens (def: 16,000)`,
+    keywords: ["objectives", "objetivos", "budget", "subagent", "min_subagent_budget"],
+  },
+  {
+    title: "Embeddings semánticos (LM Studio)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "embeddings_enabled"],
+    description:
+      "Habilita embeddings semánticos locales vía LM Studio para búsqueda de hallazgos (por defecto: on)",
+    default: true,
+    values: [false, true],
+    labels: ["off", "on (def)"],
+    keywords: ["objectives", "objetivos", "embeddings", "lmstudio", "embeddings_enabled"],
+  },
+  {
+    title: "Modo desatendido (auto-aprobación)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "unattended"],
+    description:
+      "Aprueba automáticamente el plan de objetivos sin congelar la sesión esperando confirmación humana (por defecto: off)",
+    default: false,
+    values: [false, true],
+    labels: ["off (def)", "on"],
+    keywords: ["objectives", "objetivos", "unattended", "auto-approve"],
+  },
 ]
 
 export function settingID(setting: Setting) {
@@ -430,6 +608,18 @@ export function DialogConfig(props: { current?: string }) {
       .at(-1)
   })
 
+  const serverObjectivesConfig = createMemo(() => {
+    const entries = data.location.config.list(location.ref) ?? []
+    const merged: Record<string, unknown> = {}
+    for (const entry of entries) {
+      if (entry.type !== "document" || !entry.info.objectives) continue
+      for (const [k, v] of Object.entries(entry.info.objectives)) {
+        if (v !== undefined) merged[k] = v
+      }
+    }
+    return merged
+  })
+
   const availableModels = createMemo(() =>
     (data.location.model.list(location.ref) ?? [])
       .map((item) => `${item.providerID}/${item.id}`)
@@ -443,6 +633,9 @@ export function DialogConfig(props: { current?: string }) {
     }, config.data)
     if (setting.path.join(".") === "theme.name") return current ?? themes.selected
     if (setting.path.join(".") === "compaction.model") return serverCompactionModel() ?? current ?? setting.default
+    if (setting.path[0] === "objectives" && setting.path[1]) {
+      return serverObjectivesConfig()[setting.path[1]] ?? current ?? setting.default
+    }
     return current ?? setting.default
   }
   const values = (setting: Setting) => {
@@ -479,12 +672,14 @@ export function DialogConfig(props: { current?: string }) {
     const setting = settings[index]
     const current = value(setting)
     const choices = values(setting)
-    const next = choices
+    const rawNext = choices
       ? choices[(choices.indexOf(current) + direction + choices.length) % choices.length]
       : Math.min(setting.max!, Math.max(setting.min!, Number(current) + direction * setting.step!))
+    const next = typeof rawNext === "number" && !Number.isInteger(setting.step ?? 1) ? Number(rawNext.toFixed(2)) : rawNext
     if (next === current) return
     setSaving(true)
     const isCompactionModel = setting.path.join(".") === "compaction.model"
+    const isObjectivesSetting = setting.path[0] === "objectives" && Boolean(setting.path[1])
     await Promise.all([
       config.update((draft) => {
         const parent = setting.path.slice(0, -1).reduce<Record<string, unknown>>((result, key) => {
@@ -497,6 +692,13 @@ export function DialogConfig(props: { current?: string }) {
         ? [
             client.api.experimental.config.update({
               compaction: { model: next === "active" ? null : String(next) },
+            }),
+          ]
+        : []),
+      ...(isObjectivesSetting
+        ? [
+            client.api.experimental.config.update({
+              objectives: { [setting.path[1]!]: next },
             }),
           ]
         : []),

@@ -2,9 +2,11 @@ import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { Env } from "../../env"
 
 export default Runtime.handler(Commands.commands.run, (input) =>
   Effect.gen(function* () {
+    Env.applyObjectivesCliFlags(input)
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
     // A one-off run uses the background service when it is already up, but never leaves a new one running.
     const server = yield* ServerConnection.resolve({ autostart: false }).pipe(

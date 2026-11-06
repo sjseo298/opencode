@@ -1,4 +1,5 @@
 import { Plugin as OpenCodePlugin } from "@opencode/plugin"
+import { getObjectivesConfig } from "./objectives-model.js"
 
 type Options = {
   orchestratorGuide?: string
@@ -384,7 +385,8 @@ export const Plugin = OpenCodePlugin.define({
           const safetyBuffer = Math.min(15_000, Math.floor(limit * 0.15))
           const ceiling = Math.max(10_000, limit - safetyBuffer)
           const usedTokens = estimateMessageTokens(event.messages)
-          const warningThreshold = Math.floor(ceiling * 0.85)
+          const primaryPct = getObjectivesConfig(event.sessionID).primaryPreCompactionThreshold / 100
+          const warningThreshold = Math.floor(ceiling * primaryPct)
 
           if (usedTokens >= warningThreshold) {
             if (!event.system.some((item) => (item.text ?? "").includes("## ⚠️ CRITICAL PRE-COMPACTION ADVISORY"))) {
@@ -408,7 +410,8 @@ export const Plugin = OpenCodePlugin.define({
         const safetyBuffer = Math.min(15_000, Math.floor(limit * 0.15))
         const ceiling = Math.max(10_000, limit - safetyBuffer)
         const usedTokens = estimateMessageTokens(event.messages)
-        const warningThreshold = Math.floor(ceiling * 0.90)
+        const subagentPct = getObjectivesConfig(event.sessionID).subagentPreCompactionThreshold / 100
+        const warningThreshold = Math.floor(ceiling * subagentPct)
 
         if (usedTokens >= warningThreshold) {
           if (!event.system.some((item) => (item.text ?? "").includes("## ⚠️ CRITICAL PRE-COMPACTION ADVISORY"))) {

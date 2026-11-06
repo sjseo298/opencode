@@ -12,6 +12,7 @@ import { ConfigLSP } from "@opencode/schema/config/lsp"
 import { ConfigMedia } from "@opencode/schema/config/media"
 import { ConfigModel } from "@opencode/schema/config/model"
 import { ConfigMCP } from "@opencode/schema/config/mcp"
+import { ConfigObjectives } from "@opencode/schema/config/objectives"
 import { ConfigPlugin } from "@opencode/schema/config/plugin"
 import { ConfigPolicy } from "@opencode/schema/config/policy"
 import { ConfigProvider } from "@opencode/schema/config/provider"
@@ -192,6 +193,7 @@ export function normalize(input: unknown): Result {
   normalizeSkills(input, encoded, diagnostics)
   normalizeMcp(input, encoded, diagnostics)
   normalizeCompaction(input, encoded, diagnostics)
+  normalizeObjectives(input, encoded, diagnostics)
   normalizePolicies(input, encoded, diagnostics)
   normalizeExperimental(input, encoded, diagnostics)
   normalizeWatcher(input, encoded, diagnostics)
@@ -424,6 +426,50 @@ function normalizeCompaction(
     if (value !== undefined) result.unified_kv = value
   }
   if (Object.keys(result).length || !Object.keys(input.compaction).length) encoded.compaction = result
+}
+
+const objectivesCamelAliases: Readonly<Record<string, keyof typeof ConfigObjectives.Info.fields>> = {
+  maxActionsWithoutSync: "max_actions_without_sync",
+  maxActionsWithoutObjectiveSync: "max_actions_without_sync",
+  max_consecutive_reads: "max_actions_without_sync",
+  maxConsecutiveReads: "max_actions_without_sync",
+  repeatedActionWarningThreshold: "repeated_action_warning_threshold",
+  searchAttachThreshold: "search_attach_threshold",
+  searchNovelThreshold: "search_novel_threshold",
+  findingMinChars: "finding_min_chars",
+  delegationJustificationMinChars: "delegation_justification_min_chars",
+  freshSessionPercentThreshold: "fresh_session_percent_threshold",
+  freshSessionTokensThreshold: "fresh_session_tokens_threshold",
+  relevanceCooldownMs: "relevance_cooldown_ms",
+  primaryPreCompactionThreshold: "primary_pre_compaction_threshold",
+  subagentPreCompactionThreshold: "subagent_pre_compaction_threshold",
+  minSubagentBudget: "min_subagent_budget",
+  embeddingsEnabled: "embeddings_enabled",
+}
+
+function normalizeObjectives(
+  input: Record<string, unknown>,
+  encoded: Record<string, unknown>,
+  diagnostics: Diagnostic[],
+) {
+  if (!own(input, "objectives")) return
+  if (!isRecord(input.objectives)) {
+    invalid(["objectives"], diagnostics)
+    return
+  }
+  const raw = { ...input.objectives }
+  for (const [camel, snake] of Object.entries(objectivesCamelAliases)) {
+    if (own(raw, camel) && !own(raw, snake)) {
+      raw[snake] = raw[camel]
+    }
+  }
+  const result: Record<string, unknown> = {}
+  for (const [key, schema] of Object.entries(ConfigObjectives.Info.fields)) {
+    if (!own(raw, key)) continue
+    const value = decodeEncoded(schema, raw[key], ["objectives", key], diagnostics)
+    if (value !== undefined) result[key] = value
+  }
+  if (Object.keys(result).length || !Object.keys(input.objectives).length) encoded.objectives = result
 }
 
 // V1 provider lists and `experimental.policies` stay supported and merge into

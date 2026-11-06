@@ -22,6 +22,7 @@ import { llmClient } from "../effect/app-node-platform.js"
 import { ConfigAgentPlugin } from "../config/plugin/agent.js"
 import { ConfigCommandPlugin } from "../config/plugin/command.js"
 import { ConfigCompactionPlugin } from "../config/plugin/compaction.js"
+import { ConfigObjectivesPlugin } from "../config/plugin/objectives.js"
 import { ConfigFormatterPlugin } from "../config/plugin/formatter.js"
 import { ConfigImagePlugin } from "../config/plugin/image.js"
 import { ConfigInstructionPlugin } from "../config/plugin/instruction.js"
@@ -306,6 +307,7 @@ const post = [
   BrowserPlugin,
   ConfigCommandPlugin.Plugin,
   ConfigCompactionPlugin.Plugin,
+  ConfigObjectivesPlugin.Plugin,
   ConfigFormatterPlugin.Plugin,
   ConfigImagePlugin.Plugin,
   ConfigLocationWatcherPlugin.Plugin,

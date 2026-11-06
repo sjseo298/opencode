@@ -2,10 +2,12 @@ import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerProcess } from "../../server-process"
+import { Env } from "../../env"
 
 export default Runtime.handler(
   Commands.commands.serve,
   Effect.fnUntraced(function* (input) {
+    Env.applyObjectivesCliFlags(input)
     if (input.service && input.stdio) return yield* Effect.fail(new Error("--service and --stdio cannot be combined"))
     return yield* ServerProcess.run({
       mode: input.service ? "service" : input.stdio ? "stdio" : "default",

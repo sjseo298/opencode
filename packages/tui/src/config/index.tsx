@@ -254,6 +254,34 @@ export const Info = Schema.Struct({
       }),
     }),
   ).annotate({ description: "Conversation compaction settings" }),
+  objectives: Schema.optional(
+    Schema.Struct({
+      max_actions_without_sync: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+      repeated_action_warning_threshold: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+      search_attach_threshold: Schema.optional(
+        Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(1)),
+      ),
+      search_novel_threshold: Schema.optional(
+        Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(1)),
+      ),
+      finding_min_chars: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+      delegation_justification_min_chars: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+      fresh_session_percent_threshold: Schema.optional(
+        Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(100)),
+      ),
+      fresh_session_tokens_threshold: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))),
+      relevance_cooldown_ms: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+      primary_pre_compaction_threshold: Schema.optional(
+        Schema.Int.check(Schema.isGreaterThanOrEqualTo(10), Schema.isLessThanOrEqualTo(100)),
+      ),
+      subagent_pre_compaction_threshold: Schema.optional(
+        Schema.Int.check(Schema.isGreaterThanOrEqualTo(10), Schema.isLessThanOrEqualTo(100)),
+      ),
+      min_subagent_budget: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))),
+      embeddings_enabled: Schema.optional(Schema.Boolean),
+      unattended: Schema.optional(Schema.Boolean),
+    }),
+  ).annotate({ description: "Protocolo de Objetivos (Objectives Protocol) settings" }),
   experimental: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)).annotate({
     description: "Experimental features that may change or be removed at any time",
   }),

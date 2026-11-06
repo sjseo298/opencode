@@ -10,8 +10,12 @@ import { ServerConnection } from "@/runtime/server/registry"
 import { useServerCollectionController } from "@/servers/registry/controller"
 import { DialogServer } from "@/servers/connect/dialog"
 import { SettingsList } from "@/settings/list"
-import { CompactionModelSetting, ShellSetting } from "@/settings/general/general"
-import { createServerCompactionModelController, createServerShellController } from "@/settings/general/controllers"
+import { CompactionModelSetting, ObjectivesProtocolSection, ShellSetting } from "@/settings/general/general"
+import {
+  createServerCompactionModelController,
+  createServerObjectivesController,
+  createServerShellController,
+} from "@/settings/general/controllers"
 import type { SettingsServer } from "./inventory"
 import { serverPagesConnection, unauthorizedHttpServer } from "./machine"
 import "@/settings/settings.css"
@@ -34,13 +38,16 @@ export const SettingsServerGeneral: Component<{ entry: SettingsServer; onAddServ
 
         <Show when={serverPagesConnection(props.entry.availability)} keyed>
           {(server) => (
-            <section class="settings-section">
-              <h3 class="settings-section-title">{language.t("settings.tab.preferences")}</h3>
-              <SettingsList>
-                <ServerShell server={server} />
-                <ServerCompactionModel server={server} />
-              </SettingsList>
-            </section>
+            <>
+              <section class="settings-section">
+                <h3 class="settings-section-title">{language.t("settings.tab.preferences")}</h3>
+                <SettingsList>
+                  <ServerShell server={server} />
+                  <ServerCompactionModel server={server} />
+                </SettingsList>
+              </section>
+              <ServerObjectivesProtocol server={server} />
+            </>
           )}
         </Show>
       </div>
@@ -168,4 +175,10 @@ function ServerCompactionModel(props: { server: ServerConnection.Any; action?: s
   const controller = createServerCompactionModelController(() => props.server)
 
   return <CompactionModelSetting controller={controller} action={props.action} />
+}
+
+function ServerObjectivesProtocol(props: { server: ServerConnection.Any }) {
+  const controller = createServerObjectivesController(() => props.server)
+
+  return <ObjectivesProtocolSection controller={controller} />
 }

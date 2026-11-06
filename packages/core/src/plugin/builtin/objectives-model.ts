@@ -114,6 +114,275 @@ export interface Precondition {
 export const SEARCH_ATTACH_THRESHOLD = 0.68
 export const SEARCH_NOVEL_THRESHOLD = 0.55
 
+// ---------- Configurable Protocolo de Objetivos Parameters ----------
+
+export interface ObjectivesProtocolConfig {
+  /** Maximum consecutive tool operations (reads, searches, commands, edits) allowed without synchronizing the objective tree before emitting [Objective Sync Warning] (default: 15) */
+  maxActionsWithoutSync: number
+  /** Number of identical normalized read calls on the same active Secondary Objective before emitting a repeated-action warning (default: 2) */
+  repeatedActionWarningThreshold: number
+  /** Similarity score threshold (0.0-1.0) at or above which add_finding rejects a duplicate finding and requires update_finding (default: 0.68) */
+  searchAttachThreshold: number
+  /** Similarity score threshold (0.0-1.0) at or above which add_finding emits a similarity warning and links seeAlso (default: 0.55) */
+  searchNovelThreshold: number
+  /** Minimum character length required for finding title, result, and nextAction anti-placeholder validation (default: 15) */
+  findingMinChars: number
+  /** Minimum character length required for delegation.justification when assigning main or subagent execution (default: 10) */
+  delegationJustificationMinChars: number
+  /** Context usage percentage (1-100) during planning at or above which present_plan recommends launching execution in a Fresh Session (default: 35) */
+  freshSessionPercentThreshold: number
+  /** Context tokens consumed during planning at or above which present_plan recommends launching execution in a Fresh Session (default: 30000) */
+  freshSessionTokensThreshold: number
+  /** Cooldown in milliseconds between isolated one-shot documentation relevance evaluations on llama.cpp slot 1 (default: 3000) */
+  relevanceCooldownMs: number
+  /** Context ceiling percentage (50-99) at which the primary session receives CRITICAL PRE-COMPACTION ADVISORY (default: 85) */
+  primaryPreCompactionThreshold: number
+  /** Context ceiling percentage (50-99) at which a subagent receives CRITICAL PRE-COMPACTION ADVISORY (default: 90) */
+  subagentPreCompactionThreshold: number
+  /** Minimum available token headroom required in context_budget to allow subagent delegation and minimum safety reserve floor (default: 16000) */
+  minSubagentBudget: number
+  /** Whether semantic embeddings via local LM Studio are enabled for add_finding and search_findings (default: true) */
+  embeddingsEnabled: boolean
+  /** Whether unattended mode is enabled by default so presented plans auto-approve without freezing (default: false) */
+  unattended: boolean
+}
+
+export const DEFAULT_OBJECTIVES_CONFIG: Readonly<ObjectivesProtocolConfig> = {
+  maxActionsWithoutSync: 15,
+  repeatedActionWarningThreshold: 2,
+  searchAttachThreshold: SEARCH_ATTACH_THRESHOLD,
+  searchNovelThreshold: SEARCH_NOVEL_THRESHOLD,
+  findingMinChars: 15,
+  delegationJustificationMinChars: 10,
+  freshSessionPercentThreshold: 35,
+  freshSessionTokensThreshold: 30_000,
+  relevanceCooldownMs: 3_000,
+  primaryPreCompactionThreshold: 85,
+  subagentPreCompactionThreshold: 90,
+  minSubagentBudget: 16_000,
+  embeddingsEnabled: true,
+  unattended: false,
+}
+
+type ObjectivesConfigStore = {
+  global: Partial<ObjectivesProtocolConfig>
+  sessions: Map<string, Partial<ObjectivesProtocolConfig>>
+  sessionEnvs: Map<string, Record<string, string | undefined>>
+}
+
+function getConfigStore(): ObjectivesConfigStore {
+  const g = globalThis as any
+  if (!g.__OPENCODE_OBJECTIVES_CONFIG_STORE__) {
+    g.__OPENCODE_OBJECTIVES_CONFIG_STORE__ = {
+      global: {},
+      sessions: new Map<string, Partial<ObjectivesProtocolConfig>>(),
+      sessionEnvs: new Map<string, Record<string, string | undefined>>(),
+    } satisfies ObjectivesConfigStore
+  }
+  return g.__OPENCODE_OBJECTIVES_CONFIG_STORE__
+}
+
+function toPositiveInt(val: unknown): number | undefined {
+  const n = typeof val === "string" && val.trim() !== "" ? Number(val) : typeof val === "number" ? val : NaN
+  if (!Number.isFinite(n) || n < 1) return undefined
+  return Math.floor(n)
+}
+
+function toNonNegativeInt(val: unknown): number | undefined {
+  const n = typeof val === "string" && val.trim() !== "" ? Number(val) : typeof val === "number" ? val : NaN
+  if (!Number.isFinite(n) || n < 0) return undefined
+  return Math.floor(n)
+}
+
+function toUnitScore(val: unknown): number | undefined {
+  const n = typeof val === "string" && val.trim() !== "" ? Number(val) : typeof val === "number" ? val : NaN
+  if (!Number.isFinite(n) || n < 0 || n > 1) return undefined
+  return n
+}
+
+function toPercent(val: unknown, min = 1, max = 100): number | undefined {
+  const n = typeof val === "string" && val.trim() !== "" ? Number(val) : typeof val === "number" ? val : NaN
+  if (!Number.isFinite(n) || n < min || n > max) return undefined
+  return Math.floor(n)
+}
+
+function toBool(val: unknown): boolean | undefined {
+  if (typeof val === "boolean") return val
+  if (typeof val === "string") {
+    const clean = val.trim().toLowerCase()
+    if (clean === "true" || clean === "1" || clean === "yes") return true
+    if (clean === "false" || clean === "0" || clean === "no") return false
+  }
+  return undefined
+}
+
+export function normalizeObjectivesConfigInput(raw: unknown): Partial<ObjectivesProtocolConfig> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+  const r = raw as Record<string, unknown>
+  const out: Partial<ObjectivesProtocolConfig> = {}
+
+  const maxActions = toPositiveInt(
+    r.maxActionsWithoutSync ??
+      r.max_actions_without_sync ??
+      r.maxActionsWithoutObjectiveSync ??
+      r.maxConsecutiveReads ??
+      r.max_consecutive_reads,
+  )
+  if (maxActions !== undefined) out.maxActionsWithoutSync = maxActions
+
+  const repeated = toPositiveInt(
+    r.repeatedActionWarningThreshold ?? r.repeated_action_warning_threshold ?? r.repeatedActionThreshold,
+  )
+  if (repeated !== undefined) out.repeatedActionWarningThreshold = repeated
+
+  const attach = toUnitScore(r.searchAttachThreshold ?? r.search_attach_threshold)
+  if (attach !== undefined) out.searchAttachThreshold = attach
+
+  const novel = toUnitScore(r.searchNovelThreshold ?? r.search_novel_threshold)
+  if (novel !== undefined) out.searchNovelThreshold = novel
+
+  const findingMin = toPositiveInt(r.findingMinChars ?? r.finding_min_chars)
+  if (findingMin !== undefined) out.findingMinChars = findingMin
+
+  const delegationMin = toPositiveInt(
+    r.delegationJustificationMinChars ?? r.delegation_justification_min_chars ?? r.delegationMinChars,
+  )
+  if (delegationMin !== undefined) out.delegationJustificationMinChars = delegationMin
+
+  const freshPct = toPercent(r.freshSessionPercentThreshold ?? r.fresh_session_percent_threshold, 1, 100)
+  if (freshPct !== undefined) out.freshSessionPercentThreshold = freshPct
+
+  const freshTokens = toPositiveInt(r.freshSessionTokensThreshold ?? r.fresh_session_tokens_threshold)
+  if (freshTokens !== undefined) out.freshSessionTokensThreshold = freshTokens
+
+  const cooldown = toNonNegativeInt(r.relevanceCooldownMs ?? r.relevance_cooldown_ms)
+  if (cooldown !== undefined) out.relevanceCooldownMs = cooldown
+
+  const primaryCompaction = toPercent(
+    r.primaryPreCompactionThreshold ?? r.primary_pre_compaction_threshold,
+    50,
+    99,
+  )
+  if (primaryCompaction !== undefined) out.primaryPreCompactionThreshold = primaryCompaction
+
+  const subagentCompaction = toPercent(
+    r.subagentPreCompactionThreshold ?? r.subagent_pre_compaction_threshold,
+    50,
+    99,
+  )
+  if (subagentCompaction !== undefined) out.subagentPreCompactionThreshold = subagentCompaction
+
+  const minBudget = toPositiveInt(r.minSubagentBudget ?? r.min_subagent_budget)
+  if (minBudget !== undefined) out.minSubagentBudget = minBudget
+
+  const emb = toBool(r.embeddingsEnabled ?? r.embeddings_enabled)
+  if (emb !== undefined) out.embeddingsEnabled = emb
+
+  const unatt = toBool(r.unattended)
+  if (unatt !== undefined) out.unattended = unatt
+
+  return out
+}
+
+export function parseObjectivesConfigFromEnv(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Partial<ObjectivesProtocolConfig> {
+  let merged: Partial<ObjectivesProtocolConfig> = {}
+
+  for (const jsonVar of [env.OPENCODE_OBJECTIVES_CONFIG, env.OPENCODE_OBJECTIVES_CLI_OVERRIDES]) {
+    if (!jsonVar || !jsonVar.trim()) continue
+    const trimmed = jsonVar.trim()
+    try {
+      const parsed = JSON.parse(trimmed)
+      const root = parsed && typeof parsed === "object" && "objectives" in parsed ? parsed.objectives : parsed
+      merged = { ...merged, ...normalizeObjectivesConfigInput(root) }
+    } catch {
+      // Ignore malformed JSON in env var
+    }
+  }
+
+  const fromVars = normalizeObjectivesConfigInput({
+    maxActionsWithoutSync:
+      env.OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC ?? env.OPENCODE_OBJECTIVES_MAX_CONSECUTIVE_READS,
+    repeatedActionWarningThreshold: env.OPENCODE_OBJECTIVES_REPEATED_ACTION_THRESHOLD,
+    searchAttachThreshold: env.OPENCODE_OBJECTIVES_SEARCH_ATTACH_THRESHOLD,
+    searchNovelThreshold: env.OPENCODE_OBJECTIVES_SEARCH_NOVEL_THRESHOLD,
+    findingMinChars: env.OPENCODE_OBJECTIVES_FINDING_MIN_CHARS,
+    delegationJustificationMinChars: env.OPENCODE_OBJECTIVES_DELEGATION_MIN_CHARS,
+    freshSessionPercentThreshold: env.OPENCODE_OBJECTIVES_FRESH_SESSION_PERCENT_THRESHOLD,
+    freshSessionTokensThreshold: env.OPENCODE_OBJECTIVES_FRESH_SESSION_TOKENS_THRESHOLD,
+    relevanceCooldownMs: env.OPENCODE_OBJECTIVES_RELEVANCE_COOLDOWN_MS,
+    primaryPreCompactionThreshold: env.OPENCODE_OBJECTIVES_PRIMARY_PRE_COMPACTION_THRESHOLD,
+    subagentPreCompactionThreshold: env.OPENCODE_OBJECTIVES_SUBAGENT_PRE_COMPACTION_THRESHOLD,
+    minSubagentBudget: env.OPENCODE_OBJECTIVES_MIN_SUBAGENT_BUDGET,
+    embeddingsEnabled: env.OPENCODE_OBJECTIVES_EMBEDDINGS,
+    unattended: env.OPENCODE_OBJECTIVES_UNATTENDED ?? env.OPENCODE_UNATTENDED,
+  })
+
+  return { ...merged, ...fromVars }
+}
+
+export function setGlobalObjectivesConfig(config: Partial<ObjectivesProtocolConfig> | undefined): void {
+  const store = getConfigStore()
+  store.global = config ? normalizeObjectivesConfigInput(config) : {}
+}
+
+export function getGlobalObjectivesConfig(): Partial<ObjectivesProtocolConfig> {
+  return { ...getConfigStore().global }
+}
+
+export function setSessionObjectivesConfig(
+  sessionID: string,
+  config: Partial<ObjectivesProtocolConfig> | undefined,
+): void {
+  const store = getConfigStore()
+  if (!config) {
+    store.sessions.delete(sessionID)
+    return
+  }
+  const existing = store.sessions.get(sessionID) ?? {}
+  store.sessions.set(sessionID, { ...existing, ...normalizeObjectivesConfigInput(config) })
+}
+
+export function setSessionObjectivesEnv(
+  sessionID: string,
+  variables: Readonly<Record<string, string | undefined>> | undefined,
+): void {
+  const store = getConfigStore()
+  if (!variables) {
+    store.sessionEnvs.delete(sessionID)
+    return
+  }
+  store.sessionEnvs.set(sessionID, { ...variables })
+}
+
+export function getObjectivesConfig(sessionID?: string): ObjectivesProtocolConfig {
+  const store = getConfigStore()
+  const processEnvConfig = parseObjectivesConfigFromEnv(process.env)
+  const sessionEnv = sessionID ? store.sessionEnvs.get(sessionID) : undefined
+  const sessionEnvConfig = sessionEnv ? parseObjectivesConfigFromEnv(sessionEnv) : {}
+  const sessionDirect = sessionID ? (store.sessions.get(sessionID) ?? {}) : {}
+
+  // Also check if the active PO in __OPENCODE_OBJECTIVES__ has per-session config from session .json
+  let poConfig: Partial<ObjectivesProtocolConfig> = {}
+  if (sessionID) {
+    const map = (globalThis as any).__OPENCODE_OBJECTIVES__ as Map<string, any> | undefined
+    const po = map?.get(sessionID)
+    if (po?.config && typeof po.config === "object") {
+      poConfig = normalizeObjectivesConfigInput(po.config)
+    }
+  }
+
+  return {
+    ...DEFAULT_OBJECTIVES_CONFIG,
+    ...store.global,
+    ...processEnvConfig,
+    ...poConfig,
+    ...sessionDirect,
+    ...sessionEnvConfig,
+  }
+}
+
 // ---------- ID allocation ----------
 
 export function nextFindingId(findings: Finding[]): string {
@@ -145,41 +414,54 @@ export function nextDoDCriterionId(criteria: DoDCriterion[]): string {
 
 // ---------- Anti-placeholder validation ----------
 
-const CASE_INSENSITIVE_PLACEHOLDER = /<[^>\n]+>|\b(TBD|FIXME|N\/A|TBA|PLACEHOLDER|XXX+|LOREM)\b/i
+const CASE_INSENSITIVE_PLACEHOLDER = /<[^>\n]+>|\b(TBD|FIXME|N\/A|TBA|PLACEHOLDER|XXX+|LOREM)\b|\btodo\s+later\b/i
 const CASE_SENSITIVE_PLACEHOLDER = /\bTODO\b|\bTodo\s*:/
 
 const PLACEHOLDER_PATTERN = {
   test: (s: string) => CASE_INSENSITIVE_PLACEHOLDER.test(s) || CASE_SENSITIVE_PLACEHOLDER.test(s),
 }
 
-export function isPlaceholder(text: string): boolean {
+export function isPlaceholder(text: string, minChars?: number): boolean {
   const trimmed = text.trim()
-  if (trimmed.length < 15) return true
+  const requiredMin = minChars ?? getObjectivesConfig().findingMinChars
+  if (trimmed.length < requiredMin) return true
   return PLACEHOLDER_PATTERN.test(trimmed)
 }
 
-export function validateFindingFields(input: {
-  title?: string
-  result?: string
-  nextAction?: string
-  evidenceSource?: string
-}): string[] {
+export function validateFindingFields(
+  input: {
+    title?: string
+    result?: string
+    nextAction?: string
+    evidenceSource?: string
+  },
+  sessionID?: string,
+): string[] {
+  const cfg = getObjectivesConfig(sessionID)
+  const minChars = cfg.findingMinChars
   const violations: string[] = []
   const title = input.title?.trim() ?? ""
   const result = input.result?.trim() ?? ""
   const nextAction = input.nextAction?.trim() ?? ""
   const source = input.evidenceSource?.trim() ?? ""
 
-  if (title.length < 15) violations.push(`finding title must be a complete one-line statement (>=15 chars, got ${title.length})`)
+  if (title.length < minChars)
+    violations.push(`finding title must be a complete one-line statement (>=${minChars} chars, got ${title.length})`)
   else if (PLACEHOLDER_PATTERN.test(title)) violations.push(`finding title looks like a placeholder: "${title}"`)
 
-  if (result.length < 15) violations.push(`finding result must be the literal observation (>=15 chars, got ${result.length})`)
+  if (result.length < minChars)
+    violations.push(`finding result must be the literal observation (>=${minChars} chars, got ${result.length})`)
   else if (PLACEHOLDER_PATTERN.test(result)) violations.push(`finding result looks like a placeholder: "${result}"`)
 
-  if (nextAction.length < 15) violations.push(`finding nextAction must be one concrete executable action (>=15 chars, got ${nextAction.length})`)
-  else if (PLACEHOLDER_PATTERN.test(nextAction)) violations.push(`finding nextAction looks like a placeholder: "${nextAction}"`)
+  if (nextAction.length < minChars)
+    violations.push(
+      `finding nextAction must be one concrete executable action (>=${minChars} chars, got ${nextAction.length})`,
+    )
+  else if (PLACEHOLDER_PATTERN.test(nextAction))
+    violations.push(`finding nextAction looks like a placeholder: "${nextAction}"`)
 
-  if (source.length < 3) violations.push("finding evidence.source must name the exact source (file+lines, command, SQL, log excerpt)")
+  if (source.length < 3)
+    violations.push("finding evidence.source must name the exact source (file+lines, command, SQL, log excerpt)")
 
   return violations
 }
@@ -211,9 +493,13 @@ export interface AuditDocLike {
   secondaries: AuditObjectiveLike[]
   options?: Option[]
   findings?: Finding[]
+  config?: Partial<ObjectivesProtocolConfig>
 }
 
-export function runComplianceAudit(doc: AuditDocLike): AuditResult {
+export function runComplianceAudit(doc: AuditDocLike, sessionID?: string): AuditResult {
+  const baseCfg = getObjectivesConfig(sessionID)
+  const cfg = doc.config ? { ...baseCfg, ...normalizeObjectivesConfigInput(doc.config) } : baseCfg
+  const delegationMinChars = cfg.delegationJustificationMinChars
   const violations: string[] = []
 
   const checkObjective = (obj: AuditObjectiveLike) => {
@@ -247,8 +533,10 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
       if (mode !== "main" && mode !== "subagent") {
         violations.push(`${obj.id}: delegation mode must be 'main' or 'subagent'`)
       }
-      if (just.length < 10) {
-        violations.push(`${obj.id}: delegation justification must be >= 10 characters (got ${just.length})`)
+      if (just.length < delegationMinChars) {
+        violations.push(
+          `${obj.id}: delegation justification must be >= ${delegationMinChars} characters (got ${just.length})`,
+        )
       } else if (PLACEHOLDER_PATTERN.test(just)) {
         violations.push(`${obj.id}: delegation justification looks like a placeholder: "${just}"`)
       }
@@ -286,12 +574,15 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
 
   for (const finding of doc.findings ?? []) {
     if (finding.lifecycle === "SUBSUMED") continue
-    const fieldViolations = validateFindingFields({
-      title: finding.title,
-      result: finding.result,
-      nextAction: finding.nextAction,
-      evidenceSource: finding.evidence.source,
-    })
+    const fieldViolations = validateFindingFields(
+      {
+        title: finding.title,
+        result: finding.result,
+        nextAction: finding.nextAction,
+        evidenceSource: finding.evidence.source,
+      },
+      sessionID,
+    )
     for (const v of fieldViolations) violations.push(`${finding.id}: ${v}`)
     if (!finding.delegation) {
       violations.push(`${finding.id}: delegation assessment is mandatory (must provide delegation: { mode: 'main' | 'subagent', justification: '...' })`)
@@ -301,8 +592,10 @@ export function runComplianceAudit(doc: AuditDocLike): AuditResult {
       if (mode !== "main" && mode !== "subagent") {
         violations.push(`${finding.id}: delegation mode must be 'main' or 'subagent'`)
       }
-      if (just.length < 10) {
-        violations.push(`${finding.id}: delegation justification must be >= 10 characters (got ${just.length})`)
+      if (just.length < delegationMinChars) {
+        violations.push(
+          `${finding.id}: delegation justification must be >= ${delegationMinChars} characters (got ${just.length})`,
+        )
       } else if (PLACEHOLDER_PATTERN.test(just)) {
         violations.push(`${finding.id}: delegation justification looks like a placeholder: "${just}"`)
       }
@@ -673,6 +966,9 @@ export function parseDocument(value: unknown): Record<string, any> | undefined {
   doc.dod = Array.isArray(raw.dod) ? raw.dod : []
   if (!Array.isArray(doc.touchedFiles)) doc.touchedFiles = []
   if (!Array.isArray(doc.relevantDocumentableFiles)) doc.relevantDocumentableFiles = []
+  if (raw.config && typeof raw.config === "object") {
+    doc.config = normalizeObjectivesConfigInput(raw.config)
+  }
   if (typeof doc.createdAt !== "number") doc.createdAt = Date.now()
   if (typeof doc.updatedAt !== "number") doc.updatedAt = Date.now()
   return doc

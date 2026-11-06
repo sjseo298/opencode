@@ -15,6 +15,7 @@ import { Session } from "../../session.js"
 import { SessionHistory } from "../../session/history.js"
 import { UnifiedKV } from "../../session/unified-kv.js"
 import { getDetectedSubagentCapacity } from "../../plugin/builtin/subagent-mandatory-instruction.js"
+import { getObjectivesConfig } from "../../plugin/builtin/objectives-model.js"
 
 export const name = "context_budget"
 
@@ -96,8 +97,9 @@ export const Plugin = {
               const unifiedKvTreeTokens = currentSessionTokens + otherTreeTokens
 
               // Available headroom calculation
-              // Buffer preserves 15% (minimum 16k) of context window as safety margin
-              const safetyReserveTokens = Math.max(16_000, Math.floor(contextLimit * 0.15))
+              // Buffer preserves 15% (minimum minSubagentBudget) of context window as safety margin
+              const minBudget = getObjectivesConfig(context.sessionID).minSubagentBudget
+              const safetyReserveTokens = Math.max(minBudget, Math.floor(contextLimit * 0.15))
               const ceiling = UnifiedKV.calculateAdjustedCeiling(contextLimit - safetyReserveTokens, otherTreeTokens)
               const availableHeadroom = Math.max(0, ceiling - currentSessionTokens)
 
@@ -105,7 +107,7 @@ export const Plugin = {
               const { totalSlots, maxSubagents } = getDetectedSubagentCapacity()
 
               // Delegation threshold & minimum budget
-              const canDelegate = availableHeadroom >= MIN_SUBAGENT_BUDGET
+              const canDelegate = availableHeadroom >= minBudget
 
               // Dynamic budget calculation:
               // availableHeadroom already protects the safety reserve.
@@ -115,9 +117,9 @@ export const Plugin = {
                 Math.floor(availableHeadroom / Math.max(1, maxSubagents)),
               )
 
-              const isTight = availableHeadroom < MIN_SUBAGENT_BUDGET
+              const isTight = availableHeadroom < minBudget
               const recommendation = isTight
-                ? `DELEGATION_BLOCKED: Context headroom (${availableHeadroom} tokens) is below the minimum viable subagent budget (${MIN_SUBAGENT_BUDGET} tokens). Do NOT delegate to a subagent (canDelegate: false). Execute this task directly in the main thread (mode: 'main'), or if the primary session has extensive accumulated history that can be pruned, voluntarily trigger compaction first.`
+                ? `DELEGATION_BLOCKED: Context headroom (${availableHeadroom} tokens) is below the minimum viable subagent budget (${minBudget} tokens). Do NOT delegate to a subagent (canDelegate: false). Execute this task directly in the main thread (mode: 'main'), or if the primary session has extensive accumulated history that can be pruned, voluntarily trigger compaction first.`
                 : `Verified: ${availableHeadroom} tokens available in unified tree. Delegation allowed (canDelegate: true). With ${maxSubagents} subagent slot(s) and a safety reserve of ${safetyReserveTokens} tokens, the max recommended budget per subagent task is ${maxRecommendedSubagentBudget} tokens. If your intended task exceeds this, decompose it into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) before delegating.`
 
               const result = {
@@ -129,7 +131,7 @@ export const Plugin = {
                 maxSubagents,
                 totalSlots,
                 parentReserveTokens: safetyReserveTokens,
-                minSubagentBudget: MIN_SUBAGENT_BUDGET,
+                minSubagentBudget: minBudget,
                 maxRecommendedSubagentBudget,
                 canDelegate,
                 recommendation,

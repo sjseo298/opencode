@@ -13,6 +13,7 @@ import { ConfigFormatter } from "./config/formatter.js"
 import { ConfigLSP } from "./config/lsp.js"
 import { ConfigMCP } from "./config/mcp.js"
 import { ConfigModel } from "./config/model.js"
+import { ConfigObjectives } from "./config/objectives.js"
 import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigPolicy } from "./config/policy.js"
 import { ConfigProvider } from "./config/provider.js"
@@ -88,6 +89,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   compaction: ConfigCompaction.Info.pipe(optional).annotate({
     description: "Conversation compaction behavior",
   }),
+  objectives: ConfigObjectives.Info.pipe(optional).annotate({
+    description: "Protocolo de Objetivos (Objectives Protocol) thresholds and behavior settings",
+  }),
   skills: Schema.String.pipe(Schema.Array, optional).annotate({
     description: "Additional paths or URLs to discover skills from",
   }),
@@ -121,6 +125,7 @@ export const Patch = Schema.Struct({
   compaction: Schema.Struct({
     model: Schema.NullOr(Schema.String).pipe(optional),
   }).pipe(optional),
+  objectives: ConfigObjectives.Patch.pipe(optional),
 }).annotate({ identifier: "Config.Patch" })
 export interface Patch extends Schema.Schema.Type<typeof Patch> {}
 

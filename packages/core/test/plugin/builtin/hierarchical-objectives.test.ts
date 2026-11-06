@@ -12,6 +12,11 @@ import {
   getObjectives,
   clearSessionObjectives,
   MAX_CONSECUTIVE_READS,
+  MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC,
+  DEFAULT_OBJECTIVES_CONFIG,
+  getObjectivesConfig,
+  setGlobalObjectivesConfig,
+  setSessionObjectivesConfig,
   addFinding,
   updateFinding,
   addOption,
@@ -36,6 +41,7 @@ import {
   repairDocumentInvariants,
   evaluateDoD,
   renderProjection,
+  setSessionObjectivesEnv,
 } from "../../../src/plugin/builtin/objectives-model.js"
 import { createObjectivesStore } from "../../../src/plugin/builtin/objectives-persistence.js"
 
@@ -424,7 +430,7 @@ describe("hierarchical-objectives plugin", () => {
       }
 
       // The MAX_CONSECUTIVE_READS-th call must reject to prevent loop without mutating event.system
-      expect(() => hook({ sessionID: sid, tool: "read" })).toThrow("Anti-Loop Warning")
+      expect(() => hook({ sessionID: sid, tool: "read" })).toThrow("Objective Sync Warning")
     })
 
     test("intercepts todowrite in execute.before and rejects with Protocol Guard guidance", async () => {
@@ -438,25 +444,66 @@ describe("hierarchical-objectives plugin", () => {
       )
     })
 
-    test("triggers objective sync and plan presentation warning after consecutive actions without update", async () => {
+    test("triggers objective sync and plan presentation warning after consecutive actions without update (default 15)", async () => {
       const { toolHooks } = await setupPluginInstance()
       const sid = uniqueSessionID("actions-sync-warning")
       const hook = toolHooks["execute.before"]?.[0]
       expect(hook).toBeDefined()
+      expect(MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC).toBe(15)
+      expect(DEFAULT_OBJECTIVES_CONFIG.maxActionsWithoutSync).toBe(15)
 
       const po = setPrimaryObjective(sid, "Test Primary", "Verify all criteria")
       po.approvedByUser = false
       addSecondaryObjective(sid, "SO-1", "Dependency rationale")
 
-      // 4 actions without objective sync
-      for (let i = 0; i < 4; i++) {
+      // 14 actions without objective sync (should pass under new default of 15)
+      for (let i = 0; i < 14; i++) {
         await hook!({ sessionID: sid, tool: "shell" })
       }
 
-      // 5th action triggers plan presentation warning because plan was not presented
+      // 15th action triggers plan presentation warning because plan was not presented
       expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow(
         "Objective Sync & Plan Presentation Warning",
       )
+    })
+
+    test("supports configurable Protocolo de Objetivos thresholds via global settings, session .json config, and CLI/env overrides", async () => {
+      const { toolHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("custom-objectives-config")
+      const hook = toolHooks["execute.before"]?.[0]
+      expect(hook).toBeDefined()
+
+      try {
+        // 1. Global config override
+        setGlobalObjectivesConfig({ maxActionsWithoutSync: 8 })
+        expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(8)
+
+        // 2. Session .json config override takes precedence over global
+        setPrimaryObjective(sid, "Configurable Primary", "Done", undefined, {
+          config: { maxActionsWithoutSync: 4 },
+        })
+        expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(4)
+
+        // Unified counter counts both read and shell operations toward maxActionsWithoutSync (4)
+        await hook!({ sessionID: sid, tool: "read" })
+        await hook!({ sessionID: sid, tool: "shell" })
+        await hook!({ sessionID: sid, tool: "read" })
+        expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow("Objective Sync Warning")
+
+        // 3. CLI / SessionEnvironment override takes highest precedence
+        setSessionObjectivesEnv(sid, {
+          OPENCODE_OBJECTIVES_CLI_OVERRIDES: JSON.stringify({
+            max_actions_without_sync: 20,
+            finding_min_chars: 8,
+          }),
+        })
+        expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(20)
+        expect(getObjectivesConfig(sid).findingMinChars).toBe(8)
+      } finally {
+        setGlobalObjectivesConfig(undefined)
+        setSessionObjectivesConfig(sid, undefined)
+        setSessionObjectivesEnv(sid, undefined)
+      }
     })
 
     test("delivers full objective tree as input upon compaction and maintains invariant post-compaction instructions", async () => {

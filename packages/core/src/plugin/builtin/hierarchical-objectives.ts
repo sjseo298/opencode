@@ -13,8 +13,11 @@ import {
   type Precondition,
   FINDING_EVIDENCE_TYPES,
   type FindingStatus,
-  SEARCH_ATTACH_THRESHOLD,
-  SEARCH_NOVEL_THRESHOLD,
+  DEFAULT_OBJECTIVES_CONFIG,
+  type ObjectivesProtocolConfig,
+  getObjectivesConfig,
+  setSessionObjectivesConfig,
+  normalizeObjectivesConfigInput,
   relevantProjectFiles,
   evaluateDoD,
   isPlaceholder,
@@ -34,8 +37,15 @@ import { createObjectivesStore, type ObjectivesStore } from "./objectives-persis
 import { autoConfigureEmbeddingsScorer, warmUpFindingsEmbeddings } from "./objectives-embeddings.js"
 
 // F-7: public swap point — an embeddings backend replaces the default dependency-free lexical scorer.
-export { setFindingScorer } from "./objectives-model.js"
-export type { FindingScorer } from "./objectives-model.js"
+export {
+  setFindingScorer,
+  DEFAULT_OBJECTIVES_CONFIG,
+  getObjectivesConfig,
+  setGlobalObjectivesConfig,
+  setSessionObjectivesConfig,
+  normalizeObjectivesConfigInput,
+} from "./objectives-model.js"
+export type { FindingScorer, ObjectivesProtocolConfig } from "./objectives-model.js"
 export {
   autoConfigureEmbeddingsScorer,
   createLmStudioFindingScorer,
@@ -123,6 +133,7 @@ export interface PrimaryObjective {
   fingerprints?: Fingerprint[] // Normalized blocker fingerprints (F-7/C-4)
   phase?: PhaseState // Plan-pause / checkpoint state (F-6)
   unattended?: boolean // Unattended / headless automation mode flag
+  config?: Partial<ObjectivesProtocolConfig> // Per-session protocol configuration overrides
   plannedSecondaryCount?: number // Declared expected count of secondaries for validation before presenting
   approvedByUser?: boolean // Internal unforgeable guard: tracks whether user approved the plan
   planPresentedAt?: number // Timestamp when plan was presented to the user
@@ -135,7 +146,8 @@ export interface PrimaryObjective {
 }
 
 // In-memory objective state per session for process runtime
-export const sessionObjectives = new Map<string, PrimaryObjective>()
+export const sessionObjectives: Map<string, PrimaryObjective> =
+  ((globalThis as any).__OPENCODE_OBJECTIVES__ ??= new Map<string, PrimaryObjective>())
 export const postCompactionSessions = new Set<string>()
 
 // Inspection tracking for anti-loop protocol per session
@@ -144,7 +156,7 @@ export const antiLoopWarnings = new Map<string, string>()
 
 // Action tracking for objective tree continuous sync enforcement
 export const actionsWithoutObjectiveSync = new Map<string, number>()
-export const MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC = 5
+export const MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC = DEFAULT_OBJECTIVES_CONFIG.maxActionsWithoutSync
 
 export const isTestEnvironment = () =>
   typeof process !== "undefined" &&
@@ -239,7 +251,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "19. Iterative Objective Synchronization (mechanically enforced): Work strictly one Secondary Objective at a time. Transition it to `exploring` before beginning implementation, and only resolve it after validation with concrete proof. A `pending -> resolved` jump (anti-batch resolution) and a second simultaneous `exploring` SO (single active target invariant) are mechanically rejected by the tool. These gates govern the objective lifecycle without intrusive edit limits and without modifying `event.system`, preserving llama.cpp prefix-cache stability across turns.",
 ].join("\n")
 
-export const MAX_CONSECUTIVE_READS = 5
+export const MAX_CONSECUTIVE_READS = DEFAULT_OBJECTIVES_CONFIG.maxActionsWithoutSync
 
 export function clearSessionObjectives(sessionID: string) {
   sessionObjectives.delete(sessionID)
@@ -266,6 +278,9 @@ export async function hydrateSessionObjectives(
     if (doc) {
       repairDocumentInvariants(doc)
       const po = doc as unknown as PrimaryObjective
+      if (po.config) {
+        setSessionObjectivesConfig(sessionID, po.config)
+      }
       sessionObjectives.set(sessionID, po)
       // Pre-warm embeddings cache in background for all hydrated findings
       if (Array.isArray(po.findings) && po.findings.length > 0) {
@@ -278,8 +293,14 @@ export async function hydrateSessionObjectives(
   if (activePluginContext?.session && sessionID && sessionID !== "default-session") {
     try {
       const sess = await activePluginContext.session.get({ sessionID }).catch(() => undefined)
+      if (sess?.metadata?.objectivesConfig && typeof sess.metadata.objectivesConfig === "object") {
+        setSessionObjectivesConfig(sessionID, sess.metadata.objectivesConfig)
+      }
       if (sess?.metadata?.objectives) {
         const po = sess.metadata.objectives as PrimaryObjective
+        if (po.config && typeof po.config === "object") {
+          setSessionObjectivesConfig(sessionID, po.config)
+        }
         if (po && po.title) {
           repairDocumentInvariants(po as any)
           sessionObjectives.set(sessionID, po)
@@ -312,9 +333,15 @@ export function setPrimaryObjective(
     plannedSecondaryCount?: number
     approvedByUser?: boolean
     unattended?: boolean
+    config?: Partial<ObjectivesProtocolConfig>
   },
 ): PrimaryObjective {
   const existing = sessionObjectives.get(sessionID)
+  if (extra?.config) {
+    setSessionObjectivesConfig(sessionID, extra.config)
+  }
+  const resolvedCfg = getObjectivesConfig(sessionID)
+  const effectiveUnattended = extra?.unattended ?? existing?.unattended ?? (resolvedCfg.unattended ? true : undefined)
   const now = Date.now()
   const po: PrimaryObjective = {
     title: title.trim(),
@@ -328,12 +355,15 @@ export function setPrimaryObjective(
     options: existing?.options ?? [],
     fingerprints: existing?.fingerprints ?? [],
     phase: existing?.phase,
-    unattended: extra?.unattended ?? existing?.unattended,
+    unattended: effectiveUnattended,
+    config: extra?.config
+      ? { ...(existing?.config ?? {}), ...normalizeObjectivesConfigInput(extra.config) }
+      : existing?.config,
     plannedSecondaryCount: extra?.plannedSecondaryCount ?? existing?.plannedSecondaryCount,
     approvedByUser:
       extra?.approvedByUser ??
       existing?.approvedByUser ??
-      (extra?.unattended || isTestEnvironment() ? true : false),
+      (effectiveUnattended || isTestEnvironment() ? true : false),
     touchedFiles: existing?.touchedFiles ?? [],
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -506,17 +536,19 @@ export function addSecondaryObjective(
 export function validateDelegationAssessment(
   delegation: DelegationAssessment | undefined,
   id: string,
+  sessionID?: string,
 ): string | undefined {
   if (!delegation) return undefined
+  const minChars = getObjectivesConfig(sessionID).delegationJustificationMinChars
   const mode = delegation.mode
   const just = typeof delegation.justification === "string" ? delegation.justification.trim() : ""
   if (mode !== "main" && mode !== "subagent") {
     return `${id}: delegation mode must be 'main' or 'subagent'.`
   }
-  if (just.length < 10) {
-    return `${id}: delegation justification must be >= 10 characters (got ${just.length}).`
+  if (just.length < minChars) {
+    return `${id}: delegation justification must be >= ${minChars} characters (got ${just.length}).`
   }
-  if (isPlaceholder(just)) {
+  if (isPlaceholder(just, minChars)) {
     return `${id}: delegation justification looks like a placeholder: "${just}".`
   }
   return undefined
@@ -991,16 +1023,22 @@ export function addFinding(
     return { success: false, error: `Finding soRef '${soRef}' does not match any secondary objective id (or 'PO').` }
   }
 
+  const cfg = getObjectivesConfig(sessionID)
   const evidence = normalizeEvidence(input.evidence)
   const effectiveResult =
     (input.result?.trim()) ||
-    (typeof evidence.source === "string" && evidence.source.trim().length >= 15 ? evidence.source.trim() : "")
-  const violations = validateFindingFields({
-    title: input.title,
-    result: effectiveResult,
-    nextAction: input.nextAction,
-    evidenceSource: evidence.source,
-  })
+    (typeof evidence.source === "string" && evidence.source.trim().length >= cfg.findingMinChars
+      ? evidence.source.trim()
+      : "")
+  const violations = validateFindingFields(
+    {
+      title: input.title,
+      result: effectiveResult,
+      nextAction: input.nextAction,
+      evidenceSource: evidence.source,
+    },
+    sessionID,
+  )
   if (violations.length > 0) {
     return { success: false, error: `Finding rejected (anti-placeholder validation): ${violations.join(" | ")}` }
   }
@@ -1012,7 +1050,7 @@ export function addFinding(
         "Finding rejected: delegation assessment is mandatory. You must provide 'delegation: { mode: 'main' | 'subagent', justification: '...' }' to explicitly evaluate whether subagent delegation is appropriate.",
     }
   }
-  const delErr = validateDelegationAssessment(input.delegation, "Finding rejected")
+  const delErr = validateDelegationAssessment(input.delegation, "Finding rejected", sessionID)
   if (delErr) {
     return { success: false, error: delErr }
   }
@@ -1023,7 +1061,7 @@ export function addFinding(
   const query = `${input.title?.trim() ?? ""} ${effectiveResult}`
   const hits = searchFindings(po.findings, query)
   const top = hits[0]
-  if (top && top.score >= SEARCH_ATTACH_THRESHOLD) {
+  if (top && top.score >= cfg.searchAttachThreshold) {
     const candidates = hits
       .slice(0, 3)
       .map((h) => `${h.findingId} (score ${h.score})`)
@@ -1064,7 +1102,7 @@ export function addFinding(
     impactOnOption: input.impactOnOption,
     nextAction: input.nextAction!.trim(),
     delegation: input.delegation,
-    seeAlso: top && top.score >= SEARCH_NOVEL_THRESHOLD ? [top.findingId, ...(input.seeAlso ?? [])] : (input.seeAlso ?? []),
+    seeAlso: top && top.score >= cfg.searchNovelThreshold ? [top.findingId, ...(input.seeAlso ?? [])] : (input.seeAlso ?? []),
     supersedes: input.supersedes ?? [],
     spawnedBy: input.spawnedBy,
     lifecycle: "NEW",
@@ -1077,8 +1115,8 @@ export function addFinding(
   persistSessionObjectives(sessionID)
 
   const warning =
-    top && top.score >= SEARCH_NOVEL_THRESHOLD
-      ? `Similarity warning: ${top.findingId} scored ${top.score} (0.55–0.68 band). Cross-referenced via seeAlso; verify this is genuinely new knowledge.`
+    top && top.score >= cfg.searchNovelThreshold
+      ? `Similarity warning: ${top.findingId} scored ${top.score} (${cfg.searchNovelThreshold}–${cfg.searchAttachThreshold} band). Cross-referenced via seeAlso; verify this is genuinely new knowledge.`
       : undefined
 
   return { success: true, finding, warning }
@@ -1361,7 +1399,8 @@ function recordToolAction(sessionID: string, tool: string, input: any): void {
   if (entry) {
     entry.count += 1
     entry.lastAt = Date.now()
-    if (entry.count >= 2) {
+    const repeatThreshold = getObjectivesConfig(sessionID).repeatedActionWarningThreshold
+    if (entry.count >= repeatThreshold) {
       const warnings = actionWarnings.get(sessionID) ?? []
       const warning = `Repeated action on ${active.id}: ${normalizedKey} executed ${entry.count} times. Value-first check: does skipping it change the known conclusion? If not, stop repeating it.`
       if (!warnings.includes(warning)) warnings.push(warning)
@@ -1413,7 +1452,6 @@ export function setSessionGenerator(
 // Mutex & rate-limiting guards for one-shot relevance evaluation to protect llama.cpp slots & KV cache
 let isLlamaCppRelevanceInFlight = false
 let lastLlamaCppRelevanceAt = 0
-const RELEVANCE_EVALUATION_COOLDOWN_MS = 3_000
 const sessionModelMap = new Map<string, string>()
 
 export function setSessionModel(sessionID: string, modelID: string) {
@@ -1435,7 +1473,8 @@ function resolveLlamaCppOrigin(): string {
 
 export async function queryIsolatedLlamaCppRelevance(path: string, options?: { force?: boolean; model?: string }): Promise<boolean | undefined> {
   const now = Date.now()
-  if (!options?.force && (isLlamaCppRelevanceInFlight || now - lastLlamaCppRelevanceAt < RELEVANCE_EVALUATION_COOLDOWN_MS)) {
+  const cooldownMs = getObjectivesConfig().relevanceCooldownMs
+  if (!options?.force && (isLlamaCppRelevanceInFlight || now - lastLlamaCppRelevanceAt < cooldownMs)) {
     return undefined // Fallback to heuristic to prevent slot thrashing & request bursts
   }
 
@@ -1644,6 +1683,7 @@ export function presentPlan(
     po.unattended = options.unattended
   }
 
+  const cfg = getObjectivesConfig(sessionID)
   const tokensUsed = options?.tokensUsed
   const contextWindow = options?.contextWindow
   const percentUsed =
@@ -1651,8 +1691,8 @@ export function presentPlan(
       ? Math.round((tokensUsed / contextWindow) * 100)
       : undefined
   const recommendFreshSession =
-    (percentUsed !== undefined && percentUsed >= 35) ||
-    (typeof tokensUsed === "number" && tokensUsed >= 30000)
+    (percentUsed !== undefined && percentUsed >= cfg.freshSessionPercentThreshold) ||
+    (typeof tokensUsed === "number" && tokensUsed >= cfg.freshSessionTokensThreshold)
 
   const contextMetrics: ContextMetrics = {
     tokensUsed,
@@ -2604,6 +2644,7 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("handoff_plan"),
   Schema.Literal("checkpoint"),
   Schema.Literal("audit"),
+  Schema.Literal("configure"),
   Schema.Literal("list"),
 ])
 const SecondaryStatusSchema = Schema.Union([
@@ -3079,6 +3120,14 @@ export const ObjectiveInputSchema = Schema.Struct({
       }),
     ),
   ),
+  config: Schema.optional(
+    Schema.NullOr(Schema.Unknown).pipe(
+      Schema.annotate({
+        description:
+          "Optional Objectives Protocol configuration overrides for this session (e.g. { max_actions_without_sync: 15, max_consecutive_reads: 5, ... }).",
+      }),
+    ),
+  ),
 })
 
 export const ObjectiveOutputSchema = Schema.Struct({
@@ -3161,13 +3210,19 @@ const PLAN_NOT_PRESENTED_MESSAGE =
   PLAN_NOT_APPROVED_MESSAGE +
   "\n\n⚠️ [Plan Presentation Required]: Has definido un árbol de objetivos pero NO se lo has presentado formalmente al usuario. Debes presentar el plan llamando a 'objective_manage(action: \"present_plan\")' para que el usuario pueda revisarlo y aprobarlo en el diálogo nativo antes de iniciar la ejecución."
 
-function checkPlanApprovalGuard(po: PrimaryObjective | undefined, targetStatus: string | undefined): string | undefined {
+function checkPlanApprovalGuard(
+  po: PrimaryObjective | undefined,
+  targetStatus: string | undefined,
+  sessionID?: string,
+): string | undefined {
   if (!po) return undefined
   if (po.approvedByUser) return undefined
   if (po.unattended) return undefined
+  const cfg = getObjectivesConfig(sessionID)
   const isUnattendedEnv =
-    typeof process !== "undefined" &&
-    (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true")
+    cfg.unattended ||
+    (typeof process !== "undefined" &&
+      (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
   if (isUnattendedEnv) {
     po.approvedByUser = true
     return undefined
@@ -3267,6 +3322,31 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   const rawAction = String(input.action || "").toLowerCase()
   const po = sessionObjectives.get(sessionID)
 
+  if (input.config && typeof input.config === "object") {
+    const parsedCfg = normalizeObjectivesConfigInput(input.config)
+    if (Object.keys(parsedCfg).length > 0) {
+      setSessionObjectivesConfig(sessionID, parsedCfg)
+      if (po) {
+        po.config = { ...(po.config ?? {}), ...parsedCfg }
+        persistSessionObjectives(sessionID)
+      }
+    }
+  }
+
+  if (rawAction === "configure") {
+    const currentCfg = getObjectivesConfig(sessionID)
+    const msg = `Objectives Protocol configuration for session '${sessionID}': ${JSON.stringify(currentCfg)}`
+    return {
+      output: {
+        success: true,
+        message: msg,
+        tree: treeOf(sessionID),
+        report: JSON.stringify(currentCfg, null, 2),
+      },
+      content: msg,
+    }
+  }
+
   // F-6: the plan-pause state machine freezes execution mutations until the user confirms.
   // Planning draft actions (adding secondary definitions in pending status, recording findings, or refining DoD)
   // are allowed during presented_awaiting_confirmation (even if 'draft: true' was omitted by the agent),
@@ -3320,7 +3400,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
     if (input.delegation) {
-      const topDelErr = validateDelegationAssessment(input.delegation, "Top-level delegation")
+      const topDelErr = validateDelegationAssessment(input.delegation, "Top-level delegation", sessionID)
       if (topDelErr) {
         return {
           output: { success: false, message: `Delegation assessment rejected: ${topDelErr}`, tree: "" },
@@ -3348,6 +3428,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       topicKey: typeof input.topicKey === "string" ? input.topicKey : undefined,
       dod: dodCriteria,
       plannedSecondaryCount: plannedCount,
+      config: input.config && typeof input.config === "object" ? normalizeObjectivesConfigInput(input.config) : undefined,
     })
 
     if (plannedCount !== undefined) {
@@ -3377,9 +3458,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       })
     }
 
+    const cfg = getObjectivesConfig(sessionID)
     const isUnattended =
       input.unattended === true ||
       created.unattended === true ||
+      cfg.unattended === true ||
       (typeof process !== "undefined" &&
         (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
 
@@ -3604,7 +3687,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     if (input.delegation) {
-      const delErr = validateDelegationAssessment(input.delegation, input.id ?? sTitle ?? "Secondary objective")
+      const delErr = validateDelegationAssessment(input.delegation, input.id ?? sTitle ?? "Secondary objective", sessionID)
       if (delErr) {
         return {
           output: { success: false, message: `Delegation assessment rejected: ${delErr}`, tree: treeOf(sessionID) },
@@ -3613,7 +3696,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const approvalError = checkPlanApprovalGuard(po, input.status)
+    const approvalError = checkPlanApprovalGuard(po, input.status, sessionID)
     if (approvalError) {
       return {
         output: { success: false, message: approvalError, tree: treeOf(sessionID) },
@@ -3674,7 +3757,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const approvalError = checkPlanApprovalGuard(current, input.status)
+    const approvalError = checkPlanApprovalGuard(current, input.status, sessionID)
     if (approvalError) {
       return {
         output: { success: false, message: approvalError, tree: treeOf(sessionID) },
@@ -3773,7 +3856,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const approvalError = checkPlanApprovalGuard(po, input.status)
+    const approvalError = checkPlanApprovalGuard(po, input.status, sessionID)
     if (approvalError) {
       return { output: { success: false, message: approvalError, tree: treeOf(sessionID) }, content: approvalError }
     }
@@ -3812,7 +3895,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       return { output: { success: false, message: "'id' (tertiary objective id, e.g. 'SO-2-T1') is required for action 'update_tertiary'.", tree: "" }, content: "Missing id for update_tertiary." }
     }
 
-    const approvalError = checkPlanApprovalGuard(current, input.status)
+    const approvalError = checkPlanApprovalGuard(current, input.status, sessionID)
     if (approvalError) {
       return { output: { success: false, message: approvalError, tree: treeOf(sessionID) }, content: approvalError }
     }
@@ -3956,9 +4039,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       return { output: { success: false, message: "'query' is required for action 'search_findings'.", tree: "" }, content: "Missing query." }
     }
     const current = sessionObjectives.get(sessionID)
+    const cfg = getObjectivesConfig(sessionID)
     const hits = searchFindings(current?.findings ?? [], query)
     const lines: string[] = [
-      "Search-before-write contract: score >= 0.68 => NOT new (extend the existing finding); 0.55–0.68 => warn + forced seeAlso; < 0.55 => genuinely new.",
+      `Search-before-write contract: score >= ${cfg.searchAttachThreshold} => NOT new (extend the existing finding); ${cfg.searchNovelThreshold}–${cfg.searchAttachThreshold} => warn + forced seeAlso; < ${cfg.searchNovelThreshold} => genuinely new.`,
     ]
     if (hits.length === 0) {
       lines.push("No matches above 0.1 — the finding is genuinely new.")
@@ -4208,9 +4292,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
+    const cfg = getObjectivesConfig(sessionID)
     const isUnattended =
       input.unattended === true ||
       sessionObjectives.get(sessionID)?.unattended === true ||
+      cfg.unattended === true ||
       (typeof process !== "undefined" &&
         (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
 
@@ -4259,9 +4345,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   }
 
   if (rawAction === "resume_plan") {
+    const cfg = getObjectivesConfig(sessionID)
     const isUnattended =
       input.unattended === true ||
       sessionObjectives.get(sessionID)?.unattended === true ||
+      cfg.unattended === true ||
       (typeof process !== "undefined" &&
         (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
 
@@ -4365,7 +4453,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     if (!current) {
       return { output: { success: false, message: "No active objective tree found. Call 'set_primary' first.", tree: "" }, content: "No active objective tree found." }
     }
-    const audit = runComplianceAudit(current)
+    const audit = runComplianceAudit(current, sessionID)
     const report = audit.pass
       ? "Compliance audit: PASS — no violations."
       : `Compliance audit: FAIL — ${audit.violations.join(" | ")}`
@@ -4557,6 +4645,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     await ctx.tool.hook("execute.before", (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+      const cfg = getObjectivesConfig(sessionID)
 
       if (event.tool === "todowrite") {
         throw new Error(
@@ -4566,7 +4655,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
 
       if (event.tool === "edit" || event.tool === "write") {
         const po = sessionObjectives.get(sessionID)
-        if (po && !po.approvedByUser && !po.unattended) {
+        if (po && !po.approvedByUser && !po.unattended && !cfg.unattended) {
           const isUnattendedEnv =
             typeof process !== "undefined" &&
             (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true")
@@ -4581,47 +4670,35 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       if (event.tool === "objective_manage") {
         actionsWithoutObjectiveSync.delete(sessionID)
         consecutiveReadCounts.delete(sessionID)
-      } else if (READONLY_TOOLS.has(event.tool)) {
-        const currentCount = (consecutiveReadCounts.get(sessionID) ?? 0) + 1
-        consecutiveReadCounts.set(sessionID, currentCount)
+      } else if (event.tool !== "question" && event.tool !== "session_compact") {
+        const unsyncedCount = (actionsWithoutObjectiveSync.get(sessionID) ?? 0) + 1
+        actionsWithoutObjectiveSync.set(sessionID, unsyncedCount)
 
-        if (currentCount >= MAX_CONSECUTIVE_READS) {
-          // Reset on throw to break the permanent deadlock: a subsequent read attempt
-          // gets a fresh cycle rather than failing at 6, 7, 8... forever.
+        if (unsyncedCount >= cfg.maxActionsWithoutSync) {
+          // Reset on throw to break permanent deadlocks on subsequent calls.
+          actionsWithoutObjectiveSync.delete(sessionID)
           consecutiveReadCounts.delete(sessionID)
-          throw new Error(
-            `⚠️ Anti-Loop Warning: Has ejecutado ${currentCount} operaciones consecutivas de inspección/lectura sin actualizar objetivos ni tomar acción. Recuerda que SOLO en el modo de reconocimiento previo a formular un plan está permitido omitir la actualización del árbol de objetivos. Una vez formulado el plan o detectados los primeros hallazgos, debes registrar tus descubrimientos con 'add_finding' o estructurar/actualizar tus objetivos con 'objective_manage'.`,
-          )
-        }
-      } else {
-        // Reset consecutive read count upon executing a modifying or action tool
-        consecutiveReadCounts.delete(sessionID)
-
-        if (event.tool !== "question") {
           const po = sessionObjectives.get(sessionID)
-          if (po) {
-            const unsyncedCount = (actionsWithoutObjectiveSync.get(sessionID) ?? 0) + 1
-            actionsWithoutObjectiveSync.set(sessionID, unsyncedCount)
-
-            if (unsyncedCount >= MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC) {
-              actionsWithoutObjectiveSync.delete(sessionID)
-              const planPresented = Boolean(
-                po.planPresentedAt ||
-                po.status === "presented_awaiting_confirmation" ||
-                po.approvedByUser ||
-                po.unattended,
-              )
-              if (po.secondaries.length > 0 && !planPresented) {
-                throw new Error(
-                  `⚠️ [Objective Sync & Plan Presentation Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos y sin haber presentado el plan al usuario. Si ya creaste el árbol de objetivos, debes presentar el plan con 'objective_manage(action: "present_plan")' para que el usuario lo apruebe antes de continuar ejecutando tareas. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
-                )
-              } else {
-                throw new Error(
-                  `⚠️ [Objective Sync Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos. Con un árbol de objetivos activo, debes sincronizar continuamente tus avances reales con 'objective_manage' (transicionando SO a 'exploring' antes de iniciarla, marcándola 'resolved' con 'validationProof' al terminarla, o registrando hallazgos con 'add_finding') antes de continuar ejecutando más acciones. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
-                )
-              }
-            }
+          if (!po) {
+            throw new Error(
+              `⚠️ [Objective Sync / Anti-Loop Warning]: Has ejecutado ${unsyncedCount} operaciones consecutivas sin estructurar ni actualizar tu árbol de objetivos. Recuerda que SOLO en una fase breve de reconocimiento inicial está permitido omitir la actualización del árbol de objetivos. Debes estructurar tu plan o registrar tus hallazgos llamando a 'objective_manage' ('set_primary', 'add_secondary', 'add_finding') antes de continuar.`,
+            )
           }
+          const planPresented = Boolean(
+            po.planPresentedAt ||
+              po.status === "presented_awaiting_confirmation" ||
+              po.approvedByUser ||
+              po.unattended ||
+              cfg.unattended,
+          )
+          if (po.secondaries.length > 0 && !planPresented) {
+            throw new Error(
+              `⚠️ [Objective Sync & Plan Presentation Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos y sin haber presentado el plan al usuario. Si ya creaste el árbol de objetivos, debes presentar el plan con 'objective_manage(action: "present_plan")' para que el usuario lo apruebe antes de continuar ejecutando tareas. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
+            )
+          }
+          throw new Error(
+            `⚠️ [Objective Sync Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos. Con un árbol de objetivos activo, debes sincronizar continuamente tus avances reales con 'objective_manage' (transicionando SO a 'exploring' antes de iniciarla, marcándola 'resolved' con 'validationProof' al terminarla, o registrando hallazgos con 'add_finding') antes de continuar ejecutando más acciones. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
+          )
         }
       }
     })

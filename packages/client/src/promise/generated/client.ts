@@ -1737,7 +1737,7 @@ export function make(options: ClientOptions) {
             {
               method: "PATCH",
               path: `/api/experimental/config`,
-              body: { shell: input?.["shell"], compaction: input?.["compaction"] },
+              body: { shell: input?.["shell"], compaction: input?.["compaction"], objectives: input?.["objectives"] },
               successStatus: 204,
               declaredStatuses: [400, 401, 404],
               empty: true,

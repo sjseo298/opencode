@@ -3,7 +3,7 @@
 // Falls back seamlessly to the default lexical scorer if LM Studio is unreachable or inactive.
 
 import type { Finding, FindingScorer } from "./objectives-model.js"
-import { setFindingScorer } from "./objectives-model.js"
+import { getObjectivesConfig, setFindingScorer } from "./objectives-model.js"
 
 export interface LmStudioEmbeddingsConfig {
   baseUrl?: string
@@ -222,7 +222,11 @@ export async function isLmStudioAvailable(baseUrl?: string): Promise<boolean> {
  * If LM Studio is not active or disabled by env, keeps the default lexical scorer.
  */
 export async function autoConfigureEmbeddingsScorer(opts?: { enabled?: boolean; baseUrl?: string }): Promise<boolean> {
-  const disabled = opts?.enabled === false || process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "false" || process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "0"
+  const disabled =
+    opts?.enabled === false ||
+    !getObjectivesConfig().embeddingsEnabled ||
+    process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "false" ||
+    process.env.OPENCODE_OBJECTIVES_EMBEDDINGS === "0"
   if (disabled) {
     setFindingScorer(undefined)
     return false

@@ -18,6 +18,7 @@ import { errorMessage } from "../../util/error"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
+    Env.applyObjectivesCliFlags(input)
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)

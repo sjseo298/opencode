@@ -3,6 +3,7 @@ export * as SessionEnvironment from "./environment.js"
 import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { SessionSchema } from "./schema.js"
+import { setSessionObjectivesEnv } from "../plugin/builtin/objectives-model.js"
 
 export type Variables = Readonly<Record<string, string>>
 
@@ -22,10 +23,12 @@ const layer = Layer.sync(Service, () => {
     set: (sessionID, variables) =>
       Effect.sync(() => {
         environments.set(sessionID, { ...variables })
+        setSessionObjectivesEnv(sessionID, variables)
       }),
     clear: (sessionID) =>
       Effect.sync(() => {
         environments.delete(sessionID)
+        setSessionObjectivesEnv(sessionID, undefined)
       }),
   })
 })

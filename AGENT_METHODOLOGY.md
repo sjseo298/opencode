@@ -360,8 +360,8 @@ export interface PrimaryObjective {
    * Tracks modifying/action tools (`write`, `edit`, `bash`, `apply_diff`, etc.). When modifying tools execute without updating objectives, the session is marked dirty.
    * Prompts the agent before concluding: *"⚠️ Objective Reconciliation Required: You have performed code modifications or tool executions. Call `objective_manage` to keep your objective tree synchronized with your latest progress, attach validation proof for completed work, or register newly discovered blockers before finishing your turn."*
    * Calling `objective_manage` clears the dirty state.
-4. **Anti-Loop Protocol (`ctx.tool.hook("execute.before")`)**:
-   * Detects 5 consecutive read-only operations (`read`, `list`, `glob`, `grep`, `webfetch`, etc.) without action, injecting an urgent anti-loop warning to force concrete synthesis and execution.
+4. **Unified Objective Sync & Anti-Loop Protocol (`ctx.tool.hook("execute.before")`)**:
+   * Detects `max_actions_without_sync` (default: `15`) consecutive tool operations (reads, searches, commands, or edits) without calling `objective_manage`, throwing `⚠️ [Objective Sync Warning]` (or `⚠️ [Objective Sync / Anti-Loop Warning]`) so the agent continuously synchronizes progress and findings.
 5. **Right Sidebar TUI Component (`SidebarObjectives`)**:
    * Registered in `packages/tui/src/plugin/builtins.ts`.
    * Displays the Primary Objective and Definition of Done at the top of the right sidebar.
@@ -672,6 +672,82 @@ In local LLM inference engines (`llama.cpp`, vLLM, LM Studio) and frontier provi
    * Loop guards and anti-loop protocols must reject invalid or repetitive tool calls at `ctx.tool.hook("execute.before")` by throwing a tool error rather than mutating `event.system`. Rejections return as tool results at the conversation tail, leaving the entire prior KV cache intact.
 5. **Monotonic Append-Only Conversation History**:
    * History (`messages[0..N]`) must never be edited, deleted, or reordered between intermediate steps. New tokens must only be appended at index $N+1$.
+
+### 11.7 Configurable Parameters ("Protocolo de Objetivos" Settings, `opencode.jsonc`, Session `.json` & CLI)
+
+None of the numeric thresholds or toggles of the **Protocolo de Objetivos** are hardcoded. Every parameter has a documented default value and can be configured in four ways (in ascending order of precedence):
+1. **Settings UI ("Protocolo de Objetivos" section)**: Available in both TUI (`/config` $\rightarrow$ category **Protocolo de Objetivos**) and App/Desktop Settings (**Preferences / Server** $\rightarrow$ section **Protocolo de Objetivos**), displaying each parameter alongside its default value.
+2. **Global / Project Config (`opencode.jsonc`)**: Under the `"objectives": { ... }` key.
+3. **Session `.json` / Runtime Tool Configuration**: In the session `.json` under `metadata.objectives.config` (or `metadata.objectivesConfig`), or dynamically at runtime via `objective_manage(action: "configure", config: { ... })` or `objective_manage(action: "set_primary", config: { ... })`.
+4. **CLI Flags & Environment Variables**: When invoking `opencode`, `opencode run`, or `opencode serve`.
+
+#### Complete Reference of Configurable Parameters
+
+| Parameter (`opencode.jsonc` / Session `.json`) | Default | CLI Flag | Environment Variable | Description |
+|---|---|---|---|---|
+| `max_actions_without_sync` | **`15`** | `--objectives-max-actions-without-sync <int>` | `OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC` | Maximum consecutive tool operations (reads, searches, commands, or edits) allowed without calling `objective_manage` before throwing `⚠️ [Objective Sync Warning]`. |
+| `repeated_action_warning_threshold` | **`2`** | `--objectives-repeated-action-threshold <int>` | `OPENCODE_OBJECTIVES_REPEATED_ACTION_THRESHOLD` | Number of identical normalized read actions on the same active Secondary Objective before queueing a repeated-action warning. |
+| `search_attach_threshold` | **`0.68`** | `--objectives-search-attach-threshold <0..1>` | `OPENCODE_OBJECTIVES_SEARCH_ATTACH_THRESHOLD` | Similarity score (`0.0–1.0`) at or above which `add_finding` rejects a duplicate finding and requires `update_finding`. |
+| `search_novel_threshold` | **`0.55`** | `--objectives-search-novel-threshold <0..1>` | `OPENCODE_OBJECTIVES_SEARCH_NOVEL_THRESHOLD` | Similarity score (`0.0–1.0`) at or above which `add_finding` emits a similarity warning and automatically links `seeAlso`. |
+| `finding_min_chars` | **`15`** | `--objectives-finding-min-chars <int>` | `OPENCODE_OBJECTIVES_FINDING_MIN_CHARS` | Minimum character length required for finding `title`, `result`, and `nextAction` (anti-placeholder validation). |
+| `delegation_justification_min_chars` | **`10`** | `--objectives-delegation-min-chars <int>` | `OPENCODE_OBJECTIVES_DELEGATION_MIN_CHARS` | Minimum character length required for `delegation.justification` (`mode: 'main' \| 'subagent'`). |
+| `fresh_session_percent_threshold` | **`35`** (`%`) | `--objectives-fresh-session-percent <1..100>` | `OPENCODE_OBJECTIVES_FRESH_SESSION_PERCENT` | Context window percentage consumed during planning at or above which `present_plan` recommends launching execution in a Fresh Session. |
+| `fresh_session_tokens_threshold` | **`30000`** | `--objectives-fresh-session-tokens <int>` | `OPENCODE_OBJECTIVES_FRESH_SESSION_TOKENS` | Tokens consumed during planning at or above which `present_plan` recommends launching execution in a Fresh Session. |
+| `relevance_cooldown_ms` | **`3000`** (`ms`) | `--objectives-relevance-cooldown-ms <int>` | `OPENCODE_OBJECTIVES_RELEVANCE_COOLDOWN_MS` | Cooldown in milliseconds between isolated one-shot documentation relevance evaluations (`id_slot: 1`) on `llama.cpp`. |
+| `primary_pre_compaction_threshold` | **`85`** (`%`) | `--objectives-primary-compaction-threshold <10..100>` | `OPENCODE_OBJECTIVES_PRIMARY_COMPACTION_THRESHOLD` | Context ceiling percentage at which the primary session receives `CRITICAL PRE-COMPACTION ADVISORY` to consolidate objectives and call `session_compact`. |
+| `subagent_pre_compaction_threshold` | **`90`** (`%`) | `--objectives-subagent-compaction-threshold <10..100>` | `OPENCODE_OBJECTIVES_SUBAGENT_COMPACTION_THRESHOLD` | Context ceiling percentage at which a subagent receives `CRITICAL PRE-COMPACTION ADVISORY` to halt exploration and return `<OUTPUT>`. |
+| `min_subagent_budget` | **`16000`** | `--objectives-min-subagent-budget <int>` | `OPENCODE_OBJECTIVES_MIN_SUBAGENT_BUDGET` | Minimum free token headroom required in `context_budget` to allow subagent delegation (`canDelegate: true`) and minimum safety reserve floor. |
+| `embeddings_enabled` | **`true`** | `--objectives-embeddings` / `--no-objectives-embeddings` | `OPENCODE_OBJECTIVES_EMBEDDINGS` | Enables or disables local LM Studio semantic embeddings for `add_finding` and `search_findings`. |
+| `unattended` | **`false`** | `--objectives-unattended` | `OPENCODE_OBJECTIVES_UNATTENDED` / `OPENCODE_UNATTENDED` | Unattended/autonomous mode where presented plans auto-approve without freezing in `presented_awaiting_confirmation`. |
+| *(JSON bundle)* | — | `--objectives-config <json\|path.json>` | `OPENCODE_OBJECTIVES_CONFIG` | Inline JSON string or path to a `.json` file (including a session `.json` export) containing overrides for any of the parameters above. |
+
+#### Example: `opencode.jsonc` Configuration
+
+```jsonc
+{
+  "compaction": {
+    "model": "llamacpp/Qwen2.5-Coder-7B-Instruct"
+  },
+  "objectives": {
+    "max_actions_without_sync": 15,
+    "repeated_action_warning_threshold": 2,
+    "search_attach_threshold": 0.68,
+    "search_novel_threshold": 0.55,
+    "finding_min_chars": 15,
+    "delegation_justification_min_chars": 10,
+    "fresh_session_percent_threshold": 35,
+    "fresh_session_tokens_threshold": 30000,
+    "relevance_cooldown_ms": 3000,
+    "primary_pre_compaction_threshold": 85,
+    "subagent_pre_compaction_threshold": 90,
+    "min_subagent_budget": 16000,
+    "embeddings_enabled": true,
+    "unattended": false
+  }
+}
+```
+
+#### Example: Session `.json` Override
+
+```json
+{
+  "metadata": {
+    "objectives": {
+      "config": {
+        "max_actions_without_sync": 20,
+        "repeated_action_warning_threshold": 3
+      }
+    }
+  }
+}
+```
+
+#### Example: CLI Invocation
+
+```bash
+opencode --objectives-max-actions-without-sync 20 --objectives-repeated-action-threshold 3
+opencode run --objectives-config ./session-objectives.json "Execute migration plan"
+```
 
 ---
 
