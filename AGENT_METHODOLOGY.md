@@ -611,7 +611,9 @@ Returns the complete formatted text tree of objectives, with tertiary sub-object
   6. *Deadlock-Free Anti-Loop*: Read counter resets upon throwing to prevent inspection deadlocks.
   7. *Mandatory Plan Presentation & Freeze (F-6 Evolution)*: `set_primary` supports `presentPlan: true`, freezing the tree into `presented_awaiting_confirmation` to ensure explicit user review and refinement before mutating tasks.
   8. *Universal Delegation & Epistemic Anti-Placeholder*: Secondary Objectives, Tertiary Objectives, and Findings support structured `delegation: { mode, justification }` verified by compliance audit. The anti-placeholder validator isolates uppercase `TODO` from lowercase Spanish words like `"todo"`.
-- **Consequences**: Tree state is robust across compaction and reloads. Deduplication and proof enforcement prevent phantom progress and speculative claims.
+  9. *Compact Incremental Tree Rendering*: Incremental `objective_manage` mutations (`add_secondary`, `update_secondary`, `add_tertiary`, `update_tertiary`, `add_finding`, `update_finding`, `add_option`, `update_option`, `add_fingerprint`, `update_dod`) return a compact tree in `content` (`renderObjectiveTree(po, { compact: true, ... })`) that folds already-resolved SOs/TOs and already-closed findings to 1-line summaries while rendering the active/focused items in full. Full unabridged trees remain in `output.tree` and `action: "list"`.
+  10. *Anti-Premature Compaction Guardrail (`session_compact`)*: `session_compact` measures real token consumption against the model's context ceiling and mechanically blocks premature voluntary compaction (e.g. at 56% context usage) when usage is below `max(50%, preCompactionThreshold - 10%)` and subagent delegation headroom is healthy (`canDelegate: true`), returning `compaction_skipped_sufficient_headroom` with exact token/percentage metrics.
+- **Consequences**: Tree state is robust across compaction and reloads. Deduplication, compact incremental rendering, and premature-compaction blocking prevent context bloat and unnecessary compaction mid-task.
 
 ### 11.5 Comparison: Standard TODO vs. Protocolo de Objetivos
 

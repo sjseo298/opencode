@@ -240,7 +240,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "8. Continuously keep objectives updated: when new blockers, sub-tasks, or progress occur, call `objective_manage` (`action: 'add_secondary'` or `action: 'update_secondary'`) to register them before concluding your turn. Do not leave stale in_progress or pending items if you already completed their work.",
   "9. Mandatory Objective Reconciliation Before Final Response: Before presenting your final result or concluding your final response to the user, your FIRST action MUST be to update and reconcile all objectives via `objective_manage` when an objective tree is active in the session. Leaving open objectives in the graphical interface when concluding is strictly unacceptable (status `presented_awaiting_confirmation` is the only approved paused state). You MUST NOT leave objectives open, in-progress, or pending if their work is done. Once every secondary objective — including all of their tertiary sub-objectives — and the Definition of Done are verified, call `objective_manage` with `action: 'complete_primary'` (or `action: 'resolve_primary'`) to formally resolve and close the Primary Objective. For purely read-only informational queries or single-step operations where no objective tree was established, deliver your answer directly without calling `objective_manage` retroactively.",
   "10. Subagent Delegation & Task Sizing: You may leverage the `subagent` tool to offload focused, deep investigations or isolated diagnostics. MANDATORY DELEGATION REASONING RULE: every secondary objective, tertiary objective, AND finding is a candidate for delegation; the agent MUST explicitly evaluate and record its delegation decision (`delegation: { mode: 'main' | 'subagent', justification: '...' }`). Delegation to subagents is CRITICAL TO PRESERVE YOUR CONTEXT WINDOW: executing context-heavy, repetitive, or exploratory tasks in the main session rapidly exhausts available context tokens. Delegation assessment is MANDATORY when transitioning an objective to 'exploring' or 'resolved', and when registering any finding via 'add_finding'. The decision ([main] or [subagent]) is displayed compactly beside each objective and finding in the objective tree and sidebar. Delegate when the work is isolated, context-heavy (many files/logs), and a free slot exists (`max_subagents = total_slots - 1`), which protects your primary session's context; execute in the main thread only when the task is small or tightly coupled, always recording the concrete justification upon moving to `exploring` (no blind main-thread execution). CONCURRENCY RULE (`max_subagents = total_slots - 1`): One slot is occupied by your active primary session, so you may enable at most `total_slots - 1` concurrent subagents as reported by the server's `/props` context API (defaulting to strictly ONE subagent at a time when 2 slots are active, 2 subagents for 3 slots, or 3 subagents for 4 slots). TASK SIZING & CONTEXT BUDGET GATE: Do NOT delegate overly large tasks to subagents or they will run out of available context; always assign medium-sized, achievable tasks. Before invoking `subagent`, you MUST call the `context_budget` tool to inspect `availableHeadroom` and `maxRecommendedSubagentBudget` (computed dynamically as `(headroom - parentReserve) / maxSubagents`), and pass `contextBudget: { availableHeadroom: <tokens> }` to `subagent`. If the intended task exceeds `maxRecommendedSubagentBudget`, you MUST decompose the Secondary Objective into Level-3 Subtasks (`SO-N-T1` through `SO-N-TN`; create as many as needed, not limited to 3) rather than delegating an oversized monolithic task.",
-  "11. Post-Compaction Resumption: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence.",
+  "11. Post-Compaction Resumption & Anti-Premature Compaction Rule: Immediately after compaction finishes, when resuming the session, you MUST first review what has been accomplished in the objectives (read the preserved objective tree/snapshot from the compaction summary under ## Objective and ## Work State) and call `objective_manage` to synchronize and update the active objectives before taking any other action. Do not re-investigate resolved items. The tree is auto-persisted and auto-hydrated: call `action: 'sync'` first after compaction or on session resume to rehydrate from the persistent store and repair any divergence. STRICT ANTI-PREMATURE COMPACTION RULE: NEVER invoke `session_compact` speculatively, after routine milestones, or in reaction to `[Objective Sync Warning]` notifications. Do not guess your context consumption—only invoke `session_compact` when the system explicitly injects `[CRITICAL PRE-COMPACTION ADVISORY]` (at 85% of context ceiling) or when `context_budget` reports `DELEGATION_BLOCKED` (`canDelegate: false`).",
   "12. Findings (F-NNN) & Mandatory Blocker Interception: every durable discovery, diagnostic fact, failing command, or error is registered with `action: 'add_finding'` the moment it is encountered (checkpoint immediately, BEFORE attempting any fix or next step). When a problem, blocker, or unexpected result occurs, NEVER silently solve it without registering the finding first. Findings are critical because they uncover blockers and essential facts that can force the redefinition, cancellation, or creation of objectives. Each finding must include typed evidence (COMMAND_OUTPUT, QUERY_RESULT, LOG_EXCERPT, FILE_READ, SCREENSHOT), the literal result without interpretation, delegation assessment if applicable, and one concrete executable next action. Newly created findings start in 'open' status and auto-associate with the active Secondary Objective (soRef); if no SO is active or if omitted, they default to the first SO (or 'PO' if no secondaries exist), offering full flexibility to register findings before starting a specific SO or in batch with `set_primary`. NO secondary objective can be resolved while it has associated OPEN findings (close them via action: 'update_finding' with status: 'closed'). Furthermore, no Primary Objective can close while any finding in the tree remains OPEN. Search-before-write is ENFORCED by the tool: if an existing finding scores >= 0.68 against the new one, you MUST extend that finding with `action: 'update_finding'` instead of creating a duplicate; between 0.55 and 0.68 you may create only with a forced seeAlso cross-reference; below 0.55 it is genuinely new. Findings older than 30 days are stale: historical reference only — revalidate live against the real system before applying their fix or discarding options.",
   "13. Options & Closure: in multi-candidate investigations every candidate is an Option (`action: 'add_option'` / `action: 'update_option'`) whose Result column ALWAYS reflects the currently known state. At most one Option may be SUCCESSFUL (proof required); registering SUCCESSFUL auto-cancels the siblings in one operation. DISCARDED requires a reason. The Primary Objective CANNOT be completed while any option remains in 'PENDING' or 'EXPLORING' status — all options must reach a definitive conclusion (SUCCESSFUL, DISCARDED, or CANCELLED) before complete_primary.",
   "14. Definition of Done: decompose it into verifiable criteria (array of objects in 'dodCriteria' with separate fields { id, statement, verifiableBy, satisfiedBy, proofRef }, managed with action: 'update_dod' or 'proof_dod'). Criteria listing resolved secondary objectives in 'satisfiedBy' automatically inherit proofRef upon SO resolution. The Primary Objective cannot be resolved while any criterion lacks proofRef. The exact property name for proof is strictly 'proofRef'. Direct criterion proof assignment is supported via action 'proof_dod' (id + proofRef) or passing 'dodProofs: { D1: ... }' directly in 'complete_primary'. When a finding invalidates a criterion, edit the criterion with action: 'update_dod' at the moment of discovery — never reinterpret silently at the end.",
@@ -1917,7 +1917,23 @@ export function importSession(
 
 // ---------- Rendering ----------
 
-export function renderObjectiveTree(po: PrimaryObjective): string {
+export interface RenderObjectiveTreeOptions {
+  compact?: boolean
+  focusSOId?: string
+  focusTOId?: string
+  focusFindingId?: string
+}
+
+function truncateText(text: string, maxChars: number): string {
+  return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text
+}
+
+export function renderObjectiveTree(po: PrimaryObjective, opts?: RenderObjectiveTreeOptions): string {
+  const isCompact = opts?.compact === true
+  const focusSO = opts?.focusSOId?.trim().toLowerCase()
+  const focusTO = opts?.focusTOId?.trim().toLowerCase()
+  const focusFinding = opts?.focusFindingId?.trim().toLowerCase()
+
   const lines: string[] = [
     `### Active Objective Tree (Methodology Enforced)`,
     `**Primary Objective [${po.status.toUpperCase()}]:** ${po.title}`,
@@ -1933,33 +1949,51 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       const statusBadge = `[${so.status.toUpperCase()}]`
       const delBadge = so.delegation ? ` [${so.delegation.mode}]` : ""
       lines.push(`- **${so.id}** ${statusBadge}${delBadge} ${so.title}`)
-      lines.push(`  - *Rationale:* ${so.rationale}`)
-      if (so.delegation) {
-        lines.push(`  - 🤖 *Delegation (${so.delegation.mode}):* ${so.delegation.justification}`)
+
+      const isClosedSO = so.status === "resolved" || so.status === "discarded" || so.status === "cancelled"
+      const isFocusedSO = Boolean(focusSO && so.id.toLowerCase() === focusSO)
+      const hasViolations = Boolean(so.blastRadiusViolations && so.blastRadiusViolations.length > 0)
+      const foldSO = isCompact && isClosedSO && !isFocusedSO && !hasViolations
+
+      if (!foldSO) {
+        lines.push(`  - *Rationale:* ${so.rationale}`)
+        if (so.delegation) {
+          lines.push(`  - 🤖 *Delegation (${so.delegation.mode}):* ${so.delegation.justification}`)
+        }
+        if (so.blocker) {
+          lines.push(`  - ⚠️ *Blocker:* ${so.blocker}`)
+        }
+        if (so.validationProof) {
+          const proofText = isCompact && !isFocusedSO ? truncateText(so.validationProof, 240) : so.validationProof
+          lines.push(`  - ✅ *Validation Proof:* ${proofText}`)
+        }
+        if (so.blastRadiusViolations && so.blastRadiusViolations.length > 0) {
+          lines.push(`  - ⚠️ *Blast Radius Alert:* Modified files outside scope: ${so.blastRadiusViolations.join(", ")}`)
+        }
       }
-      if (so.blocker) {
-        lines.push(`  - ⚠️ *Blocker:* ${so.blocker}`)
-      }
-      if (so.validationProof) {
-        lines.push(`  - ✅ *Validation Proof:* ${so.validationProof}`)
-      }
-      if (so.blastRadiusViolations && so.blastRadiusViolations.length > 0) {
-        lines.push(`  - ⚠️ *Blast Radius Alert:* Modified files outside scope: ${so.blastRadiusViolations.join(", ")}`)
-      }
+
       // Tertiary sub-objectives render as children of their parent SO, mirroring how SOs nest under the PO.
       for (const t of so.children ?? []) {
         const tertiaryBadge = `[${t.status.toUpperCase()}]`
         const tDelBadge = t.delegation ? ` [${t.delegation.mode}]` : ""
         lines.push(`  - **${t.id}** ${tertiaryBadge}${tDelBadge} ${t.title}`)
-        lines.push(`    - *Rationale:* ${t.rationale}`)
-        if (t.delegation) {
-          lines.push(`    - 🤖 *Delegation (${t.delegation.mode}):* ${t.delegation.justification}`)
-        }
-        if (t.blocker) {
-          lines.push(`    - ⚠️ *Blocker:* ${t.blocker}`)
-        }
-        if (t.validationProof) {
-          lines.push(`    - ✅ *Validation Proof:* ${t.validationProof}`)
+
+        const isClosedTO = t.status === "resolved" || t.status === "discarded" || t.status === "cancelled"
+        const isFocusedTO = Boolean(focusTO && t.id.toLowerCase() === focusTO)
+        const foldTO = isCompact && isClosedTO && !isFocusedTO
+
+        if (!foldTO) {
+          lines.push(`    - *Rationale:* ${t.rationale}`)
+          if (t.delegation) {
+            lines.push(`    - 🤖 *Delegation (${t.delegation.mode}):* ${t.delegation.justification}`)
+          }
+          if (t.blocker) {
+            lines.push(`    - ⚠️ *Blocker:* ${t.blocker}`)
+          }
+          if (t.validationProof) {
+            const tProof = isCompact && !isFocusedTO ? truncateText(t.validationProof, 240) : t.validationProof
+            lines.push(`    - ✅ *Validation Proof:* ${tProof}`)
+          }
         }
       }
     }
@@ -1972,7 +2006,8 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       const satText = crit.satisfiedBy && crit.satisfiedBy.length > 0 ? ` [satisfiedBy: ${crit.satisfiedBy.join(", ")}]` : ""
       if (hasProof) {
         lines.push(`- **[${crit.id}]** [PROVEN] ${crit.statement}${satText}`)
-        lines.push(`  - ✅ *Proof:* ${crit.proofRef}`)
+        const proofText = isCompact ? truncateText(crit.proofRef!, 160) : crit.proofRef
+        lines.push(`  - ✅ *Proof:* ${proofText}`)
       } else {
         lines.push(`- **[${crit.id}]** [MISSING PROOF] ${crit.statement}${satText}`)
         if (crit.verifiableBy) {
@@ -1991,11 +2026,22 @@ export function renderObjectiveTree(po: PrimaryObjective): string {
       if (f.seeAlso.length > 0) refs.push(`see also ${f.seeAlso.join(", ")}`)
       if (f.lifecycle !== "NEW") refs.push(f.lifecycle)
       const fDelBadge = f.delegation ? ` [${f.delegation.mode}]` : ""
-      lines.push(`- **${f.id}** [${f.soRef}]${fDelBadge} ${f.title} — ${f.result}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
-      if (f.delegation) {
-        lines.push(`  - 🤖 *Delegation (${f.delegation.mode}):* ${f.delegation.justification}`)
+      const isFocusedFinding = Boolean(focusFinding && f.id.toLowerCase() === focusFinding)
+      const isClosedFinding = (f.status ?? "open") === "closed"
+
+      if (isCompact && !isFocusedFinding && isClosedFinding) {
+        lines.push(`- **${f.id}** [${f.soRef}]${fDelBadge} ${f.title}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
+      } else if (isCompact && !isFocusedFinding) {
+        const compactRes = truncateText(f.result, 240)
+        lines.push(`- **${f.id}** [${f.soRef}]${fDelBadge} ${f.title} — ${compactRes}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
+        lines.push(`  - *Next:* ${f.nextAction}`)
+      } else {
+        lines.push(`- **${f.id}** [${f.soRef}]${fDelBadge} ${f.title} — ${f.result}${refs.length > 0 ? ` (${refs.join(" | ")})` : ""}`)
+        if (f.delegation) {
+          lines.push(`  - 🤖 *Delegation (${f.delegation.mode}):* ${f.delegation.justification}`)
+        }
+        lines.push(`  - *Next:* ${f.nextAction}`)
       }
-      lines.push(`  - *Next:* ${f.nextAction}`)
     }
   }
 
@@ -3181,6 +3227,11 @@ function treeOf(sessionID: string): string {
   return po ? renderObjectiveTree(po) : ""
 }
 
+function compactTreeOf(sessionID: string, opts?: Omit<RenderObjectiveTreeOptions, "compact">): string {
+  const po = sessionObjectives.get(sessionID)
+  return po ? renderObjectiveTree(po, { ...opts, compact: true }) : ""
+}
+
 const PAUSED_MUTATING_ACTIONS = new Set([
   "update_primary",
   "add_secondary",
@@ -3727,13 +3778,14 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID, { focusSOId: so.id })
     const current = sessionObjectives.get(sessionID)
     const reopenNotice = current?.status === "exploring"
       ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective is EXPLORING because new/open sub-objectives exist."
       : ""
     return {
       output: { success: true, message: `Added secondary objective ${so.id}.${reopenNotice}`, tree },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -3815,6 +3867,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID, { focusSOId: id })
     const allResolvedOrDiscarded =
       current &&
       current.secondaries.length > 0 &&
@@ -3841,7 +3894,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         message: `Secondary objective ${id} successfully updated.${reopenNotice}${completionNotice}${exploringNotice ? ` ${exploringNotice.trim()}` : ""}`,
         tree,
       },
-      content: tree + exploringNotice,
+      content: compactTree + exploringNotice,
     }
   }
 
@@ -3878,11 +3931,12 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID, { focusSOId: parentId, focusTOId: added.objective.id })
     const current = sessionObjectives.get(sessionID)
     const reopenNotice = current?.status === "exploring"
       ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective and/or parent SO are in EXPLORING state because an open tertiary sub-objective was added."
       : ""
-    return { output: { success: true, message: `Added tertiary objective ${added.objective.id}.${reopenNotice}`, tree }, content: tree }
+    return { output: { success: true, message: `Added tertiary objective ${added.objective.id}.${reopenNotice}`, tree }, content: compactTree }
   }
 
   if (rawAction === "update_tertiary" || rawAction === "update_tertaries") {
@@ -3937,6 +3991,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID, { focusTOId: tertiaryId })
     const closureNudges: string[] = []
     for (const so of current?.secondaries ?? []) {
       if (!so.children || so.children.length === 0) continue
@@ -3946,7 +4001,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    return { output: { success: true, message: `Tertiary objective ${tertiaryId} successfully updated.${closureNudges.join(" ")}`, tree }, content: tree }
+    return { output: { success: true, message: `Tertiary objective ${tertiaryId} successfully updated.${closureNudges.join(" ")}`, tree }, content: compactTree }
   }
 
   if (rawAction === "add_finding") {
@@ -3986,13 +4041,14 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID, { focusFindingId: added.finding!.id, focusSOId: added.finding!.soRef })
     return {
       output: {
         success: true,
         message: `Finding ${added.finding!.id} registered${added.warning ? ` — ${added.warning}` : ""}.`,
         tree,
       },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -4023,13 +4079,14 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID, { focusFindingId: updated.finding!.id, focusSOId: updated.finding!.soRef })
     return {
       output: {
         success: true,
         message: `Finding ${updated.finding!.id} ${updated.finding!.lifecycle === "SUBSUMED" ? "subsumed" : "extended in place"}.`,
         tree,
       },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -4071,9 +4128,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID)
     return {
       output: { success: true, message: `Option ${added.option!.id} registered [${added.option!.status}].`, tree },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -4094,6 +4152,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID)
     const cancelled = (sessionObjectives.get(sessionID)?.options ?? []).filter(
       (o) => o.status === "CANCELLED" && o.id !== updated.option!.id,
     )
@@ -4107,7 +4166,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         message: `Option ${updated.option!.id} updated [${updated.option!.status}].${notice}`,
         tree,
       },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -4126,13 +4185,14 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID)
     return {
       output: {
         success: true,
         message: `Fingerprint registered: ${added.fingerprint!.key} (fix: ${added.fingerprint!.fixRef}). Future sessions can look up this blocker in one step.`,
         tree,
       },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -4189,6 +4249,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
     const currentPo = sessionObjectives.get(sessionID)
     const tree = treeOf(sessionID)
+    const compactTree = compactTreeOf(sessionID)
     const unsatisfiedCriteria = (currentPo?.dod || []).filter((c) => !c.proofRef || !c.proofRef.trim())
     const satisfied = (currentPo?.dod || []).length - unsatisfiedCriteria.length
 
@@ -4209,7 +4270,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         message,
         tree,
       },
-      content: tree,
+      content: compactTree,
     }
   }
 
@@ -4697,7 +4758,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             )
           }
           throw new Error(
-            `⚠️ [Objective Sync Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos. Con un árbol de objetivos activo, debes sincronizar continuamente tus avances reales con 'objective_manage' (transicionando SO a 'exploring' antes de iniciarla, marcándola 'resolved' con 'validationProof' al terminarla, o registrando hallazgos con 'add_finding') antes de continuar ejecutando más acciones. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
+            `⚠️ [Objective Sync Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos. Con un árbol de objetivos activo, debes sincronizar continuamente tus avances reales con 'objective_manage' (transicionando SO a 'exploring' antes de iniciarla, marcándola 'resolved' con 'validationProof' al terminarla, o registrando hallazgos con 'add_finding') antes de continuar ejecutando más acciones. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos. Nota: Las respuestas incrementales de 'objective_manage' usan vista compacta; NO invoques 'session_compact' por este aviso (compacta únicamente si recibes [CRITICAL PRE-COMPACTION ADVISORY]).`,
           )
         }
       }

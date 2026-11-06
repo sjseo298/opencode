@@ -32,7 +32,7 @@ export function render(prompt: string, tools: string[]) {
   }
   if (tools.includes("session_compact")) {
     instructions.push(
-      "- Context Compaction: You have access to the `session_compact` tool. When you reach high context usage (or receive a Pre-Compaction Advisory at 85% of context limit), or after completing a major milestone, you can invoke `session_compact` with optional `summaryNotes` to cleanly compress your conversation history into a new checkpoint and reclaim context headroom. If you don't call it, automatic compaction will still execute as an absolute safety net when the ceiling is reached.",
+      "- Context Compaction: You have access to the `session_compact` tool. STRICT RULE: Do NOT invoke `session_compact` speculatively, after routine milestones, or in reaction to `[Objective Sync Warning]` messages. Never guess your context usage—invoke `session_compact` ONLY when you receive the system's `[CRITICAL PRE-COMPACTION ADVISORY]` (at 85% of context ceiling) or when `context_budget` explicitly reports `DELEGATION_BLOCKED` (`canDelegate: false`). Premature compaction while ample context headroom remains is mechanically blocked and wastes tokens. If you don't call it, automatic compaction will still execute as an absolute safety net when the ceiling is reached.",
     )
   }
   if (tools.includes("subagent")) {

@@ -3853,6 +3853,111 @@ describe("hierarchical-objectives plugin", () => {
       expect(allowExploring.output.success).toBe(true)
       expect(allowExploring.output.tree).toContain("[EXPLORING]")
     })
+
+    test("Compact incremental tree rendering: folds already-resolved SOs and closed findings in content while keeping full output.tree and list", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = "ses-compact-tree-test"
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Verify SQL schema and EAV mappings",
+          definitionOfDone: "All SOs verified",
+          unattended: true,
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "add_secondary",
+          title: "Map EAV columns",
+          rationale: "Detailed rationale for SO-1 that should be folded once SO-1 is resolved and we move to SO-2",
+          delegation: { mode: "main", justification: "Small query executed directly in main thread" },
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "add_secondary",
+          title: "Run EXPLAIN PLAN",
+          rationale: "Verify index usage on claim query",
+          delegation: { mode: "main", justification: "Single explain plan query in main thread" },
+        },
+        { sessionID: sid },
+      )
+
+      // Move SO-1 to exploring, add a finding, close the finding, and resolve SO-1
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Small query executed directly in main thread" },
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "add_finding",
+          soRef: "SO-1",
+          title: "Verified all 29 EAV field names in LAB",
+          evidence: { type: "QUERY_RESULT", source: "SELECT FIELDNAME FROM ASPOLICYFIELD" },
+          result: "LONG_VERIFIED_EAV_MAPPING_PAYLOAD_FOR_F001_THAT_SHOULD_FOLD_WHEN_CLOSED",
+          nextAction: "Close F-001 and resolve SO-1",
+          delegation: { mode: "main", justification: "Direct query result analysis in main session" },
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "update_finding",
+          findingId: "F-001",
+          status: "closed",
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "LONG_VALIDATION_PROOF_FOR_SO1_THAT_SHOULD_FOLD_WHEN_SO2_IS_ACTIVE",
+        },
+        { sessionID: sid },
+      )
+
+      // Now transition SO-2 to exploring -> SO-1 (resolved) and F-001 (closed) should be folded in content,
+      // while output.tree and action: 'list' still contain the full unabridged details!
+      const so2Exploring = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-2",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Single explain plan query in main thread" },
+        },
+        { sessionID: sid },
+      )
+
+      expect(so2Exploring.content).toContain("- **SO-1** [RESOLVED] [main] Map EAV columns")
+      expect(so2Exploring.content).not.toContain("LONG_VALIDATION_PROOF_FOR_SO1_THAT_SHOULD_FOLD_WHEN_SO2_IS_ACTIVE")
+      expect(so2Exploring.content).toContain("- **F-001** [SO-1] [main] Verified all 29 EAV field names in LAB (CLOSED | EXTENDED)")
+      expect(so2Exploring.content).not.toContain("LONG_VERIFIED_EAV_MAPPING_PAYLOAD_FOR_F001_THAT_SHOULD_FOLD_WHEN_CLOSED")
+      expect(so2Exploring.content).toContain("- **SO-2** [EXPLORING] [main] Run EXPLAIN PLAN")
+
+      // Full tree in output.tree and action: 'list' still retains everything
+      expect(so2Exploring.output.tree).toContain("LONG_VALIDATION_PROOF_FOR_SO1_THAT_SHOULD_FOLD_WHEN_SO2_IS_ACTIVE")
+      expect(so2Exploring.output.tree).toContain("LONG_VERIFIED_EAV_MAPPING_PAYLOAD_FOR_F001_THAT_SHOULD_FOLD_WHEN_CLOSED")
+
+      const listRes = await tool.execute({ action: "list" }, { sessionID: sid })
+      expect(listRes.content).toContain("LONG_VALIDATION_PROOF_FOR_SO1_THAT_SHOULD_FOLD_WHEN_SO2_IS_ACTIVE")
+      expect(listRes.content).toContain("LONG_VERIFIED_EAV_MAPPING_PAYLOAD_FOR_F001_THAT_SHOULD_FOLD_WHEN_CLOSED")
+    })
   })
 
   async function setupPluginInstanceLocal() {
