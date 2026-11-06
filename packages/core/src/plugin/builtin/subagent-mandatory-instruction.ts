@@ -232,7 +232,79 @@ If all validations pass:
 2. Follow the output format exactly
 3. Include all requested information
 4. Match the specified detail level
-5. Respect all restrictions`
+5. Respect all restrictions
+
+## CONTEXT BUDGET & PRE-COMPACTION AWARENESS
+
+You operate within a bounded context window. As you explore, read files, or run commands, context accumulates.
+- **Normal Operation**: Complete your assigned task thoroughly within your SCOPE.
+- **Pre-Compaction Advisory**: If you receive a [CRITICAL PRE-COMPACTION ADVISORY] notification block in your instructions, you have reached 90% of your context window ceiling before automatic compaction triggers (10% or less remaining).
+- **Action Required on Advisory**:
+  1. Immediately HALT new extensive explorations, directory crawls, or tool calls.
+  2. Consolidate your current discoveries and partial results.
+  3. Emit your structured deliverable (\`OUTPUT\`) to the orchestrator before compaction occurs so that your detailed analysis is not lost.`
+
+export const SUBAGENT_PRE_COMPACTION_ADVISORY = `## ⚠️ CRITICAL PRE-COMPACTION ADVISORY (Context Limit Imminent)
+You have reached 90% or more of your context window ceiling before automatic compaction occurs (10% or less context remaining).
+To prevent the loss of intermediate discoveries, file analysis, or in-flight progress:
+1. STOP: Do not execute new broad searches, heavy read actions, or open additional files.
+2. CONSOLIDATE: Immediately organize, synthesize, and record your key findings, answers, and evidence.
+3. CONCLUDE: Produce and return your final structured deliverable (<OUTPUT>) to the parent session now.`
+
+export function estimateMessageTokens(messages?: ReadonlyArray<any>): number {
+  if (!messages || !messages.length) return 0
+  const anchor = messages.findLast((m) => m.type === "assistant" && m.tokens)
+  if (anchor && anchor.tokens) {
+    const t = anchor.tokens
+    let total = (t.input ?? 0) + (t.cache?.read ?? 0) + (t.output ?? 0)
+    const anchorIdx = messages.indexOf(anchor)
+    for (let i = anchorIdx + 1; i < messages.length; i++) {
+      const msg = messages[i]
+      if (Array.isArray(msg.content)) {
+        for (const p of msg.content) {
+          if (p.type === "text" && typeof p.text === "string") {
+            total += Math.ceil(p.text.length / 4)
+          }
+        }
+      } else if (typeof msg.text === "string") {
+        total += Math.ceil(msg.text.length / 4)
+      }
+    }
+    return total
+  }
+
+  let total = 0
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      for (const p of msg.content) {
+        if (p.type === "text" && typeof p.text === "string") {
+          total += Math.ceil(p.text.length / 4)
+        }
+      }
+    } else if (typeof msg.text === "string") {
+      total += Math.ceil(msg.text.length / 4)
+    }
+  }
+  return total
+}
+
+export function getEffectiveContextLimit(
+  model?: { providerID?: string; id?: string; limit?: { context?: number } },
+): number {
+  const g = globalThis as any
+  const dynamicStore = g.__OPENCODE_DYNAMIC_CONTEXT__
+  if (model?.providerID && model?.id) {
+    const key = `${model.providerID}/${model.id}`
+    const dynamicLimit = dynamicStore?.getLimit?.(key)
+    if (typeof dynamicLimit === "number" && Number.isFinite(dynamicLimit) && dynamicLimit > 0) {
+      return dynamicLimit
+    }
+  }
+  if (typeof model?.limit?.context === "number" && Number.isFinite(model.limit.context) && model.limit.context > 0) {
+    return model.limit.context
+  }
+  return 128_000
+}
 
 function normalizeString(input: unknown, fallback: string) {
   if (typeof input !== "string") return fallback
@@ -303,11 +375,27 @@ export const Plugin = OpenCodePlugin.define({
         }
         return
       }
-      if (event.system.some((item) => (item.text ?? "").includes("SUBAGENT EXECUTION PROTOCOL"))) return
-      if (event.system.length > 0) {
-        event.system[0] = { ...event.system[0], text: subagentProtocol + "\n\n" + event.system[0].text }
-      } else {
-        event.system.push({ type: "text", text: subagentProtocol })
+      if (!event.system.some((item) => (item.text ?? "").includes("SUBAGENT EXECUTION PROTOCOL"))) {
+        if (event.system.length > 0) {
+          event.system[0] = { ...event.system[0], text: subagentProtocol + "\n\n" + event.system[0].text }
+        } else {
+          event.system.push({ type: "text", text: subagentProtocol })
+        }
+      }
+
+      if (event.messages && Array.isArray(event.messages) && event.messages.length > 0) {
+        const session = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined)
+        const limit = getEffectiveContextLimit(session?.model)
+        const safetyBuffer = Math.min(15_000, Math.floor(limit * 0.15))
+        const ceiling = Math.max(10_000, limit - safetyBuffer)
+        const usedTokens = estimateMessageTokens(event.messages)
+        const warningThreshold = Math.floor(ceiling * 0.90)
+
+        if (usedTokens >= warningThreshold) {
+          if (!event.system.some((item) => (item.text ?? "").includes("## ⚠️ CRITICAL PRE-COMPACTION ADVISORY"))) {
+            event.system.push({ type: "text", text: SUBAGENT_PRE_COMPACTION_ADVISORY })
+          }
+        }
       }
     })
   },

@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test"
-import plugin, { buildOrchestratorGuide } from "../../../src/plugin/builtin/subagent-mandatory-instruction.js"
+import plugin, {
+  buildOrchestratorGuide,
+  estimateMessageTokens,
+  getEffectiveContextLimit,
+  SUBAGENT_PRE_COMPACTION_ADVISORY,
+} from "../../../src/plugin/builtin/subagent-mandatory-instruction.js"
 
 // Helper to create mock client
 function createMockClient(sessions: Record<string, { parentID?: string }>) {
@@ -58,12 +63,13 @@ async function createHooks(
       }
     },
     "experimental.chat.system.transform": async (
-      input: { sessionID?: string },
+      input: { sessionID?: string; messages?: any[] },
       output: { system: string[] },
     ) => {
       const event = {
         sessionID: input.sessionID,
         system: output.system.map((text) => ({ type: "text", text })),
+        messages: input.messages ?? [],
       }
       for (const h of sessionHooks["context"] ?? []) {
         await h(event)
@@ -373,6 +379,143 @@ describe("subagent-mandatory-instruction plugin", () => {
       expect(output.system[0]).toContain("Ambiguous Location")
       expect(output.system[0]).toContain("Non-existent Resources")
       expect(output.system[0]).toContain("Contradictory Instructions")
+    })
+
+    test("subagent protocol contains context budget and pre-compaction awareness", async () => {
+      const hooks = await createHooks({
+        "child": { parentID: "parent" },
+      })
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "child" }, output)
+
+      expect(output.system[0]).toContain("CONTEXT BUDGET & PRE-COMPACTION AWARENESS")
+      expect(output.system[0]).toContain("CRITICAL PRE-COMPACTION ADVISORY")
+      expect(output.system[0]).toContain("Immediately HALT new extensive explorations")
+    })
+  })
+
+  describe("pre-compaction advisory for subagents", () => {
+    test("estimateMessageTokens calculates tokens accurately from measured tokens and text", () => {
+      const messages = [
+        {
+          type: "assistant",
+          tokens: { input: 10_000, cache: { read: 5_000 }, output: 1_000 },
+        },
+        {
+          type: "user",
+          content: [{ type: "text", text: "A".repeat(400) }], // ~100 tokens
+        },
+        {
+          type: "assistant",
+          content: [{ type: "text", text: "B".repeat(200) }], // ~50 tokens
+        },
+      ]
+      const total = estimateMessageTokens(messages)
+      expect(total).toBe(16_000 + 100 + 50)
+    })
+
+    test("getEffectiveContextLimit falls back to 128,000 or reads model limit", () => {
+      expect(getEffectiveContextLimit(undefined)).toBe(128_000)
+      expect(getEffectiveContextLimit({ limit: { context: 64_000 } })).toBe(64_000)
+
+      const g = globalThis as any
+      g.__OPENCODE_DYNAMIC_CONTEXT__ = {
+        getLimit: (key: string) => (key === "llamacpp/test-model" ? 200_000 : undefined),
+      }
+      expect(getEffectiveContextLimit({ providerID: "llamacpp", id: "test-model" })).toBe(200_000)
+      delete g.__OPENCODE_DYNAMIC_CONTEXT__
+    })
+
+    test("does NOT inject pre-compaction advisory when subagent token usage is below 90%", async () => {
+      const hooks = await createHooks({
+        "sub-1": {
+          parentID: "parent-1",
+          model: { limit: { context: 100_000 } },
+        } as any,
+      })
+
+      // ceiling = 100_000 - 15_000 = 85_000; 90% threshold = 76_500
+      const messages = [
+        {
+          type: "assistant",
+          tokens: { input: 40_000, cache: { read: 10_000 }, output: 500 },
+        },
+      ]
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "sub-1", messages }, output)
+
+      expect(output.system.length).toBe(1)
+      expect(output.system[0]).toContain("SUBAGENT EXECUTION PROTOCOL")
+      expect(output.system.some((s) => s === SUBAGENT_PRE_COMPACTION_ADVISORY)).toBe(false)
+    })
+
+    test("INJECTS pre-compaction advisory when subagent token usage reaches >= 90% of ceiling", async () => {
+      const hooks = await createHooks({
+        "sub-2": {
+          parentID: "parent-1",
+          model: { limit: { context: 100_000 } },
+        } as any,
+      })
+
+      // ceiling = 100_000 - 15_000 = 85_000; 90% threshold = 76_500
+      const messages = [
+        {
+          type: "assistant",
+          tokens: { input: 75_000, cache: { read: 5_000 }, output: 500 }, // 80,500 tokens >= 76,500
+        },
+      ]
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "sub-2", messages }, output)
+
+      expect(output.system.length).toBe(2)
+      expect(output.system[0]).toContain("SUBAGENT EXECUTION PROTOCOL")
+      expect(output.system[1]).toContain("CRITICAL PRE-COMPACTION ADVISORY")
+      expect(output.system[1]).toBe(SUBAGENT_PRE_COMPACTION_ADVISORY)
+    })
+
+    test("does NOT inject pre-compaction advisory for parent sessions even with high tokens", async () => {
+      const hooks = await createHooks({
+        "parent-session": {
+          model: { limit: { context: 100_000 } },
+        } as any,
+      })
+
+      const messages = [
+        {
+          type: "assistant",
+          tokens: { input: 80_000, cache: { read: 5_000 }, output: 500 },
+        },
+      ]
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "parent-session", messages }, output)
+
+      expect(output.system.some((s) => s === SUBAGENT_PRE_COMPACTION_ADVISORY)).toBe(false)
+    })
+
+    test("does NOT duplicate pre-compaction advisory if already present in system", async () => {
+      const hooks = await createHooks({
+        "sub-3": {
+          parentID: "parent-1",
+          model: { limit: { context: 100_000 } },
+        } as any,
+      })
+
+      const messages = [
+        {
+          type: "assistant",
+          tokens: { input: 75_000, cache: { read: 5_000 }, output: 500 },
+        },
+      ]
+
+      const output = { system: [SUBAGENT_PRE_COMPACTION_ADVISORY] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "sub-3", messages }, output)
+
+      const advisories = output.system.filter((s) => s.includes("CRITICAL PRE-COMPACTION ADVISORY"))
+      expect(advisories.length).toBe(1)
     })
   })
 })
