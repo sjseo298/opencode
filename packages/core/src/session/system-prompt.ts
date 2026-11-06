@@ -30,6 +30,11 @@ export function render(prompt: string, tools: string[]) {
       "- Iterative Objective Sync: work strictly one Secondary Objective at a time; move it to 'exploring' before beginning implementation, and resolve it with validation proof before moving to the next. The tool mechanically rejects pending-to-resolved jumps (anti-batch resolution) and rejects having multiple simultaneous exploring SOs (single active target invariant). These checks run inside tool execution without injecting changing state into event.system, preserving llama.cpp prefix caching across turns.",
     )
   }
+  if (tools.includes("session_compact")) {
+    instructions.push(
+      "- Context Compaction: You have access to the `session_compact` tool. When you reach high context usage (or receive a Pre-Compaction Advisory at 85% of context limit), or after completing a major milestone, you can invoke `session_compact` with optional `summaryNotes` to cleanly compress your conversation history into a new checkpoint and reclaim context headroom. If you don't call it, automatic compaction will still execute as an absolute safety net when the ceiling is reached.",
+    )
+  }
   if (tools.includes("subagent")) {
     const g = globalThis as any
     const rawSlots = g.__OPENCODE_DYNAMIC_CONTEXT__?.getTotalSlots?.() ?? g.__OPENCODE_TOTAL_SLOTS__

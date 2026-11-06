@@ -4,6 +4,7 @@ import plugin, {
   estimateMessageTokens,
   getEffectiveContextLimit,
   SUBAGENT_PRE_COMPACTION_ADVISORY,
+  PRIMARY_PRE_COMPACTION_ADVISORY,
 } from "../../../src/plugin/builtin/subagent-mandatory-instruction.js"
 
 // Helper to create mock client
@@ -476,7 +477,7 @@ describe("subagent-mandatory-instruction plugin", () => {
       expect(output.system[1]).toBe(SUBAGENT_PRE_COMPACTION_ADVISORY)
     })
 
-    test("does NOT inject pre-compaction advisory for parent sessions even with high tokens", async () => {
+    test("INJECTS primary pre-compaction advisory for parent sessions when tokens reach >= 85% of ceiling", async () => {
       const hooks = await createHooks({
         "parent-session": {
           model: { limit: { context: 100_000 } },
@@ -494,6 +495,28 @@ describe("subagent-mandatory-instruction plugin", () => {
       await hooks["experimental.chat.system.transform"]({ sessionID: "parent-session", messages }, output)
 
       expect(output.system.some((s) => s === SUBAGENT_PRE_COMPACTION_ADVISORY)).toBe(false)
+      expect(output.system.some((s) => s === PRIMARY_PRE_COMPACTION_ADVISORY)).toBe(true)
+      expect(output.system[0]).toContain("session_compact")
+    })
+
+    test("does NOT inject primary pre-compaction advisory when parent token usage is below 85%", async () => {
+      const hooks = await createHooks({
+        "parent-session": {
+          model: { limit: { context: 100_000 } },
+        } as any,
+      })
+
+      const messages = [
+        {
+          type: "assistant",
+          tokens: { input: 50_000, cache: { read: 5_000 }, output: 500 },
+        },
+      ]
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: "parent-session", messages }, output)
+
+      expect(output.system.some((s) => s === PRIMARY_PRE_COMPACTION_ADVISORY)).toBe(false)
     })
 
     test("does NOT duplicate pre-compaction advisory if already present in system", async () => {

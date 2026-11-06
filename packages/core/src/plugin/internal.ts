@@ -92,6 +92,7 @@ import { ShellTool } from "../tool/plugin/shell.js"
 import { SkillTool } from "../tool/plugin/skill.js"
 import { SubagentTool } from "../tool/plugin/subagent.js"
 import { ContextBudgetTool } from "../tool/plugin/context-budget.js"
+import { SessionCompactTool } from "../tool/plugin/session-compact.js"
 import { TodoTool } from "../tool/plugin/todo.js"
 import { Tool } from "../tool.js"
 import { ToolOutput } from "../tool-output.js"
@@ -290,6 +291,7 @@ const pre = [
   SkillTool.Plugin,
   SubagentTool.Plugin,
   ContextBudgetTool.Plugin,
+  SessionCompactTool.Plugin,
   TodoTool.Plugin,
   WebFetchTool.Plugin,
   WebSearchTool.Plugin,

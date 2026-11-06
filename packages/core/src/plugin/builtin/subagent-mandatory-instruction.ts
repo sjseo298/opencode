@@ -251,6 +251,14 @@ To prevent the loss of intermediate discoveries, file analysis, or in-flight pro
 2. CONSOLIDATE: Immediately organize, synthesize, and record your key findings, answers, and evidence.
 3. CONCLUDE: Produce and return your final structured deliverable (<OUTPUT>) to the parent session now.`
 
+export const PRIMARY_PRE_COMPACTION_ADVISORY = `## ⚠️ CRITICAL PRE-COMPACTION ADVISORY (Context Limit Imminent)
+You have reached 85% or more of your available context window ceiling before automatic compaction occurs (15% or less context remaining).
+To preserve fine-grained details, avoid mid-task disruption, and maintain complete control over what is summarized:
+1. HALT NEW DISCOVERY: Do not open large new files, run expansive codebase searches, or start deep secondary investigations.
+2. CONSOLIDATE STATE: Finish open file edits cleanly, commit any verified changes, and update your active objectives via \`objective_manage\`.
+3. VOLUNTARY COMPACTION: Invoke the \`session_compact\` tool, supplying \`summaryNotes\` with your current state, key decisions, and immediate next move so they are explicitly preserved in the next checkpoint.
+4. SAFETY FALLBACK: If you do not invoke \`session_compact\`, automatic compaction will trigger automatically as a safety net when the context ceiling is reached.`
+
 export function estimateMessageTokens(messages?: ReadonlyArray<any>): number {
   if (!messages || !messages.length) return 0
   const anchor = messages.findLast((m) => m.type === "assistant" && m.tokens)
@@ -359,11 +367,7 @@ export const Plugin = OpenCodePlugin.define({
           modelId.includes("esca") ||
           modelId.includes("mlx")
 
-        if (isMlxOrEsca) {
-          return
-        }
-
-        if (!customOrchestratorGuide && (event as any).tools?.subagent?.description) {
+        if (!isMlxOrEsca && !customOrchestratorGuide && (event as any).tools?.subagent?.description) {
           const desc: string = (event as any).tools.subagent.description
           const markerIdx = desc.indexOf("## Subagent Delegation & Concurrency Policy:")
           const guide = buildOrchestratorGuide()
@@ -371,6 +375,21 @@ export const Plugin = OpenCodePlugin.define({
             ;(event as any).tools.subagent.description = desc.slice(0, markerIdx).trimEnd() + "\n\n" + guide
           } else if (!desc.includes("## Structured Prompt Format")) {
             ;(event as any).tools.subagent.description = [desc, guide].join("\n\n")
+          }
+        }
+
+        if (event.messages && Array.isArray(event.messages) && event.messages.length > 0) {
+          const session = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined)
+          const limit = getEffectiveContextLimit(session?.model)
+          const safetyBuffer = Math.min(15_000, Math.floor(limit * 0.15))
+          const ceiling = Math.max(10_000, limit - safetyBuffer)
+          const usedTokens = estimateMessageTokens(event.messages)
+          const warningThreshold = Math.floor(ceiling * 0.85)
+
+          if (usedTokens >= warningThreshold) {
+            if (!event.system.some((item) => (item.text ?? "").includes("## ⚠️ CRITICAL PRE-COMPACTION ADVISORY"))) {
+              event.system.push({ type: "text", text: PRIMARY_PRE_COMPACTION_ADVISORY })
+            }
           }
         }
         return
