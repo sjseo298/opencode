@@ -2,6 +2,7 @@ export * as ConfigCompaction from "./compaction.js"
 
 import { Schema } from "effect"
 import { NonNegativeInt, optional } from "../schema.js"
+import { ConfigModel } from "./model.js"
 
 export class Keep extends Schema.Class<Keep>("Config.Compaction.Keep")({
   tokens: NonNegativeInt.pipe(optional),
@@ -15,6 +16,10 @@ export type Percent = typeof Percent.Type
 
 export class Info extends Schema.Class<Info>("Config.Compaction")({
   auto: Schema.Boolean.pipe(optional),
+  model: ConfigModel.Selection.pipe(optional).annotate({
+    description:
+      "Model to use for conversation compaction. When omitted, the session's active model performs compaction.",
+  }),
   keep: Keep.pipe(optional),
   buffer: Schema.Union([Percent, NonNegativeInt]).pipe(optional).annotate({
     description:

@@ -362,6 +362,15 @@ function normalizeCompaction(
     )
     if (value !== undefined) result.auto = value
   }
+  if (own(input.compaction, "model")) {
+    const value = decodeValue(
+      ConfigModel.Selection,
+      input.compaction.model,
+      ["compaction", "model"],
+      diagnostics,
+    )
+    if (value !== undefined) result.model = { ...value, providerID: ConfigMigrateV1.providerID(value.providerID) }
+  }
   const legacyTokens = own(input.compaction, "preserve_recent_tokens")
     ? decodeEncoded(
         ConfigCompaction.Keep.fields.tokens,

@@ -44,6 +44,8 @@ import { UnifiedKV } from "./unified-kv.js"
 
 export type Settings = {
   auto: boolean
+  /** Dedicated model for compaction requests. When unset, uses the session's active model (or compaction agent model). */
+  model?: Model.Ref
   /** Room kept free below the model's limits before compacting: a share such as "20%", or tokens. Unset keeps 15%, and at least 16k, free. */
   buffer?: number | string
   /** Tokens of recent conversation kept verbatim beside the summary. */
@@ -285,9 +287,16 @@ export const layer = Layer.effect(
       buffer: Settings["buffer"],
       native: boolean,
       otherTokens = 0,
+      configuredModel?: Model.Ref,
     ) {
-      const agent = native ? undefined : yield* agents.get(Agent.ID.make("compaction"))
+      const configured =
+        configuredModel &&
+        (yield* models
+          .resolve({ ...context.session, model: configuredModel }, catalog.available)
+          .pipe(Effect.orElseSucceed(() => undefined)))
+      const agent = native || configured ? undefined : yield* agents.get(Agent.ID.make("compaction"))
       const model =
+        configured ??
         (agent?.model &&
           (yield* models
             .resolve({ ...context.session, model: agent.model }, catalog.available)
@@ -316,8 +325,14 @@ export const layer = Layer.effect(
         return { status: "skipped" }
       const held = precomputed.get(context.session.id)
       precomputed.delete(context.session.id)
-      const native = context.model.compaction?.type === "native"
-      const model = yield* selectModel(context, settings.buffer, native, otherTokens)
+      const model = yield* selectModel(
+        context,
+        settings.buffer,
+        !settings.model && context.model.compaction?.type === "native",
+        otherTokens,
+        settings.model,
+      )
+      const native = model.context === context && context.model.compaction?.type === "native"
       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
       const budget =
         trigger.reason === "overflow"
@@ -396,7 +411,7 @@ export const layer = Layer.effect(
       const age = (yield* Clock.currentTimeMillis) - DateTime.toEpochMillis(anchor.time.created)
       if (age > cacheLifetime(context.model.cache?.ttl) - CACHE_MARGIN) return
 
-      const model = yield* selectModel(context, settings.buffer, false)
+      const model = yield* selectModel(context, settings.buffer, false, 0, settings.model)
       const usage: SessionUsage.Recorded[] = []
       const fiber = yield* summarize({ reason: "auto", context: model.context }, model.cap, settings.keep, {
         messages: context.messages.slice(0, anchorIndex),

@@ -1,5 +1,8 @@
 import { createMemo, createSignal } from "solid-js"
 import { useConfig, useNewDesigns } from "../config"
+import { useClient } from "../context/client"
+import { useData } from "../context/data"
+import { useLocation } from "../context/location"
 import { useThemes } from "../context/theme"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { DialogSelect, DialogSelectChoice } from "../ui/dialog-select"
@@ -160,6 +163,19 @@ export const settings: Setting[] = [
     values: ["prompt", "autoaccept"],
     labels: ["prompt", "auto accept"],
     keywords: ["approve", "accept", "permission requests"],
+  },
+  {
+    title: "Compaction model",
+    category: "Session",
+    path: ["compaction", "model"],
+    description: "Model used for conversation compaction; defaults to the active session model",
+    default: "active",
+    format: (value) => (!value || value === "active" ? "active model (default)" : String(value)),
+    keywords: ["compact", "summary", "llm", "compaction model"],
+    open: (dialog) =>
+      dialog.replace(() => (
+        <DialogCompactionModel onClose={() => dialog.replace(() => <DialogConfig current="compaction.model" />)} />
+      )),
   },
   {
     title: "Mode",
@@ -391,6 +407,9 @@ export function DialogConfig(props: { current?: string }) {
   const dialog = useDialog()
   const toast = useToast()
   const themes = useThemes()
+  const data = useData()
+  const location = useLocation()
+  const client = useClient()
   const current = Math.max(
     0,
     settings.findIndex((setting) => settingID(setting) === props.current),
@@ -398,18 +417,41 @@ export function DialogConfig(props: { current?: string }) {
   const [selected, setSelected] = createSignal(current)
   const [saving, setSaving] = createSignal(false)
 
+  const serverCompactionModel = createMemo(() => {
+    const entries = data.location.config.list(location.ref) ?? []
+    return entries
+      .flatMap((entry) => {
+        if (entry.type !== "document" || !entry.info.compaction?.model) return []
+        const m = entry.info.compaction.model
+        return typeof m === "string"
+          ? [m]
+          : [`${m.providerID}/${m.model}${m.variant ? `#${m.variant}` : ""}`]
+      })
+      .at(-1)
+  })
+
+  const availableModels = createMemo(() =>
+    (data.location.model.list(location.ref) ?? [])
+      .map((item) => `${item.providerID}/${item.id}`)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
+  )
+
   const value = (setting: Setting) => {
     const current = setting.path.reduce<unknown>((result, key) => {
       if (!result || typeof result !== "object") return undefined
       return (result as Record<string, unknown>)[key]
     }, config.data)
     if (setting.path.join(".") === "theme.name") return current ?? themes.selected
+    if (setting.path.join(".") === "compaction.model") return serverCompactionModel() ?? current ?? setting.default
     return current ?? setting.default
   }
-  const values = (setting: Setting) =>
-    setting.path.join(".") === "theme.name"
-      ? Object.keys(themes.all()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
-      : setting.values
+  const values = (setting: Setting) => {
+    const id = setting.path.join(".")
+    if (id === "theme.name")
+      return Object.keys(themes.all()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+    if (id === "compaction.model") return ["active", ...availableModels()]
+    return setting.values
+  }
   const display = (setting: Setting) => {
     const current = value(setting)
     if (setting.format) return setting.format(current)
@@ -442,14 +484,23 @@ export function DialogConfig(props: { current?: string }) {
       : Math.min(setting.max!, Math.max(setting.min!, Number(current) + direction * setting.step!))
     if (next === current) return
     setSaving(true)
-    await config
-      .update((draft) => {
+    const isCompactionModel = setting.path.join(".") === "compaction.model"
+    await Promise.all([
+      config.update((draft) => {
         const parent = setting.path.slice(0, -1).reduce<Record<string, unknown>>((result, key) => {
           if (!result[key] || typeof result[key] !== "object") result[key] = {}
           return result[key] as Record<string, unknown>
         }, draft)
         parent[setting.path.at(-1)!] = next
-      })
+      }),
+      ...(isCompactionModel
+        ? [
+            client.api.experimental.config.update({
+              compaction: { model: next === "active" ? null : String(next) },
+            }),
+          ]
+        : []),
+    ])
       .catch(toast.error)
       .finally(() => setSaving(false))
   }
@@ -468,8 +519,9 @@ export function DialogConfig(props: { current?: string }) {
       filterThreshold={0.7}
       onMove={(option) => setSelected(option.value)}
       onSelect={(option) => {
-        const open = settings[option.value].open
-        if (newDesigns() && open) return open(dialog)
+        const setting = settings[option.value]
+        const open = setting.open
+        if ((newDesigns() || setting.path.join(".") === "compaction.model") && open) return open(dialog)
         void change(1, option.value)
       }}
       footerHints={newDesigns() ? [] : [{ title: "change", label: "←/→" }]}
@@ -487,6 +539,83 @@ export function DialogConfig(props: { current?: string }) {
           run: () => void change(1),
         },
       ]}
+    />
+  )
+}
+
+function DialogCompactionModel(props: { onClose?: () => void }) {
+  const config = useConfig()
+  const data = useData()
+  const location = useLocation()
+  const client = useClient()
+  const dialog = useDialog()
+  const toast = useToast()
+
+  const currentModel = createMemo(() => {
+    const entries = data.location.config.list(location.ref) ?? []
+    const fromServer = entries
+      .flatMap((entry) => {
+        if (entry.type !== "document" || !entry.info.compaction?.model) return []
+        const m = entry.info.compaction.model
+        return typeof m === "string"
+          ? [m]
+          : [`${m.providerID}/${m.model}${m.variant ? `#${m.variant}` : ""}`]
+      })
+      .at(-1)
+    return fromServer ?? config.data.compaction?.model ?? "active"
+  })
+
+  const options = createMemo(() => {
+    const providers = new Map((data.location.provider.list(location.ref) ?? []).map((item) => [item.id, item]))
+    const models = (data.location.model.list(location.ref) ?? [])
+      .map((model) => {
+        const key = `${model.providerID}/${model.id}`
+        return {
+          title: model.name || model.id,
+          category: providers.get(model.providerID)?.name ?? model.providerID,
+          footer: key,
+          searchText: `${model.providerID} ${model.id} ${model.name}`,
+          value: key,
+        }
+      })
+      .sort((a, b) => a.value.localeCompare(b.value, undefined, { sensitivity: "base" }))
+    return [
+      {
+        title: "Active model (default)",
+        category: "Default",
+        footer: "Uses the session's active model",
+        searchText: "active default current model",
+        value: "active",
+      },
+      ...models,
+    ]
+  })
+
+  return (
+    <DialogSelect
+      title="Compaction model"
+      searchInTitle
+      titlePlaceholder="Search models"
+      options={options()}
+      current={currentModel()}
+      onCancel={props.onClose}
+      onSelect={(opt) => {
+        const next = opt.value
+        void Promise.all([
+          config.update((draft) => {
+            if (!draft.compaction || typeof draft.compaction !== "object") draft.compaction = {}
+            draft.compaction.model = next
+          }),
+          client.api.experimental.config.update({
+            compaction: { model: next === "active" ? null : next },
+          }),
+        ])
+          .catch(toast.error)
+          .finally(() => {
+            if (props.onClose) return props.onClose()
+            dialog.clear()
+          })
+      }}
     />
   )
 }

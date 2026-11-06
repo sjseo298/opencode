@@ -144,6 +144,71 @@ export function createServerShellController(server: Accessor<ServerConnection.An
   }
 }
 
+export type CompactionModelOption = { id: string; name: string }
+
+export function createServerCompactionModelController(server: Accessor<ServerConnection.Any>) {
+  const language = useLanguage()
+
+  const setting = createOptimisticSetting({
+    source: useServerCtx(server),
+    initial: "",
+    initialMeta: Array.of<CompactionModelOption>(),
+    load: async (context) => {
+      const [entries, models] = await Promise.all([
+        context.sdk.api.config.get().catch(() => []),
+        context.sdk.api.model
+          .list()
+          .then((res) => res.data)
+          .catch(() => []),
+      ])
+
+      const boundary = entries.findIndex((entry) => entry.type === "directory")
+      const global = boundary === -1 ? entries : entries.slice(0, boundary)
+
+      const options = models
+        .map((m) => ({
+          id: `${m.providerID}/${m.id}`,
+          name: `${m.providerID}/${m.name || m.id}`,
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id, undefined, { sensitivity: "base" }))
+
+      const current =
+        global
+          .flatMap((entry) => {
+            if (entry.type !== "document" || !entry.info.compaction?.model) return []
+            const m = entry.info.compaction.model
+            return typeof m === "string"
+              ? [m]
+              : [`${m.providerID}/${m.model}${m.variant ? `#${m.variant}` : ""}`]
+          })
+          .at(-1) ?? ""
+
+      return {
+        meta: options,
+        value: current,
+      }
+    },
+    write: async (value, context) => {
+      await context.sdk.api.experimental.config.update({ compaction: { model: value || null } })
+    },
+    onError: (failure) =>
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description:
+          failure.kind === "timeout"
+            ? language.t("home.sessions.load.timeout")
+            : failure.message || language.t("common.requestFailed"),
+      }),
+  })
+
+  return {
+    models: setting.meta,
+    current: setting.value,
+    select: setting.select,
+  }
+}
+
 export function createAppearanceSettingsController() {
   const settings = useSettings()
   const platform = usePlatform()
@@ -265,6 +330,8 @@ export function createSoundSettingsController() {
 }
 
 export type ShellSettingsController = ReturnType<typeof createServerShellController>
+
+export type CompactionModelSettingsController = ReturnType<typeof createServerCompactionModelController>
 
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 

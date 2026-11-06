@@ -4,6 +4,7 @@ import { define } from "@opencode/plugin/effect/plugin"
 import { Effect } from "effect"
 import { Config } from "../../config.js"
 import { Flag } from "../../flag.js"
+import { Model } from "../../model.js"
 import { SessionCompaction } from "../../session/compaction.js"
 import { ConfigEntryObserver } from "./entry-observer.js"
 
@@ -15,11 +16,22 @@ export const Plugin = define({
     const flags = yield* Flag.resolver
     const loaded = yield* ConfigEntryObserver.observe(config, ctx.event, compaction.reload())
     yield* compaction.transform((editor) => {
-      editor.configure({ precompute: flags(loaded.entries).background_compaction.enabled })
+      editor.configure({ model: undefined, precompute: flags(loaded.entries).background_compaction.enabled })
       for (const entry of loaded.entries) {
         if (entry.type !== "document" || !entry.info.compaction) continue
         editor.configure({
           ...(entry.info.compaction.auto === undefined ? {} : { auto: entry.info.compaction.auto }),
+          ...(entry.info.compaction.model === undefined
+            ? {}
+            : {
+                model: Model.Ref.make({
+                  id: entry.info.compaction.model.model,
+                  providerID: entry.info.compaction.model.providerID,
+                  ...(entry.info.compaction.model.variant === undefined
+                    ? {}
+                    : { variant: entry.info.compaction.model.variant }),
+                }),
+              }),
           ...(entry.info.compaction.buffer === undefined ? {} : { buffer: entry.info.compaction.buffer }),
           ...(entry.info.compaction.keep?.tokens === undefined ? {} : { keep: entry.info.compaction.keep.tokens }),
           ...(entry.info.compaction.precompute === undefined ? {} : { precompute: entry.info.compaction.precompute }),

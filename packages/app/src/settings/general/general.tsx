@@ -17,7 +17,11 @@ import { formatKeybind } from "@/shell/commands/command"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
-import { createOptimisticSetting, type ShellSettingsController } from "./controllers"
+import {
+  createOptimisticSetting,
+  type CompactionModelSettingsController,
+  type ShellSettingsController,
+} from "./controllers"
 import { InterfaceModeSetting } from "./interface-mode"
 import "@/settings/settings.css"
 
@@ -102,6 +106,44 @@ export const ShellSetting: Component<{
 
           return `${option.name} (${language.t("settings.general.row.shell.terminalOnly")})`
         }}
+        onSelect={(option) => option && props.controller.select(option.value)}
+      />
+    </SettingsRow>
+  )
+}
+
+export const CompactionModelSetting: Component<{
+  controller: CompactionModelSettingsController
+  action?: string
+}> = (props) => {
+  const options = createMemo(() => {
+    const current = props.controller.current()
+
+    const base = [
+      { id: "active", value: "", name: "Active model (default)" },
+      ...props.controller.models().map((m) => ({ id: m.id, value: m.id, name: m.name })),
+    ]
+
+    if (current && !base.some((opt) => opt.value === current)) {
+      return [...base, { id: current, value: current, name: current }]
+    }
+
+    return base
+  })
+
+  return (
+    <SettingsRow
+      title="Compaction model"
+      description="LLM used for conversation compaction; returns to the session's active model once compaction completes."
+    >
+      <Select
+        data-action={props.action ?? "settings-compaction-model"}
+        options={options()}
+        current={options().find((option) => option.value === props.controller.current()) ?? options()[0]}
+        placement="bottom-end"
+        gutter={6}
+        value={(option) => option.id}
+        label={(option) => option.name}
         onSelect={(option) => option && props.controller.select(option.value)}
       />
     </SettingsRow>

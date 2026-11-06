@@ -247,6 +247,13 @@ export const Info = Schema.Struct({
       }),
     }),
   ).annotate({ description: "Debugging settings" }),
+  compaction: Schema.optional(
+    Schema.Struct({
+      model: Schema.optional(Schema.String).annotate({
+        description: "Model to use for conversation compaction; 'active' uses the session's active model",
+      }),
+    }),
+  ).annotate({ description: "Conversation compaction settings" }),
   experimental: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)).annotate({
     description: "Experimental features that may change or be removed at any time",
   }),

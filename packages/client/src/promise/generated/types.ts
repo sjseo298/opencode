@@ -2474,6 +2474,7 @@ export type ConfigEntry =
         }
         compaction?: {
           auto?: boolean
+          model?: string | { providerID: string; model: string; variant?: string }
           keep?: { tokens?: number }
           buffer?: ConfigCompactionPercent | number
           precompute?: boolean
@@ -4858,7 +4859,10 @@ export type ConfigGetOutput = Array<ConfigEntry>
 
 export type ConfigShellsOutput = Array<ConfigShellOption>
 
-export type ExperimentalConfigUpdateInput = { readonly shell: string | null }
+export type ExperimentalConfigUpdateInput = {
+  readonly shell?: string | null | undefined
+  readonly compaction?: { readonly model?: string | null } | undefined
+}
 
 export type ExperimentalConfigUpdateOutput = void
 

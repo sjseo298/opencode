@@ -108,6 +108,20 @@ const resolved = SessionRunnerModel.resolved(model, {
   cost,
   limit: { context: 200_000, output: 32_000 },
 })
+const dedicatedCompactionModel = LanguageModel.make({
+  id: "dedicated-compactor",
+  provider: "test",
+  route: OpenAIChat.route,
+})
+const dedicatedResolved = SessionRunnerModel.resolved(dedicatedCompactionModel, {
+  capabilities: { tools: true, input: ["text"], output: ["text"] },
+  cost,
+  limit: { context: 128_000, output: 16_000 },
+})
+const runnerModelLayer = Layer.succeed(SessionRunnerModel.Service)({
+  resolve: (session) =>
+    session.model?.id === "dedicated-compactor" ? Effect.succeed(dedicatedResolved) : Effect.succeed(resolved),
+})
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -122,6 +136,7 @@ const it = testEffect(
     [
       Bus.node.replace(Bus.configured({ persist: true })),
       llmClient.replace(client),
+      SessionRunnerModel.node.replace(runnerModelLayer),
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
     ],
   ),
@@ -1754,5 +1769,45 @@ it.effect("a background summary waits for a response whose prompt is still cache
     expect(yield* summarizedAfterBreak("ses_precompute_cold")).toContain("Third question")
     // A model that keeps its cache for an hour summarizes the older response right away.
     expect(yield* summarizedAfterBreak("ses_precompute_hour", "1h")).not.toContain("Third question")
+  }),
+)
+
+it.effect("uses configured compaction model only for compaction and keeps active session model unchanged", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    const store = yield* SessionStore.Service
+
+    const dedicatedModelID = Model.ID.make("dedicated-compactor")
+    const providerID = Provider.ID.make("test")
+    const sessionID = Session.ID.make("ses_dedicated_compaction_model")
+    const session = yield* insertSession(sessionID)
+    const activeRef = Model.Ref.make({ providerID, id: Model.ID.make("summary-model") })
+    const configuredRef = Model.Ref.make({ providerID, id: dedicatedModelID })
+
+    yield* compaction.transform((editor) => editor.configure({ model: configuredRef }))
+    try {
+      const messages = [textUser("Summarize with the dedicated compaction model.")]
+      const currentContext = loaded({ ...session, model: activeRef }, messages)
+      const outcome = yield* compaction.compact({
+        reason: "manual",
+        context: currentContext,
+        inputID: SessionMessage.ID.create(),
+      })
+      expect(outcome).toEqual({ status: "completed" })
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.model.id).toBe(dedicatedCompactionModel.id)
+
+      // Verify the compaction message recorded the compaction model while the session's active model remains untouched
+      const storedMessages = yield* store.context(sessionID)
+      expect(storedMessages[0]).toMatchObject({
+        type: "compaction",
+        status: "completed",
+        model: { providerID: "test", id: "dedicated-compactor" },
+      })
+      expect(currentContext.session.model).toEqual(activeRef)
+    } finally {
+      yield* compaction.transform((editor) => editor.configure({ model: undefined }))
+    }
   }),
 )
