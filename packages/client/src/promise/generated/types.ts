@@ -2472,7 +2472,13 @@ export type ConfigEntry =
                 }
           }
         }
-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: ConfigCompactionPercent | number }
+        compaction?: {
+          auto?: boolean
+          keep?: { tokens?: number }
+          buffer?: ConfigCompactionPercent | number
+          precompute?: boolean
+          unified_kv?: boolean
+        }
         skills?: Array<string>
         commands?: {
           [x: string]: {

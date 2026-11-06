@@ -48,6 +48,52 @@ export const isUnifiedKv = (settings?: Partial<Settings>): boolean => {
 }
 
 /**
+ * Known local inference providers that run on local hardware with shared / constrained memory.
+ * Running parallel background summarization on these providers causes KV cache duplication
+ * and server crashes / slot thrashing.
+ */
+export const LOCAL_PROVIDERS = new Set([
+  "llamacpp",
+  "llama.cpp",
+  "mlx",
+  "esca",
+  "lmstudio",
+  "ollama",
+  "splash",
+  "local",
+  "vllm",
+])
+
+/**
+ * Checks whether background compaction (precompute) should be skipped.
+ * Under unified KV mode or local LLM backends, launching a background summary while the active
+ * turn is running in parallel sends another entire transcript to the server, exceeding the unified
+ * KV buffer and purging active slots or throwing HTTP 500 context overflow errors.
+ */
+export const shouldSkipPrecompute = (
+  settings: Partial<Settings> | undefined,
+  context: { model: { ref: { providerID: string } } },
+): boolean => {
+  const provider = (context.model.ref.providerID ?? "").toLowerCase()
+
+  // In unit tests with mock provider "test", allow precompute unless explicitly testing skip
+  if (provider === "test") {
+    if (process.env.OPENCODE_TEST_SKIP_PRECOMPUTE === "true") {
+      return true
+    }
+    return false
+  }
+
+  // 1. All local inference backends must skip background precompute
+  if (LOCAL_PROVIDERS.has(provider)) return true
+
+  // 2. Any provider under unified KV mode must skip background precompute
+  if (isUnifiedKv(settings)) return true
+
+  return false
+}
+
+/**
  * Counts text tokens within a single SessionMessage.
  */
 const countMessageTextTokens = (msg: SessionMessage.Info): number => {

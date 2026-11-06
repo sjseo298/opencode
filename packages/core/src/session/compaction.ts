@@ -361,6 +361,8 @@ export const layer = Layer.effect(
       if (!settings.precompute || !settings.auto) return
       const context = yield* load
       if (context.model.compaction?.type === "native") return
+      // FORK: Unified KV context integration - skip precompute on local providers or unified KV
+      if (UnifiedKV.shouldSkipPrecompute(settings, context)) return
       const otherTokens = isUnifiedKv(settings) ? yield* resolveTreeOtherTokens(db, context.session) : 0
       const ceiling = calculateCeiling(context.model.limit, settings.buffer, otherTokens)
       if (!Number.isFinite(ceiling)) return
@@ -1165,6 +1167,7 @@ export const estimatePrompt = (context: SessionContext.Loaded): Estimate => {
 // Conflict resolution: Keep these exports if upstream updates compaction.ts
 export { UnifiedKV } from "./unified-kv.js"
 export const isUnifiedKv = UnifiedKV.isUnifiedKv
+export const shouldSkipPrecompute = UnifiedKV.shouldSkipPrecompute
 export const estimateSessionTokens = UnifiedKV.estimateSessionTokens
 export const resolveTreeSessionIDs = UnifiedKV.resolveTreeSessionIDs
 export const resolveTreeOtherTokens = UnifiedKV.resolveTreeOtherTokens

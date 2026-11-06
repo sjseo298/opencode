@@ -20,5 +20,9 @@ export class Info extends Schema.Class<Info>("Config.Compaction")({
     description:
       'Room kept free below the model\'s context window before automatic compaction, as a share of the window from "1%" to "99%", such as "20%" to compact at 80% full. A token count is also accepted.',
   }),
+  precompute: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Whether to summarize conversation history in the background before reaching the compaction threshold.",
+  }),
   unified_kv: Schema.Boolean.pipe(optional),
 }) {}

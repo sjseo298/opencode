@@ -1452,6 +1452,58 @@ test("isUnifiedKv defaults to true and detects config overrides and env flags", 
   delete process.env.OPENCODE_UNIFIED_KV
 })
 
+test("shouldSkipPrecompute blocks local backends and unified KV environments", () => {
+  const localProviders = ["llamacpp", "llama.cpp", "mlx", "esca", "lmstudio", "ollama", "splash", "local", "vllm"]
+  for (const provider of localProviders) {
+    expect(
+      SessionCompaction.shouldSkipPrecompute({}, { model: { ref: { providerID: provider } } }),
+    ).toBe(true)
+  }
+
+  // Remote provider with unified_kv defaults to true
+  expect(
+    SessionCompaction.shouldSkipPrecompute({}, { model: { ref: { providerID: "openai" } } }),
+  ).toBe(true)
+
+  // Remote provider with explicit unified_kv disabled
+  expect(
+    SessionCompaction.shouldSkipPrecompute({ unified_kv: false }, { model: { ref: { providerID: "openai" } } }),
+  ).toBe(false)
+
+  // Mock test provider allows precompute unless test skip env is set
+  expect(
+    SessionCompaction.shouldSkipPrecompute({}, { model: { ref: { providerID: "test" } } }),
+  ).toBe(false)
+
+  process.env.OPENCODE_TEST_SKIP_PRECOMPUTE = "true"
+  expect(
+    SessionCompaction.shouldSkipPrecompute({}, { model: { ref: { providerID: "test" } } }),
+  ).toBe(true)
+  delete process.env.OPENCODE_TEST_SKIP_PRECOMPUTE
+})
+
+it.effect("precompute skips background summarization when provider is local (e.g. llamacpp)", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) => editor.configure({ buffer: summaryBuffer, precompute: true }))
+    const session = yield* insertSession(Session.ID.make("ses_precompute_local"))
+    const history = precomputeHistory()
+    const localContext = {
+      ...loaded(session, history.near),
+      model: {
+        ...resolved,
+        ref: {
+          ...resolved.ref,
+          providerID: Provider.ID.make("llamacpp"),
+        },
+      },
+    }
+    requests = []
+    yield* compaction.precompute(Effect.succeed(localContext))
+    expect(requests).toHaveLength(0)
+  }),
+)
+
 it.effect("resolveTreeSessionIDs discovers root parent and multiple sibling subagents", () =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db

@@ -523,6 +523,10 @@ describe("ConfigNormalize", () => {
     ])
 
     expect(normalized({ compaction: { buffer: "12.5%" } }).encoded.compaction).toEqual({ buffer: "12.5%" })
+    expect(normalized({ compaction: { precompute: false, unified_kv: true } }).encoded.compaction).toEqual({
+      precompute: false,
+      unified_kv: true,
+    })
     for (const buffer of ["0%", "100%", "150%"]) {
       const result = normalized({ compaction: { buffer } })
       expect(result.encoded.compaction).toBeUndefined()
