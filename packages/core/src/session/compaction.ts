@@ -289,12 +289,15 @@ export const layer = Layer.effect(
       otherTokens = 0,
       configuredModel?: Model.Ref,
     ) {
+      // Subagents must always compact with their currently loaded model so they do not trigger model switches on shared local backends.
+      const isSubagent = context.session.parentID !== undefined || context.agent.info.mode === "subagent"
       const configured =
-        configuredModel &&
-        (yield* models
-          .resolve({ ...context.session, model: configuredModel }, catalog.available)
-          .pipe(Effect.orElseSucceed(() => undefined)))
-      const agent = native || configured ? undefined : yield* agents.get(Agent.ID.make("compaction"))
+        !isSubagent && configuredModel
+          ? yield* models
+              .resolve({ ...context.session, model: configuredModel }, catalog.available)
+              .pipe(Effect.orElseSucceed(() => undefined))
+          : undefined
+      const agent = isSubagent || native || configured ? undefined : yield* agents.get(Agent.ID.make("compaction"))
       const model =
         configured ??
         (agent?.model &&

@@ -1806,6 +1806,22 @@ it.effect("uses configured compaction model only for compaction and keeps active
         model: { providerID: "test", id: "dedicated-compactor" },
       })
       expect(currentContext.session.model).toEqual(activeRef)
+
+      // Subagents (with parentID or mode="subagent") must ignore the configured compaction model and use their loaded model
+      requests = []
+      const subagentID = Session.ID.make("ses_subagent_compaction_model")
+      const subagentSession = yield* insertSession(subagentID, { parent_id: sessionID })
+      const subagentContext = loaded({ ...subagentSession, model: activeRef }, [
+        textUser("Subagent conversation should compact with the loaded model."),
+      ])
+      const subOutcome = yield* compaction.compact({
+        reason: "manual",
+        context: subagentContext,
+        inputID: SessionMessage.ID.create(),
+      })
+      expect(subOutcome).toEqual({ status: "completed" })
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.model.id).toBe(model.id)
     } finally {
       yield* compaction.transform((editor) => editor.configure({ model: undefined }))
     }
