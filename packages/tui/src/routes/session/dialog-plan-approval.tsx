@@ -138,6 +138,7 @@ export function DialogPlanApproval(props: {
         const location = session?.location ?? data.location.default()
         const clonedTree = currentPo ? JSON.parse(JSON.stringify(currentPo)) : {}
         clonedTree.status = "exploring"
+        clonedTree.approvedByUser = true
         clonedTree.originSessionID = props.sessionID
         if (clonedTree.phase) {
           clonedTree.phase.paused = false

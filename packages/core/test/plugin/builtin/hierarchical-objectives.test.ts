@@ -285,12 +285,10 @@ describe("hierarchical-objectives plugin", () => {
         },
         { sessionID: sidBatch },
       )
-      expect(r5.output.success).toBe(true)
-      expect(r5.output.tree).toContain("First batch item")
-      expect(r5.output.tree).toContain("Second batch item")
-      expect(r5.output.tree).toContain("[EXPLORING]")
+      expect(r5.output.success).toBe(false)
+      expect(r5.output.message).toContain("The 'secondaries' array parameter has been removed from the schema")
 
-      // 6. batch add_secondaries
+      // 6. batch add_secondaries is disallowed
       const r6 = await tool.execute(
         {
           action: "add_secondaries",
@@ -301,9 +299,20 @@ describe("hierarchical-objectives plugin", () => {
         },
         { sessionID: sidBatch },
       )
-      expect(r6.output.success).toBe(true)
-      expect(r6.output.tree).toContain("Third item")
-      expect(r6.output.tree).toContain("Fourth item")
+      expect(r6.output.success).toBe(false)
+      expect(r6.output.message).toContain("The 'secondaries' array parameter has been removed from the schema")
+
+      // One-by-one setup succeeds
+      await tool.execute(
+        { action: "set_primary", title: "Batch Objective Setup", definitionOfDone: "All batch tasks completed" },
+        { sessionID: sidBatch },
+      )
+      const rOneByOne = await tool.execute(
+        { action: "add_secondary", title: "First item", rationale: "Rationale 1" },
+        { sessionID: sidBatch },
+      )
+      expect(rOneByOne.output.success).toBe(true)
+      expect(rOneByOne.output.tree).toContain("First item")
     })
 
     test("compaction hook preserves full objective snapshot", async () => {
@@ -572,22 +581,37 @@ describe("hierarchical-objectives plugin", () => {
             blocker: "",
             validationProof: null,
           },
-          {
-            id: "SO-2",
-            rationale: "Necesario para que el documento sea fiel al codigo.",
-            blocker: "",
-            validationProof: null,
-          },
-          {
-            id: "SO-3",
-            rationale: "Objetivo final: producir el entregable ARCHITECTURE.md.",
-            blocker: "",
-            validationProof: null,
-          },
         ],
       }
 
       const res = await registeredTool.execute(payload, { sessionID: sid })
+      expect(res.output.success).toBe(true)
+
+      // Test add_secondary with null validationProof, null blocker, missing title
+      const res2 = await registeredTool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-2",
+          rationale: "Necesario para que el documento sea fiel al codigo.",
+          blocker: "",
+          validationProof: null,
+        },
+        { sessionID: sid },
+      )
+      expect(res2.output.success).toBe(true)
+
+      const res3 = await registeredTool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-3",
+          rationale: "Objetivo final: producir el entregable ARCHITECTURE.md.",
+          blocker: "",
+          validationProof: null,
+        },
+        { sessionID: sid },
+      )
+      expect(res3.output.success).toBe(true)
+
       expect(res.output.success).toBe(true)
 
       const po = getObjectives(sid)
@@ -599,9 +623,11 @@ describe("hierarchical-objectives plugin", () => {
       expect(po?.secondaries[1].id).toBe("SO-2")
       expect(po?.secondaries[2].id).toBe("SO-3")
 
-      // Re-calling set_primary (retry scenario) must NOT duplicate secondaries
+      // Re-calling set_primary (retry scenario) and add_secondary must NOT duplicate secondaries
       const retryRes = await registeredTool.execute(payload, { sessionID: sid })
       expect(retryRes.output.success).toBe(true)
+      await registeredTool.execute({ action: "add_secondary", id: "SO-2", rationale: "R2 updated", blocker: "", validationProof: null }, { sessionID: sid })
+      await registeredTool.execute({ action: "add_secondary", id: "SO-3", rationale: "R3 updated", blocker: "", validationProof: null }, { sessionID: sid })
       const poAfterRetry = getObjectives(sid)
       expect(poAfterRetry?.secondaries.length).toBe(3)
       expect(poAfterRetry?.secondaries[0].id).toBe("SO-1")
@@ -1317,9 +1343,12 @@ describe("hierarchical-objectives plugin", () => {
           ],
           secondaries: [
             { id: "SO-1", title: "Implement feature", rationale: "Core logic" },
-            { id: "SO-2", title: "Write tests", rationale: "Verification" },
           ],
         },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        { action: "add_secondary", id: "SO-2", title: "Write tests", rationale: "Verification" },
         { sessionID: sid },
       )
 
@@ -2173,18 +2202,25 @@ describe("hierarchical-objectives plugin", () => {
           action: "set_primary",
           title: "Build Refactored Architecture",
           definitionOfDone: "All components pass integration tests",
-          presentPlan: true,
-          reason: "Requesting user review of initial architectural blueprint",
           secondaries: [
             { title: "Design DB schema", rationale: "Foundation for data storage" },
-            { title: "Create API endpoints", rationale: "Public interface" },
           ],
         },
         { sessionID: sid },
       )
-
       expect(res.output.success).toBe(true)
-      expect(res.output.message).toContain("presented_awaiting_confirmation")
+
+      await tool.execute(
+        { action: "add_secondary", title: "Create API endpoints", rationale: "Public interface" },
+        { sessionID: sid },
+      )
+
+      const pres = await tool.execute(
+        { action: "present_plan", reason: "Requesting user review of initial architectural blueprint" },
+        { sessionID: sid },
+      )
+      expect(pres.output.success).toBe(true)
+      expect(pres.output.message).toContain("FROZEN")
       const po = getObjectives(sid)!
       expect(po.status).toBe("presented_awaiting_confirmation")
       expect(po.secondaries.length).toBe(2)
@@ -2216,16 +2252,21 @@ describe("hierarchical-objectives plugin", () => {
           action: "set_primary",
           title: "Critical Migration",
           definitionOfDone: "Zero downtime achieved",
-          presentPlan: true,
           secondaries: [
             { title: "Task 1", rationale: "Why 1", status: "exploring" },
-            { title: "Task 2", rationale: "Why 2", status: "resolved", validationProof: "Ran ok" },
           ],
         },
         { sessionID: sid },
       )
-
       expect(res.output.success).toBe(true)
+
+      await tool.execute(
+        { action: "add_secondary", title: "Task 2", rationale: "Why 2" },
+        { sessionID: sid },
+      )
+
+      await tool.execute({ action: "present_plan" }, { sessionID: sid })
+
       const po = getObjectives(sid)!
       expect(po.status).toBe("presented_awaiting_confirmation")
       // Crucial invariant: when frozen awaiting user confirmation, subtasks CANNOT be pre-started
@@ -2419,9 +2460,12 @@ describe("hierarchical-objectives plugin", () => {
           definitionOfDone: "Both subtasks are verified",
           secondaries: [
             { title: "First task", rationale: "Initial change", delegation },
-            { title: "Second task", rationale: "Follow-up change", delegation },
           ],
         },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        { action: "add_secondary", title: "Second task", rationale: "Follow-up change", delegation },
         { sessionID: sid },
       )
 
@@ -2895,7 +2939,7 @@ describe("hierarchical-objectives plugin", () => {
       const tool = getRegisteredTool()
       const sid = uniqueSessionID("test-planned-count")
 
-      // LLM planned 5, only provided 2 (token truncation simulation)
+      // LLM planned 5, only provided 1 (token truncation simulation)
       const res = await tool.execute(
         {
           action: "set_primary",
@@ -2905,16 +2949,19 @@ describe("hierarchical-objectives plugin", () => {
           plannedSecondaryCount: 5,
           secondaries: [
             { title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Valid reason for task 1" } },
-            { title: "SO-2", rationale: "R2", delegation: { mode: "main", justification: "Valid reason for task 2" } },
           ],
         },
         { sessionID: sid },
       )
       expect(res.output.success).toBe(true)
-      expect(res.output.message).toContain("⚠️ [Protocol Warning - Incomplete Plan Admission]")
+      expect(res.output.message).toContain("⚠️ [Protocol Notice - Incremental Plan Construction]")
       expect(res.output.message).toContain("plannedSecondaryCount: 5")
-      expect(res.output.message).toContain("only 2 secondary objective(s) were received")
-      expect(res.output.message).toContain("SO-3..SO-5")
+      expect(res.output.message).toContain("5 objective(s) (SO-1..SO-5) remain to be registered")
+
+      // present_plan fails while incomplete
+      const presFail = await tool.execute({ action: "present_plan" }, { sessionID: sid })
+      expect(presFail.output.success).toBe(false)
+      expect(presFail.output.message).toContain("Cannot present plan to user")
     })
 
     test("Improvement 6: set_primary admits initial reconnaissance findings and defaults unassigned soRef to first SO", async () => {
@@ -2930,7 +2977,6 @@ describe("hierarchical-objectives plugin", () => {
           presentPlan: false,
           secondaries: [
             { title: "SO-1 Task", rationale: "First subtask", delegation: { mode: "main", justification: "Main thread execution" } },
-            { title: "SO-2 Task", rationale: "Second subtask", delegation: { mode: "main", justification: "Main thread execution" } },
           ],
           findings: [
             {
@@ -2938,13 +2984,6 @@ describe("hierarchical-objectives plugin", () => {
               result: "Discovered existing cache layer in place during reconnaissance",
               evidence: "src/cache.ts:15-25",
               nextAction: "Integrate with cache layer",
-            },
-            {
-              title: "Explicit SO-2 discovery",
-              result: "Found configuration flag in settings module",
-              soRef: "SO-2",
-              evidence: "config/flags.ts:40",
-              nextAction: "Toggle configuration flag",
             },
           ],
         },
@@ -2954,8 +2993,32 @@ describe("hierarchical-objectives plugin", () => {
       expect(res.output.success).toBe(true)
       expect(res.output.tree).toContain("**F-001** [SO-1]")
       expect(res.output.tree).toContain("Early Recon Discovery")
-      expect(res.output.tree).toContain("**F-002** [SO-2]")
-      expect(res.output.tree).toContain("Explicit SO-2 discovery")
+
+      // Add SO-2 individually
+      await tool.execute(
+        {
+          action: "add_secondary",
+          title: "SO-2 Task",
+          rationale: "Second subtask",
+          delegation: { mode: "main", justification: "Main thread execution" },
+        },
+        { sessionID: sid },
+      )
+
+      // Add second finding individually
+      const f2 = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Explicit SO-2 discovery",
+          result: "Found configuration flag in settings module",
+          soRef: "SO-2",
+          evidence: "config/flags.ts:40",
+          nextAction: "Toggle configuration flag",
+          delegation: { mode: "main", justification: "Documenting flag discovery" },
+        },
+        { sessionID: sid },
+      )
+      expect(f2.output.success).toBe(true)
 
       const treeObj = getObjectives(sid)
       expect(treeObj?.findings?.length).toBe(2)
@@ -2976,8 +3039,16 @@ describe("hierarchical-objectives plugin", () => {
           presentPlan: false,
           secondaries: [
             { title: "First SO", rationale: "Initial task", delegation: { mode: "main", justification: "Main thread execution" } },
-            { title: "Second SO", rationale: "Secondary task", delegation: { mode: "main", justification: "Main thread execution" } },
           ],
+        },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        {
+          action: "add_secondary",
+          title: "Second SO",
+          rationale: "Secondary task",
+          delegation: { mode: "main", justification: "Main thread execution" },
         },
         { sessionID: sid },
       )
@@ -3016,15 +3087,13 @@ describe("hierarchical-objectives plugin", () => {
           plannedSecondaryCount: "5" as any,
           secondaries: [
             { title: "SO-1", rationale: "R1", delegation: { mode: "main", justification: "Valid reason for task 1" } },
-            { title: "SO-2", rationale: "R2", delegation: { mode: "main", justification: "Valid reason for task 2" } },
           ],
         },
         { sessionID: sid },
       )
       expect(res.output.success).toBe(true)
-      expect(res.output.message).toContain("⚠️ [Protocol Warning - Incomplete Plan Admission]")
+      expect(res.output.message).toContain("⚠️ [Protocol Notice - Incremental Plan Construction]")
       expect(res.output.message).toContain("plannedSecondaryCount: 5")
-      expect(res.output.message).toContain("only 2 secondary objective(s) were received")
     })
 
     test("Improvement 6: normalizeDoDInput merges multiple entries with the same ID in dodCriteria", async () => {
@@ -3464,6 +3533,272 @@ describe("hierarchical-objectives plugin", () => {
       )
       expect(step8.output.success).toBe(true)
       expect(getObjectives(sid)!.status).toBe("exploring")
+    })
+
+    test("Requirement 1: Enforces one-by-one objective, tertiary, and finding additions and plannedSecondaryCount validation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("one-by-one-enforcement")
+
+      // 1. Batch secondaries in set_primary is rejected
+      const batchPrimary = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Batch Failure Test",
+          definitionOfDone: "Verify batch rejection",
+          secondaries: [
+            { title: "SO-1", rationale: "R1" },
+            { title: "SO-2", rationale: "R2" },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(batchPrimary.output.success).toBe(false)
+      expect(batchPrimary.output.message).toContain("The 'secondaries' array parameter has been removed from the schema")
+
+      // 2. Batch findings in set_primary is rejected
+      const batchFindingsPrimary = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Batch Findings Test",
+          definitionOfDone: "Verify batch rejection",
+          findings: [
+            { title: "F1", result: "result 1 long enough", evidence: "file.ts:1" },
+            { title: "F2", result: "result 2 long enough", evidence: "file.ts:2" },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(batchFindingsPrimary.output.success).toBe(false)
+      expect(batchFindingsPrimary.output.message).toContain("The 'findings' array parameter has been removed from the schema")
+
+      // 3. One-by-one setup with plannedSecondaryCount: 2
+      const validPrimary = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Valid Incremental Setup",
+          definitionOfDone: "DoD completed",
+          plannedSecondaryCount: 2,
+        },
+        { sessionID: sid },
+      )
+      expect(validPrimary.output.success).toBe(true)
+
+      // 4. Batch secondaries via add_secondary is rejected
+      const batchAddSecondary = await tool.execute(
+        {
+          action: "add_secondary",
+          secondaries: [
+            { title: "SO-1", rationale: "R1" },
+            { title: "SO-2", rationale: "R2" },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(batchAddSecondary.output.success).toBe(false)
+      expect(batchAddSecondary.output.message).toContain("The 'secondaries' array parameter has been removed from the schema")
+
+      // 5. Single item add_secondary succeeds
+      const singleSO1 = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-1",
+          title: "First task",
+          rationale: "R1",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(singleSO1.output.success).toBe(true)
+
+      // 6. Batch add_tertiary is rejected
+      const batchTertiary = await tool.execute(
+        {
+          action: "add_tertiary",
+          secondaries: [
+            { id: "SO-1", title: "TO-1", rationale: "R1" },
+            { id: "SO-1", title: "TO-2", rationale: "R2" },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(batchTertiary.output.success).toBe(false)
+      expect(batchTertiary.output.message).toContain("The 'secondaries' array parameter has been removed from the schema")
+
+      // 7. Single item add_tertiary succeeds
+      const singleTO = await tool.execute(
+        {
+          action: "add_tertiary",
+          id: "SO-1",
+          title: "TO-1",
+          rationale: "Tertiary rationale",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(singleTO.output.success).toBe(true)
+
+      // 8. Batch add_finding is rejected
+      const batchAddFinding = await tool.execute(
+        {
+          action: "add_finding",
+          findings: [
+            { title: "F1", result: "result 1 long enough", evidence: "file.ts:1" },
+            { title: "F2", result: "result 2 long enough", evidence: "file.ts:2" },
+          ],
+        },
+        { sessionID: sid },
+      )
+      expect(batchAddFinding.output.success).toBe(false)
+      expect(batchAddFinding.output.message).toContain("The 'findings' array parameter has been removed from the schema")
+
+      // 9. Single add_finding succeeds
+      const singleFinding = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Single Finding Discovery",
+          result: "Finding result observation >= 15 chars",
+          evidence: { type: "FILE_READ", source: "code.ts:1-10" },
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+          nextAction: "Continue inspection",
+        },
+        { sessionID: sid },
+      )
+      expect(singleFinding.output.success).toBe(true)
+
+      // 10. plannedSecondaryCount validation: present_plan FAILS while only 1 of 2 registered
+      const presFail = await tool.execute(
+        { action: "present_plan" },
+        { sessionID: sid },
+      )
+      expect(presFail.output.success).toBe(false)
+      expect(presFail.output.message).toContain("Cannot present plan to user")
+      expect(presFail.output.message).toContain("plannedSecondaryCount: 2")
+      expect(presFail.output.message).toContain("only 1 secondary objective(s) have been registered")
+
+      // 11. Adding the second planned secondary allows present_plan to succeed
+      const singleSO2 = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-2",
+          title: "Second task",
+          rationale: "R2",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(singleSO2.output.success).toBe(true)
+
+      const presOk = await tool.execute(
+        { action: "present_plan" },
+        { sessionID: sid },
+      )
+      expect(presOk.output.success).toBe(true)
+      expect(presOk.output.message).toContain("Plan presented. The tree is FROZEN")
+    })
+
+    test("Requirement 2: Enforces internal user plan approval guard (approvedByUser) before starting work", async () => {
+      const { getRegisteredTool, toolHooks, sessionHooks } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("plan-approval-guard")
+
+      // 1. set_primary with requirePlanApproval: true
+      const initRes = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Secure Feature Pipeline",
+          definitionOfDone: "All tasks completed and approved",
+          requirePlanApproval: true,
+          approvedByUser: true as any, // Attemping to spoof approvedByUser in input is stripped
+        },
+        { sessionID: sid },
+      )
+      expect(initRes.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.approvedByUser).toBe(false) // Spoofing was stripped!
+
+      // 2. Add SO-1 in pending
+      const addRes = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-1",
+          title: "Implement backend pipeline",
+          rationale: "Core processing engine",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(addRes.output.success).toBe(true)
+
+      // 3. Attempting to start working on SO-1 (exploring) before user approval is BLOCKED
+      const blockExploring = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(blockExploring.output.success).toBe(false)
+      expect(blockExploring.output.message).toContain("⚠️ [Protocol Guard - Plan Approval Required]")
+      expect(blockExploring.output.message).toContain("El plan de objetivos aún no ha sido aprobado por el usuario")
+
+      // 4. Attempting to add an objective directly into exploring before approval is BLOCKED
+      const blockAddExploring = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-2",
+          title: "Direct exploring attempt",
+          rationale: "R2",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(blockAddExploring.output.success).toBe(false)
+      expect(blockAddExploring.output.message).toContain("⚠️ [Protocol Guard - Plan Approval Required]")
+
+      // 5. Attempting to resolve without approval is BLOCKED
+      const blockResolve = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "exit code 0",
+        },
+        { sessionID: sid },
+      )
+      expect(blockResolve.output.success).toBe(false)
+      expect(blockResolve.output.message).toContain("⚠️ [Protocol Guard - Plan Approval Required]")
+
+      // 6. Mutating tool execution (edit/write) is BLOCKED before approval
+      const beforeHooks = toolHooks["execute.before"] ?? []
+      for (const hook of beforeHooks) {
+        expect(() =>
+          hook({ sessionID: sid, tool: "edit", input: { path: "src/index.ts" } }),
+        ).toThrow("Protocol Guard - Plan Approval Required")
+      }
+
+      // 7. User approves the plan via prompt event (simulating DialogPlanApproval)
+      const promptHooks = sessionHooks["prompt"] ?? []
+      for (const hook of promptHooks) {
+        await hook({ sessionID: sid, text: "Plan aprobado explícitamente por el usuario." })
+      }
+      expect(po.approvedByUser).toBe(true)
+
+      // 8. Now starting work on SO-1 SUCCEEDS
+      const allowExploring = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Valid justification 10ch" },
+        },
+        { sessionID: sid },
+      )
+      expect(allowExploring.output.success).toBe(true)
+      expect(allowExploring.output.tree).toContain("[EXPLORING]")
     })
   })
 
