@@ -21,6 +21,9 @@ describe("provider error classification", () => {
       "Prompt exceeds max length",
       "The input is too long for the selected model.",
       "This text request is too large for the model's configured input limit.",
+      // llama.cpp server context exceeded message
+      "Context size has been exceeded.",
+      "context size exceeded",
       // LiteLLM's own check, before it calls the model.
       "litellm.ContextWindowExceededError: litellm.BadRequestError: litellm._pre_call_checks: Context Window exceeded for given call. No models have context window large enough for this call.",
     ]

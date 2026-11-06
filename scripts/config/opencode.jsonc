@@ -1526,6 +1526,29 @@
             "output": 131072
           }
         },
+        "gguf/unsloth/Qwen3.8-27B-UD-Q6_K.gguf": {
+          "id": "gguf/unsloth/Qwen3.8-27B-UD-Q6_K.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3.8-27B-UD-Q6_K.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "reasoning": false,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 131072,
+            "output": 65536
+          }
+        },
         "gguf/unsloth/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf": {
           "id": "gguf/unsloth/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf",
           "name": "[VT]L: [gguf] unsloth/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf",
@@ -1758,5 +1781,6 @@
         }
       }
     }
-  }
+  },
+  "model": "llamacpp/gguf/unsloth/Qwen3.8-27B-UD-Q6_K.gguf"
 }

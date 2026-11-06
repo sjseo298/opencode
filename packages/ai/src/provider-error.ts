@@ -36,6 +36,7 @@ const patterns = [
   /input(?: \(\d+ tokens\))? is longer than the model'?s context length/i,
   /exceeds the limit of \d+/i,
   /exceeds the available context size/i,
+  /context size (?:has been )?exceeded/i,
   /greater than the context length/i,
   // Hugging Face Text Generation Inference, e.g. Together
   /`inputs` tokens \+ `max_new_tokens` must be <= \d+/i,

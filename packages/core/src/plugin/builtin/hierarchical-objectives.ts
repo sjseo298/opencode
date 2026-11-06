@@ -142,6 +142,10 @@ export const postCompactionSessions = new Set<string>()
 export const consecutiveReadCounts = new Map<string, number>()
 export const antiLoopWarnings = new Map<string, string>()
 
+// Action tracking for objective tree continuous sync enforcement
+export const actionsWithoutObjectiveSync = new Map<string, number>()
+export const MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC = 5
+
 export const isTestEnvironment = () =>
   typeof process !== "undefined" &&
   (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test" || Boolean(process.env.VITEST))
@@ -242,6 +246,7 @@ export function clearSessionObjectives(sessionID: string) {
   consecutiveReadCounts.delete(sessionID)
   antiLoopWarnings.delete(sessionID)
   actionWarnings.delete(sessionID)
+  actionsWithoutObjectiveSync.delete(sessionID)
 }
 
 export function getObjectives(sessionID: string): PrimaryObjective | undefined {
@@ -1632,6 +1637,7 @@ export function presentPlan(
   }
   const now = Date.now()
   po.status = "presented_awaiting_confirmation"
+  po.planPresentedAt = now
   po.phase = { paused: true, since: now, checkpointAt: po.phase?.checkpointAt, reason: reason?.trim() || undefined }
 
   if (options?.unattended !== undefined) {
@@ -3151,6 +3157,10 @@ const FROZEN_MESSAGE =
 const PLAN_NOT_APPROVED_MESSAGE =
   "⚠️ [Protocol Guard - Plan Approval Required]: El plan de objetivos aún no ha sido aprobado por el usuario (approvedByUser: false). No puedes comenzar a trabajar sobre los objetivos ni cambiarlos a 'exploring' o 'resolved' hasta que el usuario haya revisado y aprobado el plan para validar que el alcance es el correcto. Debes presentar el plan al usuario (acción 'present_plan') y esperar su confirmación antes de iniciar la ejecución."
 
+const PLAN_NOT_PRESENTED_MESSAGE =
+  PLAN_NOT_APPROVED_MESSAGE +
+  "\n\n⚠️ [Plan Presentation Required]: Has definido un árbol de objetivos pero NO se lo has presentado formalmente al usuario. Debes presentar el plan llamando a 'objective_manage(action: \"present_plan\")' para que el usuario pueda revisarlo y aprobarlo en el diálogo nativo antes de iniciar la ejecución."
+
 function checkPlanApprovalGuard(po: PrimaryObjective | undefined, targetStatus: string | undefined): string | undefined {
   if (!po) return undefined
   if (po.approvedByUser) return undefined
@@ -3165,6 +3175,9 @@ function checkPlanApprovalGuard(po: PrimaryObjective | undefined, targetStatus: 
 
   const norm = String(targetStatus || "").toLowerCase()
   if (norm === "exploring" || norm === "resolved") {
+    if (!po.planPresentedAt && po.status !== "presented_awaiting_confirmation") {
+      return PLAN_NOT_PRESENTED_MESSAGE
+    }
     return PLAN_NOT_APPROVED_MESSAGE
   }
   return undefined
@@ -4545,6 +4558,12 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       const sessionID = event.sessionID
       if (!sessionID) return
 
+      if (event.tool === "todowrite") {
+        throw new Error(
+          "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' está deshabilitado en este entorno. Es obligatorio utilizar el Protocolo de Objetivos mediante la herramienta 'objective_manage' (acciones: 'set_primary', 'add_secondary', 'add_finding', 'present_plan', etc.) para estructurar jerárquicamente la tarea con rationales causales y criterios de aceptación.",
+        )
+      }
+
       if (event.tool === "edit" || event.tool === "write") {
         const po = sessionObjectives.get(sessionID)
         if (po && !po.approvedByUser && !po.unattended) {
@@ -4559,7 +4578,10 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         }
       }
 
-      if (READONLY_TOOLS.has(event.tool)) {
+      if (event.tool === "objective_manage") {
+        actionsWithoutObjectiveSync.delete(sessionID)
+        consecutiveReadCounts.delete(sessionID)
+      } else if (READONLY_TOOLS.has(event.tool)) {
         const currentCount = (consecutiveReadCounts.get(sessionID) ?? 0) + 1
         consecutiveReadCounts.set(sessionID, currentCount)
 
@@ -4568,12 +4590,39 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
           // gets a fresh cycle rather than failing at 6, 7, 8... forever.
           consecutiveReadCounts.delete(sessionID)
           throw new Error(
-            `⚠️ Anti-Loop Warning: You have executed ${currentCount} consecutive inspection/read-only operations without taking action or updating objectives. Synthesize your findings and focus your next step on concrete validation or execution.`,
+            `⚠️ Anti-Loop Warning: Has ejecutado ${currentCount} operaciones consecutivas de inspección/lectura sin actualizar objetivos ni tomar acción. Recuerda que SOLO en el modo de reconocimiento previo a formular un plan está permitido omitir la actualización del árbol de objetivos. Una vez formulado el plan o detectados los primeros hallazgos, debes registrar tus descubrimientos con 'add_finding' o estructurar/actualizar tus objetivos con 'objective_manage'.`,
           )
         }
       } else {
         // Reset consecutive read count upon executing a modifying or action tool
         consecutiveReadCounts.delete(sessionID)
+
+        if (event.tool !== "question") {
+          const po = sessionObjectives.get(sessionID)
+          if (po) {
+            const unsyncedCount = (actionsWithoutObjectiveSync.get(sessionID) ?? 0) + 1
+            actionsWithoutObjectiveSync.set(sessionID, unsyncedCount)
+
+            if (unsyncedCount >= MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC) {
+              actionsWithoutObjectiveSync.delete(sessionID)
+              const planPresented = Boolean(
+                po.planPresentedAt ||
+                po.status === "presented_awaiting_confirmation" ||
+                po.approvedByUser ||
+                po.unattended,
+              )
+              if (po.secondaries.length > 0 && !planPresented) {
+                throw new Error(
+                  `⚠️ [Objective Sync & Plan Presentation Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos y sin haber presentado el plan al usuario. Si ya creaste el árbol de objetivos, debes presentar el plan con 'objective_manage(action: "present_plan")' para que el usuario lo apruebe antes de continuar ejecutando tareas. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
+                )
+              } else {
+                throw new Error(
+                  `⚠️ [Objective Sync Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos. Con un árbol de objetivos activo, debes sincronizar continuamente tus avances reales con 'objective_manage' (transicionando SO a 'exploring' antes de iniciarla, marcándola 'resolved' con 'validationProof' al terminarla, o registrando hallazgos con 'add_finding') antes de continuar ejecutando más acciones. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
+                )
+              }
+            }
+          }
+        }
       }
     })
 
@@ -4590,40 +4639,6 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       if (event.tool === "edit" || event.tool === "write") {
         const path = typeof (event.input as any)?.path === "string" ? (event.input as any).path : ""
         if (path) trackTouchedFile(sessionID, path)
-      }
-
-      // Compatibility: If legacy todowrite tool is called, sync with secondary objectives
-      if (event.tool === "todowrite") {
-        const input = event.input as any
-        const todos = Array.isArray(input?.todos) ? input.todos : []
-        let po = sessionObjectives.get(sessionID)
-        if (!po) {
-          po = setPrimaryObjective(
-            sessionID,
-            "Primary Task Session",
-            "Complete all open tasks and verify requirements.",
-          )
-        }
-
-        for (const t of todos) {
-          const content = typeof t?.content === "string" ? t.content.trim() : ""
-          if (!content) continue
-          const existingSO = po.secondaries.find(
-            (s) => s.title.toLowerCase() === content.toLowerCase(),
-          )
-          if (!existingSO) {
-            const so = addSecondaryObjective(sessionID, content, "Synced from todowrite tool")
-            if (t.status === "completed") {
-              so.status = "resolved"
-              so.validationProof = "Marked completed via todowrite"
-            }
-          } else {
-            if (t.status === "completed" && existingSO.status !== "resolved") {
-              existingSO.status = "resolved"
-              existingSO.validationProof = existingSO.validationProof || "Marked completed via todowrite"
-            }
-          }
-        }
       }
 
       // Reflexive failure auto-nudge: if a tool execution encounters an error/failure,

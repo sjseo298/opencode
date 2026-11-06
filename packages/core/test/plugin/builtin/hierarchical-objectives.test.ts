@@ -427,30 +427,36 @@ describe("hierarchical-objectives plugin", () => {
       expect(() => hook({ sessionID: sid, tool: "read" })).toThrow("Anti-Loop Warning")
     })
 
-    test("legacy todowrite compatibility maps todos into secondary objectives", async () => {
+    test("intercepts todowrite in execute.before and rejects with Protocol Guard guidance", async () => {
       const { toolHooks } = await setupPluginInstance()
-      const sid = uniqueSessionID("todowrite-compat")
+      const sid = uniqueSessionID("todowrite-intercept")
+      const hook = toolHooks["execute.before"]?.[0]
+      expect(hook).toBeDefined()
 
-      for (const h of toolHooks["execute.after"] ?? []) {
-        await h({
-          sessionID: sid,
-          tool: "todowrite",
-          input: {
-            todos: [
-              { content: "Legacy task 1", status: "pending" },
-              { content: "Legacy task 2", status: "completed" },
-            ],
-          },
-        })
+      expect(() => hook!({ sessionID: sid, tool: "todowrite" })).toThrow(
+        "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' está deshabilitado en este entorno. Es obligatorio utilizar el Protocolo de Objetivos mediante la herramienta 'objective_manage'",
+      )
+    })
+
+    test("triggers objective sync and plan presentation warning after consecutive actions without update", async () => {
+      const { toolHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("actions-sync-warning")
+      const hook = toolHooks["execute.before"]?.[0]
+      expect(hook).toBeDefined()
+
+      const po = setPrimaryObjective(sid, "Test Primary", "Verify all criteria")
+      po.approvedByUser = false
+      addSecondaryObjective(sid, "SO-1", "Dependency rationale")
+
+      // 4 actions without objective sync
+      for (let i = 0; i < 4; i++) {
+        await hook!({ sessionID: sid, tool: "shell" })
       }
 
-      const po = getObjectives(sid)
-      expect(po).toBeDefined()
-      expect(po?.secondaries.length).toBe(2)
-      expect(po?.secondaries[0].title).toBe("Legacy task 1")
-      expect(po?.secondaries[0].status).toBe("pending")
-      expect(po?.secondaries[1].title).toBe("Legacy task 2")
-      expect(po?.secondaries[1].status).toBe("resolved")
+      // 5th action triggers plan presentation warning because plan was not presented
+      expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow(
+        "Objective Sync & Plan Presentation Warning",
+      )
     })
 
     test("delivers full objective tree as input upon compaction and maintains invariant post-compaction instructions", async () => {
