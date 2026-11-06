@@ -41,6 +41,21 @@ describe("provider error classification", () => {
     expect(isContextOverflow("413 status code (no body)")).toBe(true)
   })
 
+  test("classifies local llama.cpp HTTP 500 context exceeded responses as context overflow", () => {
+    const rawBody = '{"error":{"code":500,"message":"Context size has been exceeded.","type":"server_error"}}'
+    const cases = [
+      classifyProviderFailure({ message: "Context size has been exceeded.", status: 500 }),
+      classifyProviderFailure({ message: "Context size has been exceeded.", status: 500, rawBody }),
+      classifyProviderFailure({ message: "context_length_exceeded", status: 500 }),
+    ]
+    for (const reason of cases) {
+      expect(reason).toMatchObject({ _tag: "InvalidRequest", classification: "context-overflow" })
+      const error = new AIError({ reason })
+      expect(isContextOverflowFailure(error)).toBe(true)
+      expect(isRetryable(error)).toBe(false)
+    }
+  })
+
   test("classifies generic request size failures separately from context overflow", () => {
     const failures = [
       classifyProviderFailure({ message: "request too large", status: 413 }),

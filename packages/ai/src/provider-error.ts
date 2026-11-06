@@ -222,14 +222,15 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
   // (e.g. overflow phrases nested in a JSON error body) still classify.
   const text = [input.message, body].filter((value) => value.length > 0).join("\n")
   const clientScoped = input.status === undefined || (input.status >= 400 && input.status < 500)
+  const contextScoped = input.status === undefined || input.status >= 400
 
   if (
-    clientScoped &&
+    contextScoped &&
     (codes.includes("context_length_exceeded") ||
       codes.includes("model_context_window_exceeded") ||
       codes.includes("request_too_large") ||
       // 429 bodies are throttles even when their wording matches an overflow phrase, e.g. Cerebras's
-      // "too many tokens processed". Text matching stays on for 4xx and mid-stream errors without a status.
+      // "too many tokens processed". Text matching stays on for 4xx, 5xx (e.g. llama.cpp) and mid-stream errors without a status.
       (input.status !== 429 && !codes.includes("throttlingexception") && isContextOverflow(text)))
   )
     return new InvalidRequestError({ ...details, classification: "context-overflow" })
