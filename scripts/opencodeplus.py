@@ -1794,6 +1794,46 @@ def action_run_build() -> None:
         console.print("[green]✓ Build completado[/]")
 
 
+def show_recent_commits(repo_dir: Path, count: int = 5) -> None:
+    """Display a clean summary table of the latest commits to verify local sync."""
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo_dir), "log", f"-n{count}", "--pretty=format:%h%x09%ad%x09%an%x09%s", "--date=short"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        lines = [line.strip() for line in res.stdout.strip().split("\n") if line.strip()]
+        if not lines:
+            return
+
+        table = Table(
+            title=f"📋 Últimos {len(lines)} Commits (HEAD)",
+            border_style="cyan",
+            header_style="bold cyan",
+            box=box.ROUNDED,
+            show_header=True,
+        )
+        table.add_column("Hash", style="yellow", no_wrap=True)
+        table.add_column("Fecha", style="dim", no_wrap=True)
+        table.add_column("Autor", style="green", no_wrap=True)
+        table.add_column("Mensaje", style="white")
+
+        for line in lines:
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                commit_hash, date, author, msg = parts[0], parts[1], parts[2], "\t".join(parts[3:])
+                table.add_row(commit_hash, date, author, msg)
+            elif len(parts) == 1:
+                table.add_row(parts[0], "", "", "")
+
+        console.print("")
+        console.print(table)
+        console.print("")
+    except Exception as e:
+        console.print(f"[dim]No se pudo obtener el historial de commits: {e}[/]")
+
+
 def action_sync_fork() -> None:
     """Sync fork (origin) overwriting local changes with remote + install deps + build."""
     console.print("\n[bold]Sync de fork (origin) — sync + install + build...[/]")
@@ -1822,6 +1862,7 @@ def action_sync_fork() -> None:
 
         if behind_count == 0 and ahead_count == 0 and not has_local_changes:
             console.print("[green]⚡ [Fast-Exit] El fork ya está al día con origin/dev y sin cambios locales.[/]")
+            show_recent_commits(repo_dir, 5)
             return
     except Exception:
         pass
@@ -1832,6 +1873,8 @@ def action_sync_fork() -> None:
         console.print(f"[yellow]⚠ Build falló con código {result.returncode}[/]")
     else:
         console.print("[green]✓ Sync + build completado[/]")
+
+    show_recent_commits(repo_dir, 5)
 
 
 def action_compile_project() -> None:

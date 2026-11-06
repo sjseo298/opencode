@@ -156,6 +156,10 @@ sync_repo() {
     fi
 
     echo "✅ Cambios locales sobrescritos. Rama local dev sincronizada con origin/dev."
+    echo ""
+    echo "📋 Últimos 5 commits (HEAD):"
+    git log -n 5 --pretty=format:"  %C(yellow)%h%Creset %C(cyan)%ad%Creset %s %C(dim)(%an)%Creset" --date=short
+    echo ""
 
     echo ""
     echo "  Skipping push (fork-only sync)."
