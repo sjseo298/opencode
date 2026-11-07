@@ -440,7 +440,7 @@ describe("hierarchical-objectives plugin", () => {
       expect(hook).toBeDefined()
 
       expect(() => hook!({ sessionID: sid, tool: "todowrite" })).toThrow(
-        "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' está deshabilitado en este entorno. Es obligatorio utilizar el Protocolo de Objetivos mediante la herramienta 'objective_manage'",
+        "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' is disabled in this environment. You MUST use the Protocolo de Objetivos via the 'objective_manage' tool",
       )
     })
 
@@ -3799,7 +3799,7 @@ describe("hierarchical-objectives plugin", () => {
       )
       expect(blockExploring.output.success).toBe(false)
       expect(blockExploring.output.message).toContain("⚠️ [Protocol Guard - Plan Approval Required]")
-      expect(blockExploring.output.message).toContain("El plan de objetivos aún no ha sido aprobado por el usuario")
+      expect(blockExploring.output.message).toContain("The objective plan has not been approved by the user yet")
 
       // 4. Attempting to add an objective directly into exploring before approval is BLOCKED
       const blockAddExploring = await tool.execute(

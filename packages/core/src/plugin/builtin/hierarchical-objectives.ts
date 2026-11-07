@@ -3274,11 +3274,11 @@ const FROZEN_MESSAGE =
   "Objective tree is FROZEN (status: presented_awaiting_confirmation). Present the plan to the user and call action 'resume_plan' with their explicit instruction before mutating the tree. If you need to refine the draft plan before confirmation, pass 'draft: true' (or 'refinePlan: true')."
 
 const PLAN_NOT_APPROVED_MESSAGE =
-  "⚠️ [Protocol Guard - Plan Approval Required]: El plan de objetivos aún no ha sido aprobado por el usuario (approvedByUser: false). No puedes comenzar a trabajar sobre los objetivos ni cambiarlos a 'exploring' o 'resolved' hasta que el usuario haya revisado y aprobado el plan para validar que el alcance es el correcto. Debes presentar el plan al usuario (acción 'present_plan') y esperar su confirmación antes de iniciar la ejecución."
+  "⚠️ [Protocol Guard - Plan Approval Required]: The objective plan has not been approved by the user yet (approvedByUser: false). You cannot start working on objectives or transition them to 'exploring' or 'resolved' until the user has reviewed and approved the plan to validate scope. Present the plan to the user (action 'present_plan') and await confirmation before beginning execution."
 
 const PLAN_NOT_PRESENTED_MESSAGE =
   PLAN_NOT_APPROVED_MESSAGE +
-  "\n\n⚠️ [Plan Presentation Required]: Has definido un árbol de objetivos pero NO se lo has presentado formalmente al usuario. Debes presentar el plan llamando a 'objective_manage(action: \"present_plan\")' para que el usuario pueda revisarlo y aprobarlo en el diálogo nativo antes de iniciar la ejecución."
+  "\n\n⚠️ [Plan Presentation Required]: You established an objective tree but have NOT formally presented it to the user. You must present the plan by calling 'objective_manage(action: \"present_plan\")' so the user can review and approve it via the native dialog before starting execution."
 
 function checkPlanApprovalGuard(
   po: PrimaryObjective | undefined,
@@ -3804,11 +3804,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective is EXPLORING because new/open sub-objectives exist."
       : ""
 
-    // Recordatorio mecánico para el agente si agregó un SO a un árbol que ya estaba cerrado:
-    // Se muestra solo una vez cuando el PO estaba previamente resuelto.
+    // Mechanical reminder for the agent if an SO was added to a previously closed tree:
+    // Displayed strictly once when the PO was previously resolved.
     if (wasResolvedBeforeAdd && !postCloseSecondaryRemindedSessions.has(sessionID)) {
       postCloseSecondaryRemindedSessions.add(sessionID)
-      reopenNotice += "\n\n💡 [Protocol Reminder - Topic Pivot Check]: El objetivo primario previo ya había sido completado y se ha reabierto automáticamente al agregar este objetivo secundario. Si la petición actual del usuario es un tema nuevo o NO tiene relación causal directa con el objetivo anterior, NO acumules subtareas en este árbol: debes crear un nuevo árbol de objetivos independiente llamando a objective_manage con action: 'set_primary', definiendo un nuevo título, Definition of Done y plannedSecondaryCount."
+      reopenNotice += "\n\n💡 [Protocol Reminder - Topic Pivot Check]: The previous primary objective was already completed and has been automatically reopened because this secondary objective was added. If the user's current request is a brand new topic or has NO direct causal relation to the previous objective, DO NOT accumulate subtasks under this old tree: you must establish a clean, independent objective tree by calling objective_manage with action: 'set_primary', defining a new title, Definition of Done, and plannedSecondaryCount."
     }
     return {
       output: { success: true, message: `Added secondary objective ${so.id}.${reopenNotice}`, tree },
@@ -4787,7 +4787,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
 
       if (event.tool === "todowrite") {
         throw new Error(
-          "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' está deshabilitado en este entorno. Es obligatorio utilizar el Protocolo de Objetivos mediante la herramienta 'objective_manage' (acciones: 'set_primary', 'add_secondary', 'add_finding', 'present_plan', etc.) para estructurar jerárquicamente la tarea con rationales causales y criterios de aceptación.",
+          "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' is disabled in this environment. You MUST use the Protocolo de Objetivos via the 'objective_manage' tool (actions: 'set_primary', 'add_secondary', 'add_finding', 'present_plan', etc.) to hierarchically structure tasks with causal rationales and verifiable criteria.",
         )
       }
 
@@ -4799,7 +4799,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true")
           if (!isUnattendedEnv) {
             throw new Error(
-              "⚠️ [Protocol Guard - Plan Approval Required]: No puedes modificar archivos antes de que el usuario apruebe el plan de objetivos. Presenta el plan con 'present_plan' y espera su confirmación.",
+              "⚠️ [Protocol Guard - Plan Approval Required]: Modifying project files before user approval of the objective plan is prohibited. Present the plan via 'present_plan' and await explicit user confirmation.",
             )
           }
         }
@@ -4819,7 +4819,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
           const po = sessionObjectives.get(sessionID)
           if (!po) {
             throw new Error(
-              `⚠️ [Objective Sync / Anti-Loop Warning]: Has ejecutado ${unsyncedCount} operaciones consecutivas sin estructurar ni actualizar tu árbol de objetivos. Recuerda que SOLO en una fase breve de reconocimiento inicial está permitido omitir la actualización del árbol de objetivos. Debes estructurar tu plan o registrar tus hallazgos llamando a 'objective_manage' ('set_primary', 'add_secondary', 'add_finding') antes de continuar.`,
+              `⚠️ [Objective Sync / Anti-Loop Warning]: You have executed ${unsyncedCount} consecutive operations without structuring or updating your objective tree. ONLY during a brief initial reconnaissance phase is omitting objective updates permitted. You must structure your plan or register findings calling 'objective_manage' ('set_primary', 'add_secondary', 'add_finding') before continuing.`,
             )
           }
           const planPresented = Boolean(
@@ -4831,11 +4831,11 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
           )
           if (po.secondaries.length > 0 && !planPresented) {
             throw new Error(
-              `⚠️ [Objective Sync & Plan Presentation Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos y sin haber presentado el plan al usuario. Si ya creaste el árbol de objetivos, debes presentar el plan con 'objective_manage(action: "present_plan")' para que el usuario lo apruebe antes de continuar ejecutando tareas. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos.`,
+              `⚠️ [Objective Sync & Plan Presentation Warning]: You have executed ${unsyncedCount} consecutive actions without updating your objective tree and without presenting the plan to the user. If you established an objective tree, you must present the plan with 'objective_manage(action: "present_plan")' for user review and approval before executing tasks. Only during read-only reconnaissance is omitting objective updates permitted.`,
             )
           }
           throw new Error(
-            `⚠️ [Objective Sync Warning]: Has ejecutado ${unsyncedCount} acciones consecutivas sin actualizar tu árbol de objetivos. Con un árbol de objetivos activo, debes sincronizar continuamente tus avances reales con 'objective_manage' (transicionando SO a 'exploring' antes de iniciarla, marcándola 'resolved' con 'validationProof' al terminarla, o registrando hallazgos con 'add_finding') antes de continuar ejecutando más acciones. Recuerda que solo en la fase de reconocimiento previa a formular un plan se permite omitir la actualización del árbol de objetivos. Nota: Las respuestas incrementales de 'objective_manage' usan vista compacta; NO invoques 'session_compact' por este aviso (compacta únicamente si recibes [CRITICAL PRE-COMPACTION ADVISORY]).`,
+            `⚠️ [Objective Sync Warning]: You have executed ${unsyncedCount} consecutive actions without updating your active objective tree. With an active tree, you must continuously sync real progress with 'objective_manage' (moving an SO to 'exploring' before implementation, resolving it with 'validationProof' upon completion, or registering findings with 'add_finding') before executing further actions. Note: 'objective_manage' incremental responses use compact projection; do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`,
           )
         }
       }
