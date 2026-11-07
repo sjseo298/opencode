@@ -150,6 +150,16 @@ export const sessionObjectives: Map<string, PrimaryObjective> =
   ((globalThis as any).__OPENCODE_OBJECTIVES__ ??= new Map<string, PrimaryObjective>())
 export const postCompactionSessions = new Set<string>()
 
+export const sessionSubagentCache = new Map<string, boolean>()
+
+export function markSubagentSession(sessionID: string, isSubagent = true) {
+  sessionSubagentCache.set(sessionID, isSubagent)
+}
+
+export function isSubagentSessionCached(sessionID: string): boolean | undefined {
+  return sessionSubagentCache.get(sessionID)
+}
+
 // Inspection tracking for anti-loop protocol per session
 export const consecutiveReadCounts = new Map<string, number>()
 export const antiLoopWarnings = new Map<string, string>()
@@ -4558,6 +4568,23 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     // session.generate drags the full conversation transcript (~80k tokens) and corrupts llama.cpp slots/cache.
     // Instead, queryIsolatedLlamaCppRelevance executes isolated one-shots (<60 tokens) explicitly pinned to id_slot: 1.
 
+    async function isSubagentSession(sessionID: string): Promise<boolean> {
+      const cached = sessionSubagentCache.get(sessionID)
+      if (cached !== undefined) return cached
+      if (typeof (ctx.session as any)?.get === "function") {
+        const session = await (ctx.session as any).get({ sessionID }).catch(() => undefined)
+        const isSub = Boolean(
+          (typeof session?.parentID === "string" && session.parentID.length > 0) ||
+          (typeof session?.parent_id === "string" && session.parent_id.length > 0) ||
+          (session as any)?.agent?.mode === "subagent" ||
+          (session as any)?.mode === "subagent",
+        )
+        sessionSubagentCache.set(sessionID, isSub)
+        return isSub
+      }
+      return false
+    }
+
     // 1. Register the objective_manage tool via transform
     if (typeof ctx.tool?.transform === "function") {
       await ctx.tool.transform((editor) => {
@@ -4570,6 +4597,18 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
           output: ObjectiveOutputSchema,
           execute: async (input: any, toolCtx: any) => {
             const sessionID = (toolCtx as any)?.sessionID || "default-session"
+            if (await isSubagentSession(sessionID)) {
+              const note =
+                "Protocol Note: The objectives protocol and objective tree are managed exclusively by the primary session (main thread). Subagents do not maintain or update an objective tree."
+              return {
+                content: note,
+                output: {
+                  success: false,
+                  message: note,
+                  tree: "",
+                },
+              }
+            }
             // F-1: hydrate from the persistent store before acting (in-memory first).
             await hydrateSessionObjectives(sessionID)
             const result = await executeObjectiveAction(input, sessionID)
@@ -4594,6 +4633,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       await ctx.session.hook("prompt", async (event: any) => {
         const sessionID = event?.sessionID
         if (!sessionID) return
+        if (await isSubagentSession(sessionID)) return
         const po = sessionObjectives.get(sessionID)
         if (po) {
           po.approvedByUser = true
@@ -4613,6 +4653,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     await ctx.session.hook("compaction", async (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+      if (await isSubagentSession(sessionID)) return
 
       let po = sessionObjectives.get(sessionID)
       if (!po && Array.isArray(event.messages)) {
@@ -4656,6 +4697,24 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     await ctx.session.hook("context", async (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+
+      if (await isSubagentSession(sessionID)) {
+        if (event.tools && "objective_manage" in event.tools) {
+          delete event.tools.objective_manage
+        }
+        for (let i = 0; i < event.system.length; i++) {
+          const sys = event.system[i]
+          if (sys?.text && sys.text.includes("Protocolo de Objetivos (Objectives Protocol)")) {
+            let updatedText = sys.text.replace(/[\s\S]*?- Protocolo de Objetivos \(Objectives Protocol\):[\s\S]*?(?=- Iterative Objective Sync:|$)/g, "")
+            updatedText = updatedText.replace(/- Iterative Objective Sync:[\s\S]*?(?=\n- |\n\n|$)/g, "")
+            event.system[i] = {
+              ...sys,
+              text: updatedText.trim(),
+            }
+          }
+        }
+        return
+      }
 
       if (typeof (ctx.session as any)?.get === "function") {
         const session = await (ctx.session as any).get({ sessionID }).catch(() => undefined)
@@ -4703,9 +4762,10 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     })
 
     // 4. Tool Execution Hooks: Anti-Loop & Evidence Capture
-    await ctx.tool.hook("execute.before", (event) => {
+    await ctx.tool.hook("execute.before", async (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+      if (await isSubagentSession(sessionID)) return
       const cfg = getObjectivesConfig(sessionID)
 
       if (event.tool === "todowrite") {
@@ -4767,6 +4827,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     await ctx.tool.hook("execute.after", async (event) => {
       const sessionID = event.sessionID
       if (!sessionID) return
+      if (await isSubagentSession(sessionID)) return
 
       // F-9: track normalized read actions per active SO (anti-loop, value-first).
       if (READONLY_TOOLS.has(event.tool) && event.tool !== "question") {

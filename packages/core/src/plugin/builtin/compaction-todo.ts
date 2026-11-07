@@ -4,6 +4,16 @@ const MAX_TODOS = 30
 const dirtySessions = new Set<string>()
 const postCompactionSessions: Set<string> =
   ((globalThis as any).__OPENCODE_POST_COMPACTION_SESSIONS__ ??= new Set<string>())
+const sessionSubagentCache = new Map<string, boolean>()
+
+export function markSubagentSession(sessionID: string, isSubagent = true) {
+  sessionSubagentCache.set(sessionID, isSubagent)
+}
+
+export function isSubagentSessionCached(sessionID: string): boolean | undefined {
+  return sessionSubagentCache.get(sessionID)
+}
+
 const readonlyTools = new Set([
   "read",
   "list",
@@ -98,7 +108,27 @@ function openTodosText(todos: unknown[]) {
 export const Plugin = OpenCodePlugin.define({
   id: "compaction-todo",
   async setup(ctx) {
+    async function isSubagentSession(sessionID: string): Promise<boolean> {
+      const cached = sessionSubagentCache.get(sessionID)
+      if (cached !== undefined) return cached
+      if (typeof (ctx.session as any)?.get === "function") {
+        const session = await (ctx.session as any).get({ sessionID }).catch(() => undefined)
+        const isSub = Boolean(
+          (typeof session?.parentID === "string" && session.parentID.length > 0) ||
+          (typeof session?.parent_id === "string" && session.parent_id.length > 0) ||
+          (session as any)?.agent?.mode === "subagent" ||
+          (session as any)?.mode === "subagent",
+        )
+        sessionSubagentCache.set(sessionID, isSub)
+        return isSub
+      }
+      return false
+    }
+
     await ctx.session.hook("compaction", async (event) => {
+      if (!event.sessionID) return
+      if (await isSubagentSession(event.sessionID)) return
+
       const po = getObjectives(event.sessionID)
       if (po && (po.status !== "resolved" || po.secondaries?.some((s: any) => s.status !== "resolved"))) {
         event.system.push({ type: "text", text: formatObjectivesSnapshot(po) })
@@ -116,6 +146,7 @@ export const Plugin = OpenCodePlugin.define({
 
     await ctx.session.hook("context", async (event) => {
       if (!event.sessionID) return
+      if (await isSubagentSession(event.sessionID)) return
 
       // If hierarchical objectives protocol is active in event.system, avoid injecting duplicate or fluctuating reminders
       // to preserve strict prompt cache prefix invariance for llama.cpp / local LLMs.
@@ -177,7 +208,9 @@ export const Plugin = OpenCodePlugin.define({
       postCompactionSessions.delete(event.sessionID)
     })
 
-    await ctx.tool.hook("execute.after", (event) => {
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (!event.sessionID) return
+      if (await isSubagentSession(event.sessionID)) return
       if (event.tool === "objective_manage" || event.tool === "todowrite") {
         dirtySessions.delete(event.sessionID)
         return

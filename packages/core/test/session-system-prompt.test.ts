@@ -24,6 +24,12 @@ test("renders Protocolo de Objetivos guidance when objective_manage is present",
   expect(prompt).toContain("preserving llama.cpp prefix caching across turns")
 })
 
+test("omits Protocolo de Objetivos guidance when isSubagent is true even if objective_manage is in tools", () => {
+  const prompt = SessionSystemPrompt.make(["objective_manage", "read"], { isSubagent: true })
+  expect(prompt).not.toContain("Protocolo de Objetivos (Objectives Protocol)")
+  expect(prompt).not.toContain("Iterative Objective Sync")
+})
+
 test("renders subagent concurrency (slots - 1) and task sizing guidance", () => {
   ;(globalThis as any).__OPENCODE_TOTAL_SLOTS__ = 3
   ;(globalThis as any).__OPENCODE_MAX_SUBAGENTS__ = 2

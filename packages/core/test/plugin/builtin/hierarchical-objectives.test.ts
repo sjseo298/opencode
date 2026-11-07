@@ -3960,6 +3960,121 @@ describe("hierarchical-objectives plugin", () => {
     })
   })
 
+  describe("Subagent Isolation & Objective Protocol Disablement", () => {
+    test("does not throw Objective Sync Warning for subagent sessions even after 15+ actions", async () => {
+      const { toolHooks, sessionStore } = await setupPluginInstanceLocal()
+      const parentSid = uniqueSessionID("parent-sync")
+      const childSid = uniqueSessionID("child-sync")
+      sessionStore[childSid] = { id: childSid, parentID: parentSid }
+
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      expect(beforeHook).toBeDefined()
+
+      // Execute 20 actions in child session without calling objective_manage (should NOT throw)
+      for (let i = 0; i < 20; i++) {
+        await expect(beforeHook!({ sessionID: childSid, tool: "shell" })).resolves.toBeUndefined()
+      }
+    })
+
+    test("still throws Objective Sync Warning for main thread sessions after 15 actions", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const mainSid = uniqueSessionID("main-sync-warning")
+
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      expect(beforeHook).toBeDefined()
+
+      for (let i = 0; i < 14; i++) {
+        await beforeHook!({ sessionID: mainSid, tool: "read" })
+      }
+
+      await expect(async () => {
+        await beforeHook!({ sessionID: mainSid, tool: "read" })
+      }).toThrow("Objective Sync / Anti-Loop Warning")
+    })
+
+    test("does not enforce plan approval guard on subagent sessions for edit/write", async () => {
+      const { toolHooks, sessionStore } = await setupPluginInstanceLocal()
+      const parentSid = uniqueSessionID("parent-plan-guard")
+      const childSid = uniqueSessionID("child-plan-guard")
+      sessionStore[childSid] = { id: childSid, parentID: parentSid }
+
+      // Even if child session somehow had an unapproved PO in memory
+      const po = setPrimaryObjective(childSid, "Child Task", "Done")
+      po.approvedByUser = false
+
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      expect(beforeHook).toBeDefined()
+
+      await expect(
+        beforeHook!({ sessionID: childSid, tool: "write", input: { path: "test.ts" } }),
+      ).resolves.toBeUndefined()
+    })
+
+    test("does not append protocol guidance nudge on tool failure for subagent sessions", async () => {
+      const { toolHooks, sessionStore } = await setupPluginInstanceLocal()
+      const parentSid = uniqueSessionID("parent-guidance")
+      const childSid = uniqueSessionID("child-guidance")
+      sessionStore[childSid] = { id: childSid, parentID: parentSid }
+
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(afterHook).toBeDefined()
+
+      const event = {
+        sessionID: childSid,
+        tool: "shell",
+        status: "error",
+        error: new Error("command failed"),
+        result: { content: "Error: command not found" },
+      }
+
+      await afterHook!(event)
+      expect(event.result.content).toBe("Error: command not found")
+      expect(event.result.content).not.toContain("[Protocol Guidance]")
+    })
+
+    test("returns protocol note when subagent attempts to call objective_manage directly", async () => {
+      const { getRegisteredTool, sessionStore } = await setupPluginInstanceLocal()
+      const parentSid = uniqueSessionID("parent-manage")
+      const childSid = uniqueSessionID("child-manage")
+      sessionStore[childSid] = { id: childSid, parentID: parentSid }
+
+      const tool = getRegisteredTool()
+      const res = await tool.execute({ action: "list" }, { sessionID: childSid })
+      expect(res.content).toContain("The objectives protocol and objective tree are managed exclusively by the primary session")
+    })
+
+    test("context hook removes objective_manage from tools and strips protocol instructions for subagents", async () => {
+      const { sessionHooks, sessionStore } = await setupPluginInstanceLocal()
+      const parentSid = uniqueSessionID("parent-ctx")
+      const childSid = uniqueSessionID("child-ctx")
+      sessionStore[childSid] = { id: childSid, parentID: parentSid }
+
+      const ctxHook = sessionHooks["context"]?.[0]
+      expect(ctxHook).toBeDefined()
+
+      const event = {
+        sessionID: childSid,
+        system: [
+          {
+            type: "text",
+            text: "Base prompt.\n- Protocolo de Objetivos (Objectives Protocol): You have the `objective_manage` tool...\n- Iterative Objective Sync: work strictly one...\n- Other instructions.",
+          },
+        ],
+        tools: {
+          read: { description: "Read file", input: {} },
+          objective_manage: { description: "Manage objectives", input: {} },
+        },
+      }
+
+      await ctxHook!(event)
+      expect(event.tools.objective_manage).toBeUndefined()
+      expect(event.tools.read).toBeDefined()
+      expect(event.system[0].text).not.toContain("Protocolo de Objetivos (Objectives Protocol)")
+      expect(event.system[0].text).not.toContain("Iterative Objective Sync")
+      expect(event.system.length).toBe(1) // did not push PROTOCOLO_OBJETIVOS_INSTRUCTIONS
+    })
+  })
+
   async function setupPluginInstanceLocal() {
     const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
     const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}

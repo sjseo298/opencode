@@ -11,7 +11,10 @@ function uniqueSessionID(prefix: string) {
 }
 
 // We need to reimport the plugin for each test to get fresh state
-async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) {
+async function createFreshHooks(
+  todosBySession: Record<string, unknown[]> = {},
+  sessionInfoBySession: Record<string, any> = {},
+) {
   // Clear module cache to get fresh plugin state
   const modulePath = require.resolve("../../../src/plugin/builtin/compaction-todo.js")
   delete require.cache[modulePath]
@@ -26,6 +29,9 @@ async function createFreshHooks(todosBySession: Record<string, unknown[]> = {}) 
     session: {
       todo: async ({ sessionID }: { sessionID: string }) => {
         return todosBySession[sessionID] ?? []
+      },
+      get: async ({ sessionID }: { sessionID: string }) => {
+        return sessionInfoBySession[sessionID] ?? { id: sessionID }
       },
       hook: async (name: string, handler: any) => {
         sessionHooks[name] = sessionHooks[name] ?? []
@@ -527,6 +533,55 @@ describe("compaction-todo plugin", () => {
 
       // Clean up
       globalObjectives.delete(sessionID)
+    })
+
+    test("does not inject objective reminders or mark dirty for subagents in context hook", async () => {
+      const parentID = uniqueSessionID("parent-compaction-todo")
+      const childID = uniqueSessionID("child-compaction-todo")
+      const sessionInfo = {
+        [childID]: { id: childID, parentID },
+      }
+
+      const hooks = await createFreshHooks({}, sessionInfo)
+
+      // Subagent executes a mutating tool (e.g. edit)
+      await hooks["tool.execute.after"]({
+        tool: "edit",
+        sessionID: childID,
+        callID: "call-child-1",
+        args: { path: "foo.ts" },
+      })
+
+      // In context hook, dirty warning should NOT be injected for subagent
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]({ sessionID: childID }, output)
+      expect(output.system.length).toBe(0)
+    })
+
+    test("does not snapshot objectives or todos for subagents during compaction", async () => {
+      const parentID = uniqueSessionID("parent-compaction-obj")
+      const childID = uniqueSessionID("child-compaction-obj")
+      const sessionInfo = {
+        [childID]: { id: childID, parentID },
+      }
+
+      const globalObjectives = ((globalThis as any).__OPENCODE_OBJECTIVES__ ??= new Map())
+      globalObjectives.set(childID, {
+        title: "Subagent Task",
+        status: "exploring",
+        definitionOfDone: "Done",
+        secondaries: [{ id: "SO-1", title: "Subtask", status: "pending" }],
+      })
+
+      const hooks = await createFreshHooks({}, sessionInfo)
+
+      const output = { context: [] as string[], prompt: undefined }
+      await hooks["experimental.session.compacting"]({ sessionID: childID }, output)
+
+      expect(output.context.length).toBe(0)
+
+      // Clean up
+      globalObjectives.delete(childID)
     })
   })
 })

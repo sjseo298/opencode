@@ -650,6 +650,7 @@ When resolving complex tasks, an agent may leverage the `subagent` tool to offlo
    * Only as a **last resort** (*en último caso*)—when a task genuinely cannot be split—delegate the task to the subagent so it does what it needs to do.
 4. **Evidence Integration**: Review each subagent's evidence and output and integrate its findings into the active Secondary Objective (or Tertiary) via `objective_manage`.
 5. **Structured Prompt Format**: Always structure the delegation prompt with `## SCOPE`, `## OBJECTIVE`, and `## OUTPUT`.
+6. **Subagent Protocol Isolation**: Subagents are delegated worker child sessions that do not maintain or update an objective tree. They must not receive `objective_manage` instructions, `Objective Sync Warning` checks, or objective compaction snapshots; all objective tree lifecycle management remains strictly in the main thread (primary session).
 
 ### 11.6 Prompt Caching, KV Cache Reuse & Prefix Invariance Architecture
 

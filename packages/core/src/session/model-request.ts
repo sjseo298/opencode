@@ -110,13 +110,17 @@ export const baseTranscript = (input: {
   readonly messages: ReadonlyArray<SessionMessage.Info>
 }) => {
   const providerMetadataKey = input.model.model.route.providerMetadataKey ?? input.model.model.provider
+  const isSubagent = input.agent.mode === "subagent"
   return {
     providerMetadataKey,
     system: [
       SystemPart.make(
         input.agent.system
           ? input.agent.system
-          : SessionSystemPrompt.make(input.tools.definitions.map((tool) => tool.name)),
+          : SessionSystemPrompt.make(
+              input.tools.definitions.map((tool) => tool.name),
+              { isSubagent },
+            ),
       ),
       {
         ...SystemPart.make(Instructions.join(input.initial)),
