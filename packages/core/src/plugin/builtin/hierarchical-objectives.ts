@@ -172,6 +172,9 @@ export const isTestEnvironment = () =>
   typeof process !== "undefined" &&
   (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test" || Boolean(process.env.VITEST))
 
+// Track whether the primary objective was closed when add_secondary is invoked, to remind the agent once
+const postCloseSecondaryRemindedSessions = new Set<string>()
+
 // Per-session warnings about repeated actions (F-9), surfaced on the next tool output and cleared.
 const actionWarnings = new Map<string, string[]>()
 
@@ -243,7 +246,8 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
   "2. Decompose the task into initial **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
   "3. Incremental Plan Construction & Mandatory Plan Presentation: Construct the plan incrementally to avoid oversized monolithic payloads that risk token cutoff (stop reason: length) or long generation hangs. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, `dodCriteria`, and `plannedSecondaryCount: N` declaring the intended number of subtasks. Then register initial secondary objectives strictly ONE BY ONE via `add_secondary` and initial reconnaissance findings strictly ONE BY ONE via `add_finding` (batch addition is disallowed to prevent generation lag and token cutoff). Before presenting the plan, all declared planned secondaries must be registered. Once the draft is complete, call `action: 'present_plan'` to transition the tree to `presented_awaiting_confirmation`. Draft planning actions (`add_secondary` in pending, `add_finding`, `update_dod`) are automatically permitted during planning and review without requiring 'draft: true'. MANDATORY USER PLAN APPROVAL GUARD: You CANNOT start working on any objective (setting status to 'exploring' or 'resolved') or modify project files until the user explicitly reviews and approves the plan. The internal state 'approvedByUser' strictly guards execution: present the plan and wait for the user's explicit confirmation before beginning execution. MANDATORY PLAN PRESENTATION & STRICT ANTI-SIMULATION DIRECTIVE: Whenever the user requests planning ('presentame un plan', 'haz un plan', 'diseña un plan', etc.) or whenever a task requires planning/implementation, you MUST strictly use `objective_manage` to construct and present the plan. You MUST NEVER simulate informal proposals in markdown text, present numbered phase lists in chat, or ask conversational questions like '¿Deseas que implemente?' or '¿Cómo deseas proceder?'. Doing so bypasses the protocol and prevents OpenCode's native UI dialog (`DialogPlanApproval`) from appearing. Present the plan clearly in your response, pause your turn, and wait for confirmation via the native modal dialog (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves or adjusts, call `action: 'resume_plan'` with their instructions to begin execution.",
-  "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: whenever you discover new secondary or tertiary objectives, WHENEVER the user intervenes and changes or corrects direction, scope, or approach, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
+  "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: whenever you discover new secondary or tertiary objectives, WHENEVER the user intervenes to refine or correct direction, scope, or approach of the CURRENT topic, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
+  "4b. Unrelated Topic Pivot & Mandatory New Objective Tree: If the user introduces a new request, task, or topic that is NOT causally or functionally related to the current Primary Objective, or if the previous Primary Objective was already resolved/completed, you MUST NOT append it as a Secondary Objective to the old tree. Instead, you MUST strictly initiate a clean, new objective tree by calling `objective_manage` with `action: 'set_primary'`, defining the new topic, its own Definition of Done, and declaring its own planned secondary count. Creating a frankenstein tree by piling unrelated tasks under a previous objective is strictly prohibited.",
   "5. Subtasks / Level-3 Decomposition (Cardinality Note): A Secondary Objective may be decomposed into Level-3 subtasks (TO-N) ONLY when it proves too large to execute as a single unit (broad scope, multiple independent steps, or high context cost). CARDINALITY RULE: 'Tertiary' refers strictly to the 3rd hierarchical depth level (PO [1] -> SO [2] -> TO [3]), NEVER a fixed quantity of 3. You may and should create as many subtasks (`SO-N-T1`, `SO-N-T2` ... `SO-N-TN`, e.g. 2, 4, 7, 10...) as needed so each fits safely within the subagent budget. Do NOT pre-create subtasks for small secondaries. They are FIRST-CLASS children of their parent SO: register them with `objective_manage` (`action: 'add_tertiary'`, passing the parent SO id in `id`, e.g. `SO-2`, plus title and rationale) and manage them with `action: 'update_tertiary'` using each tertiary's own id (e.g. `SO-2-T1`). They inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy. CLOSURE RULE (NO SHORTCUTS): a secondary objective can only be resolved when ALL of its tertiary objectives are closed (resolved/discarded/cancelled), and the Primary Objective can only be completed when EVERY secondary objective — including all of their tertiary objectives — is closed; the tool rejects both shortcuts.",
   "6. Mandatory Documentation Update Objective: When ANY Primary or Secondary objective makes relevant modifications to the repository (changes affecting public behavior, APIs, configuration schemas, user-facing features, or plugin/SDK surfaces), you MUST create a dedicated Secondary Objective that updates the affected documentation (READMEs, API docs, specification/methodology documents, changelogs) and resolve it with concrete proof. The Primary Objective MUST NOT be closed while relevant repository modifications remain undocumented. The tool auto-creates this documentation objective when it detects public-surface file changes and no documentation objective exists.",
   "7. Enforce 'Done means Done': NEVER conclude or mark any objective resolved without executing real commands and attaching concrete proof (`validationProof`).",
@@ -269,6 +273,7 @@ export function clearSessionObjectives(sessionID: string) {
   antiLoopWarnings.delete(sessionID)
   actionWarnings.delete(sessionID)
   actionsWithoutObjectiveSync.delete(sessionID)
+  postCloseSecondaryRemindedSessions.delete(sessionID)
 }
 
 export function getObjectives(sessionID: string): PrimaryObjective | undefined {
@@ -353,29 +358,33 @@ export function setPrimaryObjective(
   const resolvedCfg = getObjectivesConfig(sessionID)
   const effectiveUnattended = extra?.unattended ?? existing?.unattended ?? (resolvedCfg.unattended ? true : undefined)
   const now = Date.now()
+  const isNewTopic = !existing || (existing.title.trim().toLowerCase() !== title.trim().toLowerCase())
+  if (isNewTopic) {
+    postCloseSecondaryRemindedSessions.delete(sessionID)
+  }
   const po: PrimaryObjective = {
     title: title.trim(),
     status: "exploring",
     definitionOfDone: definitionOfDone.trim(),
-    secondaries: initialSecondaries !== undefined ? initialSecondaries : (existing?.secondaries ?? []),
+    secondaries: initialSecondaries !== undefined ? initialSecondaries : isNewTopic ? [] : (existing?.secondaries ?? []),
     validationProof: undefined,
-    topicKey: extra?.topicKey?.trim() || existing?.topicKey,
-    dod: extra?.dod ?? existing?.dod,
-    findings: existing?.findings ?? [],
-    options: existing?.options ?? [],
-    fingerprints: existing?.fingerprints ?? [],
-    phase: existing?.phase,
+    topicKey: extra?.topicKey?.trim() || (!isNewTopic ? existing?.topicKey : undefined),
+    dod: extra?.dod ?? (!isNewTopic ? existing?.dod : undefined),
+    findings: isNewTopic ? [] : (existing?.findings ?? []),
+    options: isNewTopic ? [] : (existing?.options ?? []),
+    fingerprints: isNewTopic ? [] : (existing?.fingerprints ?? []),
+    phase: isNewTopic ? undefined : existing?.phase,
     unattended: effectiveUnattended,
     config: extra?.config
       ? { ...(existing?.config ?? {}), ...normalizeObjectivesConfigInput(extra.config) }
       : existing?.config,
-    plannedSecondaryCount: extra?.plannedSecondaryCount ?? existing?.plannedSecondaryCount,
+    plannedSecondaryCount: extra?.plannedSecondaryCount,
     approvedByUser:
       extra?.approvedByUser ??
-      existing?.approvedByUser ??
+      (!isNewTopic ? existing?.approvedByUser : undefined) ??
       (effectiveUnattended || isTestEnvironment() ? true : false),
-    touchedFiles: existing?.touchedFiles ?? [],
-    createdAt: existing?.createdAt ?? now,
+    touchedFiles: isNewTopic ? [] : (existing?.touchedFiles ?? []),
+    createdAt: !isNewTopic && existing ? existing.createdAt : now,
     updatedAt: now,
   }
   sessionObjectives.set(sessionID, po)
@@ -3765,6 +3774,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
+    const wasResolvedBeforeAdd = po?.status === "resolved"
     const isDraftPlan = po?.status === "presented_awaiting_confirmation"
     const so = addSecondaryObjective(sessionID, sTitle || sRationale, sRationale || sTitle, input.id?.trim(), {
       affectedResources: normalizeAffectedResources(input.affectedResources),
@@ -3790,9 +3800,16 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     const tree = treeOf(sessionID)
     const compactTree = compactTreeOf(sessionID, { focusSOId: so.id })
     const current = sessionObjectives.get(sessionID)
-    const reopenNotice = current?.status === "exploring"
+    let reopenNotice = current?.status === "exploring"
       ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective is EXPLORING because new/open sub-objectives exist."
       : ""
+
+    // Recordatorio mecánico para el agente si agregó un SO a un árbol que ya estaba cerrado:
+    // Se muestra solo una vez cuando el PO estaba previamente resuelto.
+    if (wasResolvedBeforeAdd && !postCloseSecondaryRemindedSessions.has(sessionID)) {
+      postCloseSecondaryRemindedSessions.add(sessionID)
+      reopenNotice += "\n\n💡 [Protocol Reminder - Topic Pivot Check]: El objetivo primario previo ya había sido completado y se ha reabierto automáticamente al agregar este objetivo secundario. Si la petición actual del usuario es un tema nuevo o NO tiene relación causal directa con el objetivo anterior, NO acumules subtareas en este árbol: debes crear un nuevo árbol de objetivos independiente llamando a objective_manage con action: 'set_primary', definiendo un nuevo título, Definition of Done y plannedSecondaryCount."
+    }
     return {
       output: { success: true, message: `Added secondary objective ${so.id}.${reopenNotice}`, tree },
       content: compactTree,
