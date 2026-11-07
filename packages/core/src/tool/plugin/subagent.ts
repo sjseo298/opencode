@@ -13,6 +13,8 @@ import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentCompletion } from "../../session/subagent-completion.js"
 import { SubagentJob } from "../../session/subagent-job.js"
+import { LlamaCppKV } from "../../session/llamacpp-kv.js"
+import { getObjectivesConfig } from "../../plugin/builtin/objectives-model.js"
 
 export const name = "subagent"
 
@@ -208,7 +210,16 @@ export const Plugin = {
                 return yield* new ToolFailure({
                   message: `Session ${existing.id} is not a child of the current session`,
                 })
-              const override = input.model === undefined ? undefined : yield* resolveModel(input.model)
+              const objectivesCfg = getObjectivesConfig(context.sessionID)
+              const configuredSubagentModel =
+                objectivesCfg.subagentModel !== undefined
+                  ? yield* resolveModel(objectivesCfg.subagentModel)
+                  : undefined
+
+              const override =
+                input.model === undefined
+                  ? configuredSubagentModel
+                  : yield* resolveModel(input.model)
               // Continuing with a different agent switches the child, mirroring create semantics
               // where an explicit model wins over the agent's configured model, which wins over the inherited one.
               if (existing !== undefined) {
@@ -274,11 +285,14 @@ export const Plugin = {
                 return backgroundResult(child.id)
               }
 
-              const result = yield* jobs.block({ id: child.id, sessionID: context.sessionID }).pipe(
-                Effect.onInterrupt(() =>
-                  Effect.all([sessions.interrupt(child.id), jobs.cancel(child.id)], {
-                    discard: true,
-                  }),
+              const result = yield* LlamaCppKV.withOffloadedSlot(
+                context.sessionID,
+                jobs.block({ id: child.id, sessionID: context.sessionID }).pipe(
+                  Effect.onInterrupt(() =>
+                    Effect.all([sessions.interrupt(child.id), jobs.cancel(child.id)], {
+                      discard: true,
+                    }),
+                  ),
                 ),
               )
               if (result?.type === "backgrounded") {

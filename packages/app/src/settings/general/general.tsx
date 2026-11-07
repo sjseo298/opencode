@@ -449,6 +449,18 @@ export const ObjectivesProtocolSection: Component<{
             />
           </div>
         </SettingsRow>
+
+        <SettingsRow
+          title="KV cache offloading a disco (llama.cpp)"
+          description="Vuelca la memoria KV cache a disco y limpia el slot al despachar subagentes cuando parallel=2 para evitar OOM de VRAM y re-tokenizaciones lentas. Valor por defecto: activado (true)."
+        >
+          <div data-action="settings-objectives-llamacpp-kv-offload">
+            <Switch
+              checked={props.controller.current().llamacpp_kv_offload}
+              onChange={(checked) => props.controller.update("llamacpp_kv_offload", checked)}
+            />
+          </div>
+        </SettingsRow>
       </SettingsList>
     </section>
   )

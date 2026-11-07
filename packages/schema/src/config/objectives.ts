@@ -64,6 +64,18 @@ export class Info extends Schema.Class<Info>("Config.Objectives")({
     description:
       "Whether unattended mode is enabled by default so presented plans auto-approve without freezing in presented_awaiting_confirmation (default: false).",
   }),
+  llamacpp_kv_offload: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Whether llama.cpp KV cache offload to disk is enabled when running with parallel=2 to allow safe subagent execution without VRAM exhaustion (default: true).",
+  }),
+  llamacpp_slot_save_path: Schema.String.pipe(optional).annotate({
+    description:
+      "Optional directory path where llama-server saves and restores slot KV cache snapshots. If omitted or empty, llama-server uses its default slot_save_path or system temp.",
+  }),
+  subagent_model: Schema.String.pipe(optional).annotate({
+    description:
+      "Model identifier override to use when spawning child subagents. If omitted or empty, subagents default to the parent session's model.",
+  }),
 }) {}
 
 export const Patch = Schema.Struct({
@@ -81,5 +93,8 @@ export const Patch = Schema.Struct({
   min_subagent_budget: Schema.NullOr(PositiveInt).pipe(optional),
   embeddings_enabled: Schema.NullOr(Schema.Boolean).pipe(optional),
   unattended: Schema.NullOr(Schema.Boolean).pipe(optional),
+  llamacpp_kv_offload: Schema.NullOr(Schema.Boolean).pipe(optional),
+  llamacpp_slot_save_path: Schema.NullOr(Schema.String).pipe(optional),
+  subagent_model: Schema.NullOr(Schema.String).pipe(optional),
 }).annotate({ identifier: "Config.Objectives.Patch" })
 export type Patch = typeof Patch.Type

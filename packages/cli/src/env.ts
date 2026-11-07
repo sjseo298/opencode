@@ -77,6 +77,9 @@ export function applyObjectivesCliFlags(input: Record<string, unknown>) {
     ["objectivesMinSubagentBudget", "min_subagent_budget"],
     ["objectivesEmbeddings", "embeddings_enabled"],
     ["objectivesUnattended", "unattended"],
+    ["objectivesLlamacppKvOffload", "llamacpp_kv_offload"],
+    ["objectivesLlamacppSlotSavePath", "llamacpp_slot_save_path"],
+    ["objectivesSubagentModel", "subagent_model"],
   ]
 
   for (const [inputKey, configKey] of flagMap) {

@@ -573,6 +573,17 @@ export const settings: Setting[] = [
     labels: ["off (def)", "on"],
     keywords: ["objectives", "objetivos", "unattended", "auto-approve"],
   },
+  {
+    title: "KV cache offloading a disco (llama.cpp)",
+    category: "Protocolo de Objetivos",
+    path: ["objectives", "llamacpp_kv_offload"],
+    description:
+      "Vuelca la KV cache a disco y limpia el slot al despachar subagentes cuando parallel=2 para evitar OOM de VRAM (por defecto: on)",
+    default: true,
+    values: [false, true],
+    labels: ["off", "on (def)"],
+    keywords: ["objectives", "objetivos", "llamacpp", "kv", "offload", "subagent", "parallel"],
+  },
 ]
 
 export function settingID(setting: Setting) {

@@ -344,6 +344,9 @@ export type ObjectivesConfigValues = {
   min_subagent_budget: number
   embeddings_enabled: boolean
   unattended: boolean
+  llamacpp_kv_offload: boolean
+  llamacpp_slot_save_path?: string
+  subagent_model?: string
 }
 
 export const DEFAULT_OBJECTIVES_UI_CONFIG: ObjectivesConfigValues = {
@@ -361,6 +364,7 @@ export const DEFAULT_OBJECTIVES_UI_CONFIG: ObjectivesConfigValues = {
   min_subagent_budget: 16000,
   embeddings_enabled: true,
   unattended: false,
+  llamacpp_kv_offload: true,
 }
 
 export function createServerObjectivesController(server: Accessor<ServerConnection.Any | undefined>) {

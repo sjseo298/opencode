@@ -495,10 +495,14 @@ describe("hierarchical-objectives plugin", () => {
           OPENCODE_OBJECTIVES_CLI_OVERRIDES: JSON.stringify({
             max_actions_without_sync: 20,
             finding_min_chars: 8,
+            llamacpp_kv_offload: false,
+            subagent_model: "custom-provider/submodel",
           }),
         })
         expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(20)
         expect(getObjectivesConfig(sid).findingMinChars).toBe(8)
+        expect(getObjectivesConfig(sid).llamacppKvOffload).toBe(false)
+        expect(getObjectivesConfig(sid).subagentModel).toBe("custom-provider/submodel")
       } finally {
         setGlobalObjectivesConfig(undefined)
         setSessionObjectivesConfig(sid, undefined)

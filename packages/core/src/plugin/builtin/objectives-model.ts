@@ -145,6 +145,12 @@ export interface ObjectivesProtocolConfig {
   embeddingsEnabled: boolean
   /** Whether unattended mode is enabled by default so presented plans auto-approve without freezing (default: false) */
   unattended: boolean
+  /** Whether llama.cpp KV cache offload to disk is enabled when parallel=2 (default: true) */
+  llamacppKvOffload: boolean
+  /** Optional directory path where llama-server saves and restores slot KV cache snapshots */
+  llamacppSlotSavePath?: string
+  /** Model identifier override to use when spawning child subagents */
+  subagentModel?: string
 }
 
 export const DEFAULT_OBJECTIVES_CONFIG: Readonly<ObjectivesProtocolConfig> = {
@@ -162,6 +168,7 @@ export const DEFAULT_OBJECTIVES_CONFIG: Readonly<ObjectivesProtocolConfig> = {
   minSubagentBudget: 16_000,
   embeddingsEnabled: true,
   unattended: false,
+  llamacppKvOffload: true,
 }
 
 type ObjectivesConfigStore = {
@@ -281,6 +288,21 @@ export function normalizeObjectivesConfigInput(raw: unknown): Partial<Objectives
   const unatt = toBool(r.unattended)
   if (unatt !== undefined) out.unattended = unatt
 
+  const kvOffload = toBool(r.llamacppKvOffload ?? r.llamacpp_kv_offload)
+  if (kvOffload !== undefined) out.llamacppKvOffload = kvOffload
+
+  const slotSavePath = r.llamacppSlotSavePath ?? r.llamacpp_slot_save_path
+  if (typeof slotSavePath === "string") {
+    const trimmed = slotSavePath.trim()
+    out.llamacppSlotSavePath = trimmed.length > 0 ? trimmed : undefined
+  }
+
+  const subModel = r.subagentModel ?? r.subagent_model
+  if (typeof subModel === "string") {
+    const trimmed = subModel.trim()
+    out.subagentModel = trimmed.length > 0 ? trimmed : undefined
+  }
+
   return out
 }
 
@@ -317,6 +339,9 @@ export function parseObjectivesConfigFromEnv(
     minSubagentBudget: env.OPENCODE_OBJECTIVES_MIN_SUBAGENT_BUDGET,
     embeddingsEnabled: env.OPENCODE_OBJECTIVES_EMBEDDINGS,
     unattended: env.OPENCODE_OBJECTIVES_UNATTENDED ?? env.OPENCODE_UNATTENDED,
+    llamacppKvOffload: env.OPENCODE_OBJECTIVES_LLAMACPP_KV_OFFLOAD ?? env.OPENCODE_LLAMACPP_KV_OFFLOAD,
+    llamacppSlotSavePath: env.OPENCODE_OBJECTIVES_LLAMACPP_SLOT_SAVE_PATH ?? env.OPENCODE_LLAMACPP_SLOT_SAVE_PATH,
+    subagentModel: env.OPENCODE_OBJECTIVES_SUBAGENT_MODEL ?? env.OPENCODE_SUBAGENT_MODEL,
   })
 
   return { ...merged, ...fromVars }

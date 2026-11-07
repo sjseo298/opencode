@@ -163,6 +163,24 @@ const ObjectivesParams = {
     ),
     Flag.optional,
   ),
+  objectivesLlamacppKvOffload: Flag.Boolean("objectives-llamacpp-kv-offload").pipe(
+    Flag.withDescription(
+      "Enable or disable llama.cpp KV cache offload to disk on parallel=2 (default: true; disable with --no-objectives-llamacpp-kv-offload)",
+    ),
+    Flag.optional,
+  ),
+  objectivesLlamacppSlotSavePath: Flag.String("objectives-llamacpp-slot-save-path").pipe(
+    Flag.withDescription(
+      "Optional directory path for llama-server slot KV cache save/restore snapshots",
+    ),
+    Flag.optional,
+  ),
+  objectivesSubagentModel: Flag.String("objectives-subagent-model").pipe(
+    Flag.withDescription(
+      "Model identifier override for child subagents (e.g. provider/model)",
+    ),
+    Flag.optional,
+  ),
 }
 
 const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : "opencode", {

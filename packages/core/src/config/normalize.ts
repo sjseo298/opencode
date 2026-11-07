@@ -445,6 +445,9 @@ const objectivesCamelAliases: Readonly<Record<string, keyof typeof ConfigObjecti
   subagentPreCompactionThreshold: "subagent_pre_compaction_threshold",
   minSubagentBudget: "min_subagent_budget",
   embeddingsEnabled: "embeddings_enabled",
+  llamacppKvOffload: "llamacpp_kv_offload",
+  llamacppSlotSavePath: "llamacpp_slot_save_path",
+  subagentModel: "subagent_model",
 }
 
 function normalizeObjectives(
