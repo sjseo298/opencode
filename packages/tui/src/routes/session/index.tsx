@@ -1123,21 +1123,52 @@ export function Session(props: {
       },
     },
     {
-      title: "Review pending plan",
+      title: "Review active or pending plan",
       id: "session.plan.review",
       group: "Plan",
       slash: { name: "plan" },
       disabled: () => {
         const obj: any = session()?.metadata?.objectives
-        return obj?.status !== "presented_awaiting_confirmation"
+        return !obj || !obj.title
       },
       run: () => {
         const objectives: any = session()?.metadata?.objectives
-        if (objectives?.status === "presented_awaiting_confirmation") {
+        if (objectives?.title) {
           dialog.replace(() => <DialogPlanApproval sessionID={route.sessionID} po={objectives} />)
         } else {
-          toast.show({ message: "No hay ningún plan pendiente de aprobación.", variant: "info", duration: 3000 })
+          toast.show({ message: "No hay ningún plan de objetivos activo.", variant: "info", duration: 3000 })
         }
+      },
+    },
+    {
+      title: "Revoke plan approval / Pause execution",
+      id: "session.plan.unapprove",
+      group: "Plan",
+      slash: { name: "unapprove" },
+      disabled: () => {
+        const obj: any = session()?.metadata?.objectives
+        return !obj?.approvedByUser && obj?.status !== "exploring"
+      },
+      run: async () => {
+        const objectives: any = session()?.metadata?.objectives
+        if (!objectives) {
+          toast.show({ message: "No hay plan activo para invalidar.", variant: "warning", duration: 3000 })
+          return
+        }
+        await client.api.session
+          .prompt({
+            sessionID: route.sessionID,
+            text: "invalidar aprobacion",
+            metadata: { planRevocation: true },
+          })
+          .catch((err) => {
+            toast.show({ message: errorMessage(err), variant: "error", duration: 4000 })
+          })
+        toast.show({
+          message: "🛑 Aprobación del plan invalidada. La ejecución ha sido detenida.",
+          variant: "warning",
+          duration: 4000,
+        })
       },
     },
     {

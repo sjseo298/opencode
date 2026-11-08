@@ -317,6 +317,13 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                   </text>
                 </box>
               </Show>
+              <Show when={po().status === "exploring"}>
+                <box paddingTop={0} paddingBottom={0}>
+                  <text fg={theme.text.muted} wrapMode="word">
+                    <i>/plan</i> para ver el plan · <i>/unapprove</i> para pausar
+                  </text>
+                </box>
+              </Show>
             </box>
 
             {/* Secondary Objectives List */}

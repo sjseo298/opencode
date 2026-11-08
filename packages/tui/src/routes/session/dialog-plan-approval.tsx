@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useData } from "../../context/data"
@@ -11,7 +11,7 @@ import { DialogHeader, DialogLayout, useDialog } from "../../ui/dialog"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 
-export type PlanApprovalAction = "fresh_session" | "same_session" | "refine_plan"
+export type PlanApprovalAction = "fresh_session" | "same_session" | "refine_plan" | "revoke_approval" | "close"
 
 function formatTreeSummary(po: any): string {
   if (!po || typeof po.title !== "string") return ""
@@ -55,6 +55,15 @@ export function DialogPlanApproval(props: {
   const dimensions = useTerminalDimensions()
   const [pending, setPending] = createSignal(false)
 
+  onMount(() => {
+    dialog.setSize("xlarge")
+    dialog.setCentered(true)
+  })
+  onCleanup(() => {
+    dialog.setSize("medium")
+    dialog.setCentered(false)
+  })
+
   const [store, setStore] = createStore({
     activeIndex: 0,
   })
@@ -64,6 +73,10 @@ export function DialogPlanApproval(props: {
     const session = data.session.get(props.sessionID)
     return session?.metadata?.objectives
   })
+
+  const isAlreadyApproved = createMemo(() =>
+    Boolean(po()?.approvedByUser && po()?.status !== "presented_awaiting_confirmation")
+  )
 
   const contextMetrics = createMemo(() => po()?.contextMetrics)
 
@@ -75,10 +88,34 @@ export function DialogPlanApproval(props: {
 
   const planHeight = createMemo(() => {
     const totalHeight = dimensions()?.height ?? 35
-    return Math.max(8, Math.min(18, totalHeight - 19))
+    // Expand height significantly for comfortable reading on larger screens
+    return Math.max(14, Math.min(36, totalHeight - 13))
   })
 
   const options = createMemo<{ action: PlanApprovalAction; key: string; title: string; description: string }[]>(() => {
+    if (isAlreadyApproved()) {
+      return [
+        {
+          action: "revoke_approval",
+          key: "1",
+          title: "🛑 Invalidar Aprobación / Pausar Plan",
+          description: "Congela el plan y detiene la ejecución inmediatamente para hacer ajustes o frenar al agente.",
+        },
+        {
+          action: "refine_plan",
+          key: "2",
+          title: "✏️ Solicitar Ajustes / Refinar el Plan",
+          description: "Pasa el plan a modo borrador para enviar correcciones al agente sin ejecutar código.",
+        },
+        {
+          action: "close",
+          key: "3",
+          title: "↩️ Cerrar Diálogo y Seguir Ejecutando",
+          description: "Cierra esta ventana y permite que la ejecución continúe.",
+        },
+      ]
+    }
+
     const cm = contextMetrics()
     const isRecommended = Boolean(cm?.recommendFreshSession)
 
@@ -111,6 +148,26 @@ export function DialogPlanApproval(props: {
     setPending(true)
 
     const currentPo = po()
+
+    if (choice === "close") {
+      dialog.clear()
+      return
+    }
+
+    if (choice === "revoke_approval") {
+      dialog.clear()
+      await client.api.session
+        .prompt({
+          sessionID: props.sessionID,
+          text: "invalidar aprobacion",
+          metadata: { planRevocation: true },
+        })
+        .catch((err) => {
+          toast.show({ message: errorMessage(err), variant: "error", duration: 5000 })
+        })
+      toast.show({ message: "🛑 Aprobación invalidada. Ejecución detenida.", variant: "warning", duration: 4000 })
+      return
+    }
 
     if (choice === "refine_plan") {
       dialog.clear()
@@ -235,27 +292,38 @@ export function DialogPlanApproval(props: {
         bind: "1",
         title: "Select option 1",
         group: "Dialog",
-        run: () => handleSelect("fresh_session"),
+        run: () => {
+          const opt = options()[0]
+          if (opt) handleSelect(opt.action)
+        },
       },
       {
         bind: "2",
         title: "Select option 2",
         group: "Dialog",
-        run: () => handleSelect("same_session"),
+        run: () => {
+          const opt = options()[1]
+          if (opt) handleSelect(opt.action)
+        },
       },
       {
         bind: "3",
         title: "Select option 3",
         group: "Dialog",
-        run: () => handleSelect("refine_plan"),
+        run: () => {
+          const opt = options()[2]
+          if (opt) handleSelect(opt.action)
+        },
       },
       {
         bind: "escape",
-        title: "Cancel / Refine",
+        title: "Cancel / Close",
         group: "Dialog",
         run: () => {
           dialog.clear()
-          props.onRefine?.()
+          if (!isAlreadyApproved()) {
+            props.onRefine?.()
+          }
         },
       },
     ],
@@ -268,10 +336,12 @@ export function DialogPlanApproval(props: {
     <DialogLayout
       header={
         <DialogHeader
-          title="📋 Plan de Trabajo - Aprobación Requerida"
+          title={isAlreadyApproved() ? "📋 Plan de Trabajo - Ejecución Activa" : "📋 Plan de Trabajo - Aprobación Requerida"}
           onClose={() => {
             dialog.clear()
-            props.onRefine?.()
+            if (!isAlreadyApproved()) {
+              props.onRefine?.()
+            }
           }}
         />
       }

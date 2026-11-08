@@ -4408,6 +4408,62 @@ describe("hierarchical-objectives plugin", () => {
       // Now triggerToolBefore does not throw
       await expect(triggerToolBefore("read", { path: "file.txt" }, sid)).resolves.toBeUndefined()
     })
+
+    test("user can revoke plan approval via action or prompt, returning tree to frozen state and pausing execution", async () => {
+      const { getRegisteredTool, triggerPromptHook, triggerToolBefore } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("revoke-approval-test")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Revocation Test PO",
+          definitionOfDone: "Verify revocation",
+          plannedSecondaryCount: 1,
+        },
+        { sessionID: sid },
+      )
+      await tool.execute({ action: "add_secondary", id: "SO-1", title: "Task 1", rationale: "Why 1" }, { sessionID: sid })
+      await tool.execute({ action: "present_plan" }, { sessionID: sid })
+
+      // User approves plan
+      await triggerPromptHook(sid, "Plan aprobado explícitamente por el usuario.", { planApproval: true })
+      expect(getObjectives(sid)!.approvedByUser).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
+
+      // 1. User revokes approval via prompt (simulating /unapprove or chat text)
+      await triggerPromptHook(sid, "invalidar aprobacion", { planRevocation: true })
+      const po = getObjectives(sid)!
+      expect(po.approvedByUser).toBe(false)
+      expect(po.status).toBe("presented_awaiting_confirmation")
+      expect(po.phase?.paused).toBe(true)
+
+      // In interactive mode, tools are blocked again while frozen
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        await expect(triggerToolBefore("shell", { command: "ls" }, sid)).rejects.toThrow(
+          "🛑 [TURNO DETENIDO - PLAN EN ESPERA DE APROBACIÓN]",
+        )
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
+
+      // 2. User re-approves
+      await triggerPromptHook(sid, "aprobado", { planApproval: true })
+      expect(getObjectives(sid)!.approvedByUser).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
+
+      // 3. Revoke via tool action 'revoke_approval'
+      const revokeRes = await tool.execute({ action: "revoke_approval", reason: "User requested pause" }, { sessionID: sid })
+      expect(revokeRes.output.success).toBe(true)
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+    })
   })
 
   async function setupPluginInstanceLocal() {

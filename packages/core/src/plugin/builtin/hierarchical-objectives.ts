@@ -1765,6 +1765,25 @@ export function approvePlan(sessionID: string, note?: string): { success: boolea
   return resumePlan(sessionID, note)
 }
 
+export function revokePlanApproval(
+  sessionID: string,
+  reason?: string,
+): { success: boolean; error?: string; po?: PrimaryObjective } {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+  const now = Date.now()
+  po.approvedByUser = false
+  po.status = "presented_awaiting_confirmation"
+  authenticatedApprovalSessions.delete(sessionID)
+  pendingPlanApprovalSessions.add(sessionID)
+  po.phase = { ...po.phase, paused: true, reason: reason?.trim() || "Aprobación invalidada por el usuario" }
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+  return { success: true, po }
+}
+
 export function createPlanHandoff(
   sessionID: string,
   targetSessionID?: string,
@@ -2726,6 +2745,8 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("present_plan"),
   Schema.Literal("resume_plan"),
   Schema.Literal("approve_plan"),
+  Schema.Literal("revoke_approval"),
+  Schema.Literal("unapprove_plan"),
   Schema.Literal("handoff_plan"),
   Schema.Literal("checkpoint"),
   Schema.Literal("audit"),
@@ -4624,6 +4645,16 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
   }
 
+  if (rawAction === "revoke_approval" || rawAction === "unapprove_plan") {
+    const revoked = revokePlanApproval(sessionID, input.reason || input.note)
+    if (!revoked.success) {
+      return { output: { success: false, message: revoked.error || "Failed to revoke approval.", tree: "" }, content: revoked.error || "Failed to revoke approval." }
+    }
+    const tree = treeOf(sessionID)
+    const message = "Plan approval revoked by user. The objective tree is FROZEN (status: presented_awaiting_confirmation). Execution is paused."
+    return { output: { success: true, message, tree }, content: tree }
+  }
+
   if (rawAction === "checkpoint") {
     const checkpoint = makeCheckpoint(sessionID, input.note)
     if (!checkpoint.success) {
@@ -4755,6 +4786,15 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         if (!po) return
 
         const promptText = typeof event?.text === "string" ? event.text.trim() : ""
+        const isExplicitRevocationMetadata = Boolean(event?.metadata?.planRevocation)
+        const isRevocationText =
+          /^(invalidar(\s+la)?\s+aprobaci[oó]n|desaprobar(\s+el)?\s+plan|revocar(\s+la)?\s+aprobaci[oó]n|unapprove|revoke\s+approval)\b/i.test(promptText)
+
+        if (isExplicitRevocationMetadata || isRevocationText) {
+          revokePlanApproval(sessionID, promptText || "Aprobación invalidada por el usuario")
+          return
+        }
+
         const isExplicitApprovalMetadata = Boolean(event?.metadata?.planApproval)
         const isCanonicalApprovalText =
           promptText.includes("Plan aprobado explícitamente por el usuario") ||
