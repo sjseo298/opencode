@@ -3490,7 +3490,7 @@ describe("hierarchical-objectives plugin", () => {
       )
       expect(step1.output.success).toBe(true)
       expect(step1.output.message).toContain("⚠️ [Protocol Notice - Incremental Plan Construction]")
-      expect(getObjectives(sid)!.status).toBe("exploring") // Not frozen prematurely!
+      expect(getObjectives(sid)!.status).toBe("investigating") // Investigating stage before plan presentation!
 
       // Step 2: Add SO-1 incrementally
       const step2 = await tool.execute(
@@ -3504,7 +3504,7 @@ describe("hierarchical-objectives plugin", () => {
         { sessionID: sid },
       )
       expect(step2.output.success).toBe(true)
-      expect(getObjectives(sid)!.status).toBe("exploring")
+      expect(getObjectives(sid)!.status).toBe("investigating")
 
       // Step 3: Add SO-2 incrementally
       const step3 = await tool.execute(
@@ -4079,6 +4079,204 @@ describe("hierarchical-objectives plugin", () => {
     })
   })
 
+  describe("Formal Investigating Stage and Secure Plan Approval Guards", () => {
+    test("initializes in investigating stage with approvedByUser: false when plannedSecondaryCount is declared", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("investigating-init")
+
+      const res = await tool.execute(
+        {
+          action: "set_primary",
+          title: "Architecture Refactoring",
+          definitionOfDone: "Zero coupling achieved",
+          plannedSecondaryCount: 2,
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.status).toBe("investigating")
+      expect(po.approvedByUser).toBe(false)
+      expect(res.output.tree).toContain("Primary Objective [INVESTIGATING]")
+    })
+
+    test("in investigating stage: findings and draft secondaries succeed, while execution updates fail with plan presentation/approval guard", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("investigating-actions")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Investigation Workflow Test",
+          definitionOfDone: "All findings recorded and plan presented",
+          plannedSecondaryCount: 2,
+        },
+        { sessionID: sid },
+      )
+
+      // 1. Adding epistemic finding during investigating stage succeeds
+      const findingRes = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Legacy module uses global singleton",
+          result: "Global object creates state leak across sessions",
+          nextAction: "Refactor singleton into instance parameter",
+          evidence: "packages/core/src/index.ts:42",
+          delegation: { mode: "main", justification: "Identified via static analysis" },
+        },
+        { sessionID: sid },
+      )
+      expect(findingRes.output.success).toBe(true)
+      expect(getObjectives(sid)!.findings).toHaveLength(1)
+
+      // 2. Adding draft secondary in pending status succeeds
+      const addSoRes = await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-1",
+          title: "Decouple singleton",
+          rationale: "Required to eliminate leaks",
+          status: "pending",
+          delegation: { mode: "main", justification: "Local refactor" },
+        },
+        { sessionID: sid },
+      )
+      expect(addSoRes.output.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("investigating")
+
+      // 3. Attempting to update SO-1 to 'exploring' before plan approval fails
+      const exploreFail = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Premature execution" },
+        },
+        { sessionID: sid },
+      )
+      expect(exploreFail.output.success).toBe(false)
+      expect(exploreFail.output.message).toContain("Plan Presentation Required")
+
+      // 4. Attempting to update SO-1 to 'resolved' fails
+      const resolveFail = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "resolved",
+          validationProof: "exit 0",
+        },
+        { sessionID: sid },
+      )
+      expect(resolveFail.output.success).toBe(false)
+
+      // 5. Attempting to update SO-1 to 'blocked' fails
+      const blockFail = await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "blocked",
+          blocker: "Missing permission",
+        },
+        { sessionID: sid },
+      )
+      expect(blockFail.output.success).toBe(false)
+
+      // 6. Attempting complete_primary fails
+      const compFail = await tool.execute(
+        {
+          action: "complete_primary",
+          validationProof: "Done",
+        },
+        { sessionID: sid },
+      )
+      expect(compFail.output.success).toBe(false)
+    })
+
+    test("in presented_awaiting_confirmation: agent cannot auto-resume without authentic user approval", async () => {
+      const { getRegisteredTool, triggerPromptHook } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("secure-approval")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Secure Approval Test",
+          definitionOfDone: "Verify unforgeable approval",
+          plannedSecondaryCount: 1,
+        },
+        { sessionID: sid },
+      )
+
+      await tool.execute(
+        {
+          action: "add_secondary",
+          id: "SO-1",
+          title: "Execute task safely",
+          rationale: "Safety first",
+          delegation: { mode: "main", justification: "Direct execution" },
+        },
+        { sessionID: sid },
+      )
+
+      // Present the plan -> freezes tree in presented_awaiting_confirmation
+      const presentRes = await tool.execute(
+        { action: "present_plan" },
+        { sessionID: sid },
+      )
+      expect(presentRes.output.success).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+
+      // 1. Agent attempts to call resume_plan autonomously in non-test mode -> blocked
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        const agentSpoof = await tool.execute(
+          { action: "resume_plan", note: "User allegedly approved" },
+          { sessionID: sid },
+        )
+        expect(agentSpoof.output.success).toBe(false)
+        expect(agentSpoof.output.message).toContain("Plan Approval Required")
+        expect(getObjectives(sid)!.approvedByUser).toBe(false)
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
+
+      // 2. User sends an arbitrary question ("¿cuándo estará listo?") -> Does NOT approve plan
+      await triggerPromptHook(sid, "¿cuándo estará listo?")
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // 3. User requests refinement ("por favor ajusta el plan") -> returns to investigating
+      await triggerPromptHook(sid, "por favor ajusta el plan para incluir tests")
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+      expect(getObjectives(sid)!.status).toBe("investigating")
+
+      // Present plan again
+      await tool.execute({ action: "present_plan" }, { sessionID: sid })
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // 4. User sends authentic confirmation prompt
+      await triggerPromptHook(sid, "Plan aprobado explícitamente por el usuario. Procede con la ejecución de SO-1.", { planApproval: true })
+      expect(getObjectives(sid)!.approvedByUser).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
+
+      // Now execution can proceed cleanly
+      const exploreRes = await tool.execute(
+        { action: "update_secondary", id: "SO-1", status: "exploring", delegation: { mode: "main", justification: "Execution authorized" } },
+        { sessionID: sid },
+      )
+      expect(exploreRes.output.success).toBe(true)
+    })
+  })
+
   async function setupPluginInstanceLocal() {
     const sessionHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
     const toolHooks: Record<string, ((event: any) => Promise<void> | void)[]> = {}
@@ -4128,6 +4326,11 @@ describe("hierarchical-objectives plugin", () => {
         await h({ tool: toolName, input, sessionID, result })
       }
     }
-    return { sessionHooks, toolHooks, sessionStore, getRegisteredTool: () => registeredTool, triggerToolHook, triggerToolBefore }
+    const triggerPromptHook = async (sessionID: string, text: string, metadata?: any) => {
+      for (const h of sessionHooks["prompt"] ?? []) {
+        await h({ sessionID, text, metadata })
+      }
+    }
+    return { sessionHooks, toolHooks, sessionStore, getRegisteredTool: () => registeredTool, triggerToolHook, triggerToolBefore, triggerPromptHook }
   }
 })

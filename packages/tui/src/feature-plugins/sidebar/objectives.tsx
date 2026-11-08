@@ -38,6 +38,7 @@ export interface SecondaryObjectiveView {
 
 export type PrimaryObjectiveStatus =
   | "pending"
+  | "investigating"
   | "exploring"
   | "resolved"
   | "presented_awaiting_confirmation"
@@ -94,6 +95,7 @@ export function normalizePrimaryObjectiveView(raw: any): PrimaryObjectiveView | 
   if (!raw || typeof raw.title !== "string") return undefined
   let status: PrimaryObjectiveStatus =
     raw.status === "pending" ||
+    raw.status === "investigating" ||
     raw.status === "resolved" ||
     raw.status === "presented_awaiting_confirmation"
       ? raw.status
@@ -115,7 +117,7 @@ export function normalizePrimaryObjectiveView(raw: any): PrimaryObjectiveView | 
   // Auto-cierre de seguridad en la UI:
   // Si todos los objetivos secundarios y terciarios ya están cerrados ('resolved', 'discarded', 'cancelled')
   // el PO no debe permanecer abierto en la barra lateral aunque el agente haya omitido llamar a complete_primary.
-  if (status !== "resolved") {
+  if (status !== "resolved" && status !== "investigating" && status !== "presented_awaiting_confirmation") {
     const allChildrenClosed =
       secondaries.length > 0 &&
       secondaries.every(
@@ -260,7 +262,9 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                   fg={
                     po().status === "resolved"
                       ? theme.text.feedback.success.base
-                      : theme.text.feedback.warning.base
+                      : po().status === "investigating"
+                        ? theme.text.feedback.info.base
+                        : theme.text.feedback.warning.base
                   }
                 >
                   <b>
@@ -268,7 +272,9 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                       ? "[PO ✓]"
                       : po().status === "presented_awaiting_confirmation"
                         ? "[PO ⏸]"
-                        : "[PO]"}
+                        : po().status === "investigating"
+                          ? "[PO 🔍]"
+                          : "[PO]"}
                   </b>
                 </text>
                 <text fg={theme.text.base} wrapMode="word">
@@ -301,6 +307,13 @@ export function SidebarObjectives(props: { context: Plugin.Context; sessionID: s
                 <box paddingTop={0} paddingBottom={0}>
                   <text fg={theme.text.feedback.warning.base} wrapMode="word">
                     <b>⏸ Plan pendiente de aprobación</b> — escribe <i>/plan</i> para abrir el diálogo
+                  </text>
+                </box>
+              </Show>
+              <Show when={po().status === "investigating"}>
+                <box paddingTop={0} paddingBottom={0}>
+                  <text fg={theme.text.feedback.info.base} wrapMode="word">
+                    <b>🔍 Fase de Investigación</b> — explorando codebase y registrando hallazgos
                   </text>
                 </box>
               </Show>

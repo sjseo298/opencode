@@ -38,15 +38,17 @@ The Protocolo de Objetivos is triggered under two conditions:
 >
 > **Read-Only Reconnaissance Permitted (Recon Phase)**: You ARE permitted and strongly encouraged to perform quick, read-only reconnaissance (reading files, directory listings, searching code, checking configs, or delegating a focused scout task to a read-only subagent) BEFORE calling `set_primary`. Gathering structural facts to establish a grounded, accurate objective tree does NOT violate the planning-first rule; only mutating/modifying operations (edits, writes, mutating commands, builds) are prohibited prior to plan creation and approval. Purely read-only analytical/informational queries that modify no repo state may pass `presentPlan: false` or deliver their report directly once verified.
 
-1. **Construct Plan First (Incremental Plan Construction Pattern)**: To avoid oversized monolithic payloads that risk token cutoff (stop reason: length) or long generation hangs in local models, construct the plan incrementally:
-   - Call `objective_manage` (`action: 'set_primary'`, with `title`, `definitionOfDone`, `dodCriteria`, and `plannedSecondaryCount: N` indicating the total number of secondary objectives intended).
+1. **Construct Plan First (Formal Investigating Stage & Incremental Plan Construction Pattern)**: To avoid oversized monolithic payloads that risk token cutoff (stop reason: length) or long generation hangs in local models, construct the plan incrementally within a formal investigation phase:
+   - Call `objective_manage` (`action: 'set_primary'`, with `title`, `definitionOfDone`, `dodCriteria`, and `plannedSecondaryCount: N` declaring the intended count of secondary objectives). The Primary Objective enters the formal status `investigating`.
+   - **Formal `investigating` Stage**: In this stage prior to plan presentation, the agent is fully empowered to research the codebase using read-only tools, register discoveries via `add_finding`, evaluate architectural hypotheses via `add_option`, and declare draft subtasks via `add_secondary` (in `pending` status).
+   - **Execution Blocked in `investigating`**: Transitioning any objective to execution statuses (`exploring`, `resolved`, `blocked`, `discarded`), closing the Primary Objective (`complete_primary`), or modifying project files (`edit`, `write`) is strictly blocked by the protocol until authentic user approval is granted.
    - Register initial secondary objectives strictly ONE BY ONE via `add_secondary` (batch addition is disallowed to prevent generation lag and token cutoff).
    - Register initial reconnaissance discoveries strictly ONE BY ONE via `add_finding` (batch addition is disallowed).
    - Before presenting the plan, all declared planned secondary objectives must be registered (`plannedSecondaryCount` validation).
    - Call `action: 'present_plan'` to freeze the tree in `presented_awaiting_confirmation` and present the substantive plan to the user.
    - *Draft actions tolerance*: Planning draft actions (`add_secondary` in pending status, `add_finding`, `update_dod`) are automatically admitted during planning and review without requiring `draft: true`.
 2. **Mandatory Plan Presentation & Strict Anti-Simulation Directive**:
-   - **Internal User Plan Approval Guard (`approvedByUser`)**: The agent CANNOT begin working on any objective (transitioning any objective to `exploring` or `resolved`) or modifying project files until the user explicitly reviews and approves the plan. The internal flag `approvedByUser` strictly guards execution state and cannot be altered or bypassed by the agent. Attempting to start execution without user approval is deterministically rejected.
+   - **Internal User Plan Approval Guard (`approvedByUser`)**: The agent CANNOT begin working on any objective (transitioning any objective to `exploring` or `resolved`) or modifying project files until the user explicitly reviews and approves the plan. The internal flag `approvedByUser` strictly guards execution state and cannot be altered or bypassed by the agent. Attempting to start execution without user approval is deterministically rejected. The agent cannot self-approve by autonomously invoking `resume_plan` without verified user approval. Furthermore, arbitrary user prompts (questions, refinement requests) do not falsely approve the plan; only genuine confirmation from `DialogPlanApproval` or canonical approval prompts grant execution clearance.
    - **Strict Anti-Simulation Directive**: Whenever the user requests planning ('presentame un plan', 'haz un plan', 'diseña un plan', etc.) or whenever a task requires planning/implementation, you MUST strictly use `objective_manage` to construct and present the plan. You MUST NEVER simulate informal proposals in markdown text, present numbered phase lists in chat, or ask conversational questions like '¿Deseas que implemente?' or '¿Cómo deseas proceder?'. Doing so bypasses the protocol and prevents OpenCode's native UI dialog (`DialogPlanApproval`) from appearing.
    - **Plan Freeze & User Review**: Before executing mutating tasks, you MUST present the plan to the user in their language for confirmation and refinement (using `presentPlan: true` in `set_primary` with complete secondaries, or calling `action: 'present_plan'`). The objective tree FREEZES in status `presented_awaiting_confirmation`. Present the plan clearly in your response, pause your turn, and wait for user approval via the native modal dialog (this paused state is explicitly exempt from the rule against ending turns with unresolved work).
    - **Anti-Redundancy Directive (UI Modal Gating)**: Upon calling `present_plan` or freezing, OpenCode's UI automatically deploys a native modal popup (`DialogPlanApproval`) containing the rendered plan, context diagnostics, and approval actions. The agent MUST NOT simulate text menus in chat (e.g. "How would you like to proceed? 1. Fresh session, 2. Same session..."). Present the plan's substantive content/rationale and yield your turn.
@@ -306,7 +308,12 @@ export type SecondaryObjectiveStatus =
   | "discarded"
   | "cancelled"
 
-export type PrimaryObjectiveStatus = "pending" | "exploring" | "resolved"
+export type PrimaryObjectiveStatus =
+  | "pending"
+  | "investigating"
+  | "presented_awaiting_confirmation"
+  | "exploring"
+  | "resolved"
 
 export interface TertiaryObjective {
   id: string                   // "SO-1-T2" etc. — child of its parent Secondary Objective

@@ -124,6 +124,7 @@ export function DialogPlanApproval(props: {
         .prompt({
           sessionID: props.sessionID,
           text: "Plan aprobado explícitamente por el usuario. Procede con la ejecución de SO-1.",
+          metadata: { planApproval: true },
         })
         .catch((err) => {
           toast.show({ message: errorMessage(err), variant: "error", duration: 5000 })

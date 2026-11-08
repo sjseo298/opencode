@@ -64,6 +64,7 @@ export type SecondaryObjectiveStatus =
 
 export type PrimaryObjectiveStatus =
   | "pending"
+  | "investigating"
   | "exploring"
   | "resolved"
   | "presented_awaiting_confirmation"
@@ -149,6 +150,8 @@ export interface PrimaryObjective {
 export const sessionObjectives: Map<string, PrimaryObjective> =
   ((globalThis as any).__OPENCODE_OBJECTIVES__ ??= new Map<string, PrimaryObjective>())
 export const postCompactionSessions = new Set<string>()
+export const pendingPlanApprovalSessions = new Set<string>()
+export const authenticatedApprovalSessions = new Set<string>()
 
 export const sessionSubagentCache = new Map<string, boolean>()
 
@@ -362,9 +365,16 @@ export function setPrimaryObjective(
   if (isNewTopic) {
     postCloseSecondaryRemindedSessions.delete(sessionID)
   }
+  const hasPlanned = extra?.plannedSecondaryCount !== undefined && extra.plannedSecondaryCount > 0
+
+  const isApproved =
+    extra?.approvedByUser ??
+    (!isNewTopic ? existing?.approvedByUser : undefined) ??
+    (effectiveUnattended || (isTestEnvironment() && !hasPlanned) ? true : false)
+
   const po: PrimaryObjective = {
     title: title.trim(),
-    status: "exploring",
+    status: isApproved ? "exploring" : "investigating",
     definitionOfDone: definitionOfDone.trim(),
     secondaries: initialSecondaries !== undefined ? initialSecondaries : isNewTopic ? [] : (existing?.secondaries ?? []),
     validationProof: undefined,
@@ -379,10 +389,7 @@ export function setPrimaryObjective(
       ? { ...(existing?.config ?? {}), ...normalizeObjectivesConfigInput(extra.config) }
       : existing?.config,
     plannedSecondaryCount: extra?.plannedSecondaryCount,
-    approvedByUser:
-      extra?.approvedByUser ??
-      (!isNewTopic ? existing?.approvedByUser : undefined) ??
-      (effectiveUnattended || isTestEnvironment() ? true : false),
+    approvedByUser: isApproved,
     touchedFiles: isNewTopic ? [] : (existing?.touchedFiles ?? []),
     createdAt: !isNewTopic && existing ? existing.createdAt : now,
     updatedAt: now,
@@ -1697,6 +1704,8 @@ export function presentPlan(
   po.status = "presented_awaiting_confirmation"
   po.planPresentedAt = now
   po.phase = { paused: true, since: now, checkpointAt: po.phase?.checkpointAt, reason: reason?.trim() || undefined }
+  pendingPlanApprovalSessions.add(sessionID)
+  authenticatedApprovalSessions.delete(sessionID)
 
   if (options?.unattended !== undefined) {
     po.unattended = options.unattended
@@ -1734,7 +1743,9 @@ export function resumePlan(sessionID: string, note?: string): { success: boolean
   }
   const now = Date.now()
   po.approvedByUser = true
-  if (po.status === "presented_awaiting_confirmation") po.status = "exploring"
+  authenticatedApprovalSessions.add(sessionID)
+  pendingPlanApprovalSessions.delete(sessionID)
+  if (po.status === "presented_awaiting_confirmation" || po.status === "investigating") po.status = "exploring"
   po.phase = { ...po.phase, paused: false, reason: note?.trim() || po.phase?.reason }
   po.updatedAt = now
   persistSessionObjectives(sessionID)
@@ -3284,6 +3295,7 @@ function checkPlanApprovalGuard(
   po: PrimaryObjective | undefined,
   targetStatus: string | undefined,
   sessionID?: string,
+  action?: string,
 ): string | undefined {
   if (!po) return undefined
   if (po.approvedByUser) return undefined
@@ -3299,12 +3311,38 @@ function checkPlanApprovalGuard(
   }
 
   const norm = String(targetStatus || "").toLowerCase()
-  if (norm === "exploring" || norm === "resolved") {
+  const isExecutionStatus =
+    norm === "exploring" ||
+    norm === "resolved" ||
+    norm === "blocked" ||
+    norm === "discarded" ||
+    norm === "cancelled"
+
+  const isCompleteAction =
+    action === "complete_primary" ||
+    action === "resolve_primary" ||
+    action === "close_primary"
+
+  if (isExecutionStatus || isCompleteAction) {
     if (!po.planPresentedAt && po.status !== "presented_awaiting_confirmation") {
       return PLAN_NOT_PRESENTED_MESSAGE
     }
     return PLAN_NOT_APPROVED_MESSAGE
   }
+
+  // During investigating or awaiting confirmation, secondary or tertiary updates must not leave pending
+  if (
+    (po.status === "investigating" || po.status === "presented_awaiting_confirmation") &&
+    (action === "update_secondary" || action === "update_secondaries" || action === "update_tertiary" || action === "update_tertaries")
+  ) {
+    if (norm && norm !== "pending") {
+      if (!po.planPresentedAt && po.status !== "presented_awaiting_confirmation") {
+        return PLAN_NOT_PRESENTED_MESSAGE
+      }
+      return PLAN_NOT_APPROVED_MESSAGE
+    }
+  }
+
   return undefined
 }
 
@@ -3538,23 +3576,31 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 
     const isTestEnv = isTestEnvironment()
 
+    const hasPlannedSecondaries = plannedCount !== undefined && plannedCount > 0
+    const isPlanning =
+      hasPlannedSecondaries ||
+      input.presentPlan === true ||
+      input.requirePlanApproval === true ||
+      (!isTestEnv && created.secondaries.length > 0)
+
     if (isUnattended) {
       created.unattended = true
       created.approvedByUser = true
-    } else if (!isTestEnv || input.presentPlan === true || input.requirePlanApproval === true) {
+      created.status = "exploring"
+    } else if (isPlanning) {
       created.approvedByUser = false
+      created.status = "investigating"
     } else {
       created.approvedByUser = true
+      created.status = "exploring"
     }
-
-    const hasPlannedSecondaries = plannedCount !== undefined && plannedCount > 0
     let countWarning: string | undefined
     if (hasPlannedSecondaries) {
       countWarning =
         `\n\n⚠️ [Protocol Notice - Incremental Plan Construction]: You declared 'plannedSecondaryCount: ${plannedCount}'. ` +
         `${plannedCount} objective(s) (SO-1..SO-${plannedCount}) remain to be registered. ` +
-        `Tree status is 'exploring' (draft preparation). ACTION REQUIRED: Add each secondary objective ` +
-        `one by one via action: 'add_secondary', add initial findings via 'add_finding', and then call action: 'present_plan' to freeze the tree and present the plan to the user.`
+        `Tree status is 'investigating' (investigation & draft preparation). ACTION REQUIRED: Research codebase, add initial findings via 'add_finding', add each secondary objective ` +
+        `one by one via action: 'add_secondary' (in pending status), and then call action: 'present_plan' to freeze the tree and present the plan to the user.`
     }
 
     const shouldFreeze =
@@ -3674,6 +3720,14 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       ? "resolved"
       : ((input.status as PrimaryObjectiveStatus) || "resolved")
 
+    const approvalError = checkPlanApprovalGuard(current, targetStatus, sessionID, rawAction)
+    if (approvalError) {
+      return {
+        output: { success: false, message: approvalError, tree: treeOf(sessionID) },
+        content: approvalError,
+      }
+    }
+
     // Si se invoca complete_primary con validationProof y dodCriteria en la misma llamada,
     // o con dodProofs / proofs map ({ D1: "..." }), asegurar que se apliquen al DoD antes de evaluar las compuertas de cierre.
     let incomingCompleteCriteria = input.dodCriteria
@@ -3766,7 +3820,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const approvalError = checkPlanApprovalGuard(po, input.status, sessionID)
+    const approvalError = checkPlanApprovalGuard(po, input.status, sessionID, rawAction)
     if (approvalError) {
       return {
         output: { success: false, message: approvalError, tree: treeOf(sessionID) },
@@ -3775,7 +3829,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const wasResolvedBeforeAdd = po?.status === "resolved"
-    const isDraftPlan = po?.status === "presented_awaiting_confirmation"
+    const isDraftPlan = po?.status === "presented_awaiting_confirmation" || po?.status === "investigating"
     const so = addSecondaryObjective(sessionID, sTitle || sRationale, sRationale || sTitle, input.id?.trim(), {
       affectedResources: normalizeAffectedResources(input.affectedResources),
       preconditions: normalizePreconditions(input.preconditions),
@@ -3836,7 +3890,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const approvalError = checkPlanApprovalGuard(current, input.status, sessionID)
+    const approvalError = checkPlanApprovalGuard(current, input.status, sessionID, rawAction)
     if (approvalError) {
       return {
         output: { success: false, message: approvalError, tree: treeOf(sessionID) },
@@ -3936,7 +3990,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
-    const approvalError = checkPlanApprovalGuard(po, input.status, sessionID)
+    const approvalError = checkPlanApprovalGuard(po, input.status, sessionID, rawAction)
     if (approvalError) {
       return { output: { success: false, message: approvalError, tree: treeOf(sessionID) }, content: approvalError }
     }
@@ -3976,7 +4030,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       return { output: { success: false, message: "'id' (tertiary objective id, e.g. 'SO-2-T1') is required for action 'update_tertiary'.", tree: "" }, content: "Missing id for update_tertiary." }
     }
 
-    const approvalError = checkPlanApprovalGuard(current, input.status, sessionID)
+    const approvalError = checkPlanApprovalGuard(current, input.status, sessionID, rawAction)
     if (approvalError) {
       return { output: { success: false, message: approvalError, tree: treeOf(sessionID) }, content: approvalError }
     }
@@ -4454,6 +4508,22 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       }
     }
 
+    if (!isUnattended) {
+      const isApproved = po?.approvedByUser || authenticatedApprovalSessions.has(sessionID)
+      if (pendingPlanApprovalSessions.has(sessionID) && !isApproved && !isTestEnvironment()) {
+        return {
+          output: {
+            success: false,
+            message:
+              "⚠️ [Protocol Guard - Plan Approval Required]: 'resume_plan' cannot be invoked autonomously by the agent without authentic user confirmation. Await explicit user approval via DialogPlanApproval or a confirmed user message before resuming execution.",
+            tree: treeOf(sessionID),
+          },
+          content:
+            "⚠️ [Protocol Guard - Plan Approval Required]: 'resume_plan' requires authentic user confirmation.",
+        }
+      }
+    }
+
     const resumed = resumePlan(sessionID, input.note)
     if (!resumed.success) {
       return { output: { success: false, message: resumed.error || "Failed to resume plan.", tree: "" }, content: resumed.error || "Failed to resume plan." }
@@ -4645,16 +4715,30 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       })
     }
 
-    // Hook: User Prompt Admission marks plan approved if awaiting confirmation
+    // Hook: User Prompt Admission marks plan approved only upon authentic user approval
     if (typeof (ctx.session as any)?.hook === "function") {
       await ctx.session.hook("prompt", async (event: any) => {
         const sessionID = event?.sessionID
         if (!sessionID) return
         if (await isSubagentSession(sessionID)) return
         const po = sessionObjectives.get(sessionID)
-        if (po) {
+        if (!po) return
+
+        const promptText = typeof event?.text === "string" ? event.text.trim() : ""
+        const isExplicitApprovalMetadata = Boolean(event?.metadata?.planApproval)
+        const isCanonicalApprovalText =
+          promptText.includes("Plan aprobado explícitamente por el usuario") ||
+          /^(plan\s+aprobado|aprobado|aprobar|proceder|adelante|approved|proceed)\b/i.test(promptText)
+
+        const isRefinementRequest =
+          /refin|ajust|cambi|modific|corri|esper|pregunt|\bno\b/i.test(promptText) &&
+          !isCanonicalApprovalText
+
+        if (isExplicitApprovalMetadata || (isCanonicalApprovalText && !isRefinementRequest)) {
           po.approvedByUser = true
-          if (po.status === "presented_awaiting_confirmation") {
+          authenticatedApprovalSessions.add(sessionID)
+          pendingPlanApprovalSessions.delete(sessionID)
+          if (po.status === "presented_awaiting_confirmation" || po.status === "investigating") {
             po.status = "exploring"
             if (po.phase) {
               po.phase.paused = false
@@ -4662,6 +4746,17 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             }
             persistSessionObjectives(sessionID)
           }
+        } else if (isRefinementRequest && po.status === "presented_awaiting_confirmation") {
+          // User requested adjustments/refinement: unfreeze back to investigating so agent can refine
+          po.status = "investigating"
+          po.approvedByUser = false
+          authenticatedApprovalSessions.delete(sessionID)
+          pendingPlanApprovalSessions.delete(sessionID)
+          if (po.phase) {
+            po.phase.paused = false
+            po.phase.reason = "Ajustes solicitados por el usuario"
+          }
+          persistSessionObjectives(sessionID)
         }
       })
     }
