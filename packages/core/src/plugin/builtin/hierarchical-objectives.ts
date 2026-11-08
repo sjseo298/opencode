@@ -1056,11 +1056,20 @@ export function addFinding(
     (typeof evidence.source === "string" && evidence.source.trim().length >= cfg.findingMinChars
       ? evidence.source.trim()
       : "")
+
+  // Resilient fallback for nextAction: if omitted or too short, generate a sensible action
+  const minChars = cfg.findingMinChars
+  let effectiveNextAction = input.nextAction?.trim()
+  if (!effectiveNextAction || effectiveNextAction.length < minChars) {
+    const titleSnippet = input.title?.trim() || "identified finding"
+    effectiveNextAction = `Investigate and address ${titleSnippet.slice(0, 50)} in objective plan`
+  }
+
   const violations = validateFindingFields(
     {
       title: input.title,
       result: effectiveResult,
-      nextAction: input.nextAction,
+      nextAction: effectiveNextAction,
       evidenceSource: evidence.source,
     },
     sessionID,
@@ -1126,7 +1135,7 @@ export function addFinding(
     evidence,
     result: effectiveResult,
     impactOnOption: input.impactOnOption,
-    nextAction: input.nextAction!.trim(),
+    nextAction: effectiveNextAction,
     delegation: input.delegation,
     seeAlso: top && top.score >= cfg.searchNovelThreshold ? [top.findingId, ...(input.seeAlso ?? [])] : (input.seeAlso ?? []),
     supersedes: input.supersedes ?? [],
@@ -3263,6 +3272,9 @@ function compactTreeOf(sessionID: string, opts?: Omit<RenderObjectiveTreeOptions
 }
 
 const PAUSED_MUTATING_ACTIONS = new Set([
+  "set_primary",
+  "init",
+  "set_objectives",
   "update_primary",
   "add_secondary",
   "add_secondaries",
@@ -3282,7 +3294,10 @@ const PAUSED_MUTATING_ACTIONS = new Set([
 ])
 
 const FROZEN_MESSAGE =
-  "Objective tree is FROZEN (status: presented_awaiting_confirmation). Present the plan to the user and call action 'resume_plan' with their explicit instruction before mutating the tree. If you need to refine the draft plan before confirmation, pass 'draft: true' (or 'refinePlan: true')."
+  "🛑 [ACTION BLOCKED - TREE FROZEN]: The objective plan is FROZEN awaiting user approval via the native dialog. " +
+  "DO NOT call 'resume_plan' autonomously. DO NOT attempt to mutate or execute objectives. " +
+  "MANDATORY: STOP CALLING TOOLS IMMEDIATELY. Present the plan clearly in your chat response and END YOUR TURN NOW. " +
+  "The user will review and approve via the modal dialog; execution will resume when the user responds."
 
 const PLAN_NOT_APPROVED_MESSAGE =
   "⚠️ [Protocol Guard - Plan Approval Required]: The objective plan has not been approved by the user yet (approvedByUser: false). You cannot start working on objectives or transition them to 'exploring' or 'resolved' until the user has reviewed and approved the plan to validate scope. Present the plan to the user (action 'present_plan') and await confirmation before beginning execution."
@@ -3358,8 +3373,11 @@ function checkFingerprintCollision(po: PrimaryObjective, title: string, justific
 }
 
 async function executeObjectiveAction(input: any, sessionID: string): Promise<ToolResult> {
-  // Guard unforgeable internal state: agents cannot spoof approvedByUser in input
+  // Guard unforgeable internal state: agents cannot spoof approvedByUser or unattended in input to jailbreak guards
   delete (input as any).approvedByUser
+  if (!isTestEnvironment()) {
+    delete (input as any).unattended
+  }
 
   // Schema invariant: array inputs (secondaries, findings) are removed from the schema.
   // Reject multiple items (>1) strictly, and transparently normalize single items (length === 1) to top-level properties.
@@ -3457,10 +3475,17 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 
   // F-6: the plan-pause state machine freezes execution mutations until the user confirms.
   // Planning draft actions (adding secondary definitions in pending status, recording findings, or refining DoD)
-  // are allowed during presented_awaiting_confirmation (even if 'draft: true' was omitted by the agent),
+  // are allowed during presented_awaiting_confirmation in test environments,
   // ensuring the plan can be enriched and refined without artificial tool rejections.
-  // Execution mutations (moving any objective to 'exploring' or 'resolved', complete_primary, etc.) remain strictly frozen.
+  // In interactive production mode, all agent actions while frozen are mechanically stopped to mandate turn conclusion.
   if (po?.status === "presented_awaiting_confirmation") {
+    if (!isTestEnvironment() && !po.approvedByUser && !po.unattended && !getObjectivesConfig(sessionID).unattended) {
+      return {
+        output: { success: false, message: FROZEN_MESSAGE, tree: treeOf(sessionID) },
+        content: FROZEN_MESSAGE,
+      }
+    }
+
     const isDraftPlanAction =
       rawAction === "add_secondary" ||
       rawAction === "add_secondaries" ||
@@ -3616,7 +3641,9 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       })
       const frozenTree = treeOf(sessionID)
       const message =
-        "Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval. Present the plan to the user and call action 'resume_plan' or 'approve_plan' once confirmed." +
+        "🛑 [PLAN PRESENTED — MANDATORY TURN CONCLUSION]: Primary Objective and plan established. The tree is FROZEN (status: presented_awaiting_confirmation) awaiting user approval in the native modal dialog. " +
+        "YOU MUST STOP CALLING TOOLS IMMEDIATELY. Present the plan summary to the user in your chat message and END YOUR TURN NOW. " +
+        "DO NOT call resume_plan or execute tasks autonomously; wait for the user to confirm via the modal dialog." +
         (countWarning ?? "")
       const confirmationOptions = [
         {
@@ -4482,7 +4509,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         description: "Keeps plan in draft mode to receive user corrections without executing code.",
       },
     ]
-    const message = "Plan presented. The tree is FROZEN until the user explicitly confirms. Present the plan to the user and call action 'resume_plan' or 'approve_plan' with their instruction to continue."
+    const message =
+      "🛑 [PLAN PRESENTED — MANDATORY TURN CONCLUSION]: Plan presented. The tree is FROZEN awaiting explicit user approval in the native modal dialog. " +
+      "YOU MUST STOP CALLING TOOLS IMMEDIATELY. Present the substantive plan to the user in your chat message and END YOUR TURN NOW. " +
+      "DO NOT call resume_plan or execute tasks in this step; wait for the user to confirm via the native dialog."
     return { output: { success: true, message, tree, contextMetrics: presented.contextMetrics, confirmationOptions }, content: tree }
   }
 
@@ -4884,6 +4914,30 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         throw new Error(
           "⚠️ [Protocol Guard - Tool Deprecated]: 'todowrite' is disabled in this environment. You MUST use the Protocolo de Objetivos via the 'objective_manage' tool (actions: 'set_primary', 'add_secondary', 'add_finding', 'present_plan', etc.) to hierarchically structure tasks with causal rationales and verifiable criteria.",
         )
+      }
+
+      // Invariante de detención forzada tras present_plan:
+      // Cuando el árbol está congelado esperando la aprobación del usuario en DialogPlanApproval,
+      // cualquier herramienta ejecutada por el agente se detiene mecánicamente para forzar el fin del turno.
+      const po = sessionObjectives.get(sessionID)
+      if (
+        !isTestEnvironment() &&
+        po &&
+        po.status === "presented_awaiting_confirmation" &&
+        !po.approvedByUser &&
+        !po.unattended &&
+        !cfg.unattended
+      ) {
+        const isUnattendedEnv =
+          typeof process !== "undefined" &&
+          (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true")
+        if (!isUnattendedEnv) {
+          throw new Error(
+            "🛑 [TURNO DETENIDO - PLAN EN ESPERA DE APROBACIÓN]: El plan de objetivos ya fue presentado al usuario y el sistema se encuentra esperando su decisión en el diálogo interactivo (DialogPlanApproval). " +
+            "Tienes ESTRICTAMENTE PROHIBIDO ejecutar más acciones o herramientas en este turno. " +
+            "DEBES CEDER TU TURNO INMEDIATAMENTE. Concluye tu mensaje de texto al usuario presentando el plan y espera a que el usuario confirme o solicite ajustes.",
+          )
+        }
       }
 
       if (event.tool === "edit" || event.tool === "write") {

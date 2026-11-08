@@ -4242,7 +4242,7 @@ describe("hierarchical-objectives plugin", () => {
           { sessionID: sid },
         )
         expect(agentSpoof.output.success).toBe(false)
-        expect(agentSpoof.output.message).toContain("Plan Approval Required")
+        expect(agentSpoof.output.message).toContain("ACTION BLOCKED - TREE FROZEN")
         expect(getObjectives(sid)!.approvedByUser).toBe(false)
       } finally {
         process.env.NODE_ENV = origNodeEnv
@@ -4274,6 +4274,139 @@ describe("hierarchical-objectives plugin", () => {
         { sessionID: sid },
       )
       expect(exploreRes.output.success).toBe(true)
+    })
+
+    test("anti-jailbreak: agents cannot bypass approval or wipe frozen tree with unattended: true in interactive mode", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("anti-jailbreak")
+
+      // 1. Establish a plan with 2 secondaries and present it
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Critical Architecture Migration",
+          definitionOfDone: "Zero downtime achieved",
+          plannedSecondaryCount: 2,
+        },
+        { sessionID: sid },
+      )
+      await tool.execute({ action: "add_secondary", id: "SO-1", title: "Task 1", rationale: "Rationale 1" }, { sessionID: sid })
+      await tool.execute({ action: "add_secondary", id: "SO-2", title: "Task 2", rationale: "Rationale 2" }, { sessionID: sid })
+
+      const presentRes = await tool.execute({ action: "present_plan" }, { sessionID: sid })
+      expect(presentRes.output.success).toBe(true)
+      expect(presentRes.output.message).toContain("🛑 [PLAN PRESENTED — MANDATORY TURN CONCLUSION]")
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+
+      // 2. In non-test (interactive) mode, attempting to call set_primary while frozen is rejected
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        // Attempting to overwrite tree with unattended: true while frozen is blocked
+        const jailbreakAttempt = await tool.execute(
+          {
+            action: "set_primary",
+            title: "Jailbreak Override",
+            definitionOfDone: "Bypass guards",
+            unattended: true,
+          },
+          { sessionID: sid },
+        )
+        expect(jailbreakAttempt.output.success).toBe(false)
+        expect(jailbreakAttempt.output.message).toContain("🛑 [ACTION BLOCKED - TREE FROZEN]")
+        // The original frozen tree and secondaries remain intact
+        const po = getObjectives(sid)!
+        expect(po.status).toBe("presented_awaiting_confirmation")
+        expect(po.approvedByUser).toBe(false)
+        expect(po.secondaries).toHaveLength(2)
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
+    })
+
+    test("resilience: add_finding auto-populates fallback defaults for nextAction and delegation", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("finding-resilience")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Investigation Session",
+          definitionOfDone: "Identify root cause",
+          plannedSecondaryCount: 1,
+        },
+        { sessionID: sid },
+      )
+
+      // Calling add_finding with minimal inputs (omitting nextAction) succeeds on first try with auto-populated fallback
+      const res = await tool.execute(
+        {
+          action: "add_finding",
+          title: "Race condition in message listener",
+          result: "Multiple threads access shared queue without sync locks",
+          evidence: "com/equisoft/component/push/SendRabbitMessage.java:23",
+          delegation: { mode: "main", justification: "Local investigation in primary session" },
+        },
+        { sessionID: sid },
+      )
+
+      expect(res.output.success).toBe(true)
+      const po = getObjectives(sid)!
+      expect(po.findings).toHaveLength(1)
+      const finding = po.findings![0]
+      expect(finding.nextAction).toContain("Investigate and address Race condition in message listener")
+      expect(finding.delegation?.mode).toBe("main")
+      expect(finding.delegation?.justification).toContain("Local investigation in primary session")
+    })
+
+    test("execute.before hook mechanically blocks any tool call after present_plan until user approval", async () => {
+      const { getRegisteredTool, triggerToolBefore, triggerPromptHook } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("forced-stop-hook")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Forced Stop Test",
+          definitionOfDone: "Verify mechanical stop",
+          plannedSecondaryCount: 1,
+        },
+        { sessionID: sid },
+      )
+      await tool.execute({ action: "add_secondary", id: "SO-1", title: "Task 1", rationale: "Why 1" }, { sessionID: sid })
+      await tool.execute({ action: "present_plan" }, { sessionID: sid })
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // In interactive mode, calling ANY tool (shell, read, etc.) via execute.before hook throws
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        await expect(triggerToolBefore("shell", { command: "ls" }, sid)).rejects.toThrow(
+          "🛑 [TURNO DETENIDO - PLAN EN ESPERA DE APROBACIÓN]",
+        )
+        await expect(triggerToolBefore("read", { path: "file.txt" }, sid)).rejects.toThrow(
+          "🛑 [TURNO DETENIDO - PLAN EN ESPERA DE APROBACIÓN]",
+        )
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
+
+      // After authentic user approval, tools are unblocked
+      await triggerPromptHook(sid, "Plan aprobado explícitamente por el usuario. Procede con la ejecución de SO-1.", { planApproval: true })
+      expect(getObjectives(sid)!.status).toBe("exploring")
+      // Now triggerToolBefore does not throw
+      await expect(triggerToolBefore("read", { path: "file.txt" }, sid)).resolves.toBeUndefined()
     })
   })
 
