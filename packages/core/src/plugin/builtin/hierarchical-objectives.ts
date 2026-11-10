@@ -4777,15 +4777,29 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
     }
 
     // Hook: User Prompt Admission marks plan approved only upon authentic user approval
+    // and resets unsynced consecutive action counter so each user intervention starts with a clean slate.
     if (typeof (ctx.session as any)?.hook === "function") {
       await ctx.session.hook("prompt", async (event: any) => {
         const sessionID = event?.sessionID
         if (!sessionID) return
         if (await isSubagentSession(sessionID)) return
+
+        // Reset unsynced consecutive action and read counters whenever the user intervenes in chat
+        actionsWithoutObjectiveSync.delete(sessionID)
+        consecutiveReadCounts.delete(sessionID)
+        antiLoopWarnings.delete(sessionID)
+        actionWarnings.delete(sessionID)
+
         const po = sessionObjectives.get(sessionID)
         if (!po) return
 
-        const promptText = typeof event?.text === "string" ? event.text.trim() : ""
+        const rawText =
+          typeof event?.text === "string"
+            ? event.text
+            : typeof event?.prompt?.text === "string"
+              ? event.prompt.text
+              : ""
+        const promptText = rawText.trim()
         const isExplicitRevocationMetadata = Boolean(event?.metadata?.planRevocation)
         const isRevocationText =
           /^(invalidar(\s+la)?\s+aprobaci[oó]n|desaprobar(\s+el)?\s+plan|revocar(\s+la)?\s+aprobaci[oó]n|unapprove|revoke\s+approval)\b/i.test(promptText)

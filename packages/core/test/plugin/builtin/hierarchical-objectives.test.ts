@@ -11,6 +11,7 @@ import {
   formatCompactionObjectivesInput,
   getObjectives,
   clearSessionObjectives,
+  actionsWithoutObjectiveSync,
   MAX_CONSECUTIVE_READS,
   MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC,
   DEFAULT_OBJECTIVES_CONFIG,
@@ -462,6 +463,51 @@ describe("hierarchical-objectives plugin", () => {
       }
 
       // 15th action triggers plan presentation warning because plan was not presented
+      expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow(
+        "Objective Sync & Plan Presentation Warning",
+      )
+    })
+
+    test("resets unsynced action counter to 0 when user intervenes in chat via prompt hook", async () => {
+      const { toolHooks, sessionHooks } = await setupPluginInstance()
+      const sid = uniqueSessionID("reset-unsynced-on-user-prompt")
+      const hook = toolHooks["execute.before"]?.[0]
+      const promptHook = sessionHooks["prompt"]?.[0]
+      expect(hook).toBeDefined()
+      expect(promptHook).toBeDefined()
+
+      // 1. Without active PO (e.g. reconnaissance phase): actions accumulate
+      for (let i = 0; i < 5; i++) {
+        await hook!({ sessionID: sid, tool: "read" })
+      }
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(5)
+
+      // User intervenes in chat
+      await promptHook!({ sessionID: sid, text: "Intervención de usuario previa a PO" })
+      expect(actionsWithoutObjectiveSync.get(sid)).toBeUndefined()
+
+      // 2. With active PO: user intervenes before reaching limit (15)
+      const po = setPrimaryObjective(sid, "Test Primary", "Verify all criteria")
+      po.approvedByUser = false
+      addSecondaryObjective(sid, "SO-1", "Dependency rationale")
+
+      // Execute 14 actions without sync
+      for (let i = 0; i < 14; i++) {
+        await hook!({ sessionID: sid, tool: "shell" })
+      }
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(14)
+
+      // User speaks in chat via prompt hook (can also test event.prompt.text structure)
+      await promptHook!({ sessionID: sid, prompt: { text: "¿Cómo va la investigación?" } })
+      expect(actionsWithoutObjectiveSync.get(sid)).toBeUndefined()
+
+      // Counter restarted from 0, allowing another 14 actions without throwing
+      for (let i = 0; i < 14; i++) {
+        await hook!({ sessionID: sid, tool: "shell" })
+      }
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(14)
+
+      // The 15th consecutive action triggers the expected warning
       expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow(
         "Objective Sync & Plan Presentation Warning",
       )

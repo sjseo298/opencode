@@ -367,8 +367,9 @@ export interface PrimaryObjective {
    * Tracks modifying/action tools (`write`, `edit`, `bash`, `apply_diff`, etc.). When modifying tools execute without updating objectives, the session is marked dirty.
    * Prompts the agent before concluding: *"⚠️ Objective Reconciliation Required: You have performed code modifications or tool executions. Call `objective_manage` to keep your objective tree synchronized with your latest progress, attach validation proof for completed work, or register newly discovered blockers before finishing your turn."*
    * Calling `objective_manage` clears the dirty state.
-4. **Unified Objective Sync & Anti-Loop Protocol (`ctx.tool.hook("execute.before")`)**:
+4. **Unified Objective Sync & Anti-Loop Protocol (`ctx.tool.hook("execute.before")` / `ctx.session.hook("prompt")`)**:
    * Detects `max_actions_without_sync` (default: `15`) consecutive tool operations (reads, searches, commands, or edits) without calling `objective_manage`, throwing `⚠️ [Objective Sync Warning]` (or `⚠️ [Objective Sync / Anti-Loop Warning]`) so the agent continuously synchronizes progress and findings.
+   * **User Chat Intervention Reset**: Whenever the user intervenes or speaks in the chat, the consecutive unsynced action counter (`actionsWithoutObjectiveSync` and `consecutiveReadCounts`) is automatically reset to 0 upon processing the incoming user prompt, ensuring every new user instruction starts with a clean slate.
 5. **Right Sidebar TUI Component (`SidebarObjectives`)**:
    * Registered in `packages/tui/src/plugin/builtins.ts`.
    * Displays the Primary Objective and Definition of Done at the top of the right sidebar.
@@ -695,7 +696,7 @@ None of the numeric thresholds or toggles of the **Protocolo de Objetivos** are 
 
 | Parameter (`opencode.jsonc` / Session `.json`) | Default | CLI Flag | Environment Variable | Description |
 |---|---|---|---|---|
-| `max_actions_without_sync` | **`15`** | `--objectives-max-actions-without-sync <int>` | `OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC` | Maximum consecutive tool operations (reads, searches, commands, or edits) allowed without calling `objective_manage` before throwing `⚠️ [Objective Sync Warning]`. |
+| `max_actions_without_sync` | **`15`** | `--objectives-max-actions-without-sync <int>` | `OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC` | Maximum consecutive tool operations (reads, searches, commands, or edits) allowed without calling `objective_manage` before throwing `⚠️ [Objective Sync Warning]`. Automatically resets to 0 whenever the user intervenes in chat. |
 | `repeated_action_warning_threshold` | **`2`** | `--objectives-repeated-action-threshold <int>` | `OPENCODE_OBJECTIVES_REPEATED_ACTION_THRESHOLD` | Number of identical normalized read actions on the same active Secondary Objective before queueing a repeated-action warning. |
 | `search_attach_threshold` | **`0.68`** | `--objectives-search-attach-threshold <0..1>` | `OPENCODE_OBJECTIVES_SEARCH_ATTACH_THRESHOLD` | Similarity score (`0.0–1.0`) at or above which `add_finding` rejects a duplicate finding and requires `update_finding`. |
 | `search_novel_threshold` | **`0.55`** | `--objectives-search-novel-threshold <0..1>` | `OPENCODE_OBJECTIVES_SEARCH_NOVEL_THRESHOLD` | Similarity score (`0.0–1.0`) at or above which `add_finding` emits a similarity warning and automatically links `seeAlso`. |
