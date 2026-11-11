@@ -2,6 +2,8 @@ import { describe, test, expect } from "bun:test"
 import { Plugin } from "../../../src/plugin/builtin/antigravity/index.js"
 import { generatePKCE, authorizeAntigravity } from "../../../src/plugin/builtin/antigravity/antigravity/oauth.js"
 import { ANTIGRAVITY_ENDPOINT, ANTIGRAVITY_SCOPES } from "../../../src/plugin/builtin/antigravity/constants.js"
+import { AntigravityConfigSchema, DEFAULT_CONFIG } from "../../../src/plugin/builtin/antigravity/plugin/config/schema.js"
+import { loadConfig } from "../../../src/plugin/builtin/antigravity/plugin/config/loader.js"
 
 describe("Antigravity Builtin Plugin", () => {
   test("plugin is defined with correct ID", () => {
@@ -31,5 +33,21 @@ describe("Antigravity Builtin Plugin", () => {
   test("constants expose correct endpoints and scopes", () => {
     expect(ANTIGRAVITY_ENDPOINT).toContain("googleapis.com")
     expect(ANTIGRAVITY_SCOPES.length).toBeGreaterThan(0)
+  })
+
+  test("soft_quota_threshold_percent defaults to 100 in schema and DEFAULT_CONFIG", () => {
+    expect(DEFAULT_CONFIG.soft_quota_threshold_percent).toBe(100)
+    const parsed = AntigravityConfigSchema.parse({})
+    expect(parsed.soft_quota_threshold_percent).toBe(100)
+  })
+
+  test("soft_quota_threshold_percent allows custom lower values via config", () => {
+    const parsed = AntigravityConfigSchema.parse({ soft_quota_threshold_percent: 85 })
+    expect(parsed.soft_quota_threshold_percent).toBe(85)
+  })
+
+  test("loadConfig returns soft_quota_threshold_percent: 100 by default", () => {
+    const config = loadConfig("/non/existent/path")
+    expect(config.soft_quota_threshold_percent).toBe(100)
   })
 })
