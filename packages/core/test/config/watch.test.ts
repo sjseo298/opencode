@@ -50,4 +50,14 @@ describe("ConfigWatch.plan", () => {
       ),
     ).toContainEqual({ path: directory, type: "entries", names: ["custom.json"] })
   })
+
+  test("excludes root and system parents from entry watches", () => {
+    const rootDirect = AbsolutePath.make(path.resolve(path.parse(process.cwd()).root, "opencode.json"))
+    const plan = ConfigWatch.plan({
+      ...sources,
+      direct: [...sources.direct, rootDirect],
+    })
+    const paths = Array.from(plan.values()).map((target) => target.path)
+    expect(paths).not.toContain(path.parse(process.cwd()).root)
+  })
 })
