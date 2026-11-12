@@ -319,7 +319,9 @@ export const layer = Layer.effect(
 
       // Only the user compacts when automatic compaction is off, overflow included.
       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
-      const otherTokens = isUnifiedKv(settings) ? yield* resolveTreeOtherTokens(db, context.session) : 0
+      const otherTokens = isUnifiedKv(settings, context.model.ref)
+        ? yield* resolveTreeOtherTokens(db, context.session, settings)
+        : 0
       const ceiling = calculateCeiling(context.model.limit, settings.buffer, otherTokens)
       if (
         trigger.reason === "auto" &&
@@ -381,7 +383,9 @@ export const layer = Layer.effect(
       if (context.model.compaction?.type === "native") return
       // FORK: Unified KV context integration - skip precompute on local providers or unified KV
       if (UnifiedKV.shouldSkipPrecompute(settings, context)) return
-      const otherTokens = isUnifiedKv(settings) ? yield* resolveTreeOtherTokens(db, context.session) : 0
+      const otherTokens = isUnifiedKv(settings, context.model.ref)
+        ? yield* resolveTreeOtherTokens(db, context.session, settings)
+        : 0
       const ceiling = calculateCeiling(context.model.limit, settings.buffer, otherTokens)
       if (!Number.isFinite(ceiling)) return
       const estimate = given ?? estimatePrompt(context)

@@ -92,7 +92,8 @@ export const Plugin = {
               }
 
               const currentSessionTokens = UnifiedKV.estimateSessionTokens(messages)
-              const otherTreeTokens = yield* UnifiedKV.resolveTreeOtherTokens(db, session)
+              const isUnified = UnifiedKV.isUnifiedKv(undefined, session.model)
+              const otherTreeTokens = isUnified ? yield* UnifiedKV.resolveTreeOtherTokens(db, session) : 0
               const cfg = getObjectivesConfig(context.sessionID)
 
               const safetyBuffer = Math.min(15_000, Math.floor(contextLimit * 0.15))

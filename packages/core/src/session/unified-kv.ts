@@ -33,10 +33,20 @@ export type Settings = {
 
 /**
  * Checks if the unified KV mode is active.
- * Defaults to true. Can be explicitly disabled via session compaction settings
- * ({ unified_kv: false }) or environment variables (OPENCODE_UNIFIED_KV=false or OPENCODE_KV_UNIFIED=false).
+ * When true, context/slots are shared across agent and subagents.
+ * When false, slots are independent, so other slots' tokens must NOT reduce headroom or trigger compaction.
+ *
+ * Precedence:
+ * 1. Explicit parameter settings ({ unified_kv: boolean })
+ * 2. Environment variables: OPENCODE_UNIFIED_KV or OPENCODE_KV_UNIFIED
+ * 3. Dynamic context detection from llama.cpp /props /status /v1/models (kv_unified field)
+ * 4. Model options/settings if present
+ * 5. Default: true (for backwards compatibility)
  */
-export const isUnifiedKv = (settings?: Partial<Settings>): boolean => {
+export const isUnifiedKv = (
+  settings?: Partial<Settings>,
+  model?: { providerID?: string; id?: string; kv_unified?: boolean; options?: Record<string, any> },
+): boolean => {
   if (settings?.unified_kv !== undefined) return settings.unified_kv
   if (process.env.OPENCODE_UNIFIED_KV !== undefined) {
     return process.env.OPENCODE_UNIFIED_KV !== "false" && process.env.OPENCODE_UNIFIED_KV !== "0"
@@ -44,6 +54,31 @@ export const isUnifiedKv = (settings?: Partial<Settings>): boolean => {
   if (process.env.OPENCODE_KV_UNIFIED !== undefined) {
     return process.env.OPENCODE_KV_UNIFIED !== "false" && process.env.OPENCODE_KV_UNIFIED !== "0"
   }
+
+  // Model-level explicit flag if passed
+  if (model?.kv_unified !== undefined) return model.kv_unified
+  if (model?.options?.kv_unified !== undefined) {
+    const opt = model.options.kv_unified
+    if (typeof opt === "boolean") return opt
+    if (opt === "false" || opt === "0") return false
+    if (opt === "true" || opt === "1") return true
+  }
+
+  // Check dynamic context store discovered from llamacpp
+  const g = globalThis as any
+  const dynamicStore = g.__OPENCODE_DYNAMIC_CONTEXT__
+  if (model?.providerID && model?.id) {
+    const key = `${model.providerID}/${model.id}`
+    const dynamicKv = dynamicStore?.getKvUnified?.(key)
+    if (typeof dynamicKv === "boolean") return dynamicKv
+  }
+  const latestKv = dynamicStore?.getKvUnified?.()
+  if (typeof latestKv === "boolean") return latestKv
+
+  if (typeof g.__OPENCODE_KV_UNIFIED__ === "boolean") {
+    return g.__OPENCODE_KV_UNIFIED__
+  }
+
   return true
 }
 
@@ -72,7 +107,7 @@ export const LOCAL_PROVIDERS = new Set([
  */
 export const shouldSkipPrecompute = (
   settings: Partial<Settings> | undefined,
-  context: { model: { ref: { providerID: string } } },
+  context: { model: { ref: { providerID: string; id?: string; kv_unified?: boolean } } },
 ): boolean => {
   const provider = (context.model.ref.providerID ?? "").toLowerCase()
 
@@ -88,7 +123,7 @@ export const shouldSkipPrecompute = (
   if (LOCAL_PROVIDERS.has(provider)) return true
 
   // 2. Any provider under unified KV mode must skip background precompute
-  if (isUnifiedKv(settings)) return true
+  if (isUnifiedKv(settings, context.model.ref)) return true
 
   return false
 }
@@ -233,9 +268,16 @@ export const isSubagentCompleted = (
  */
 export const resolveTreeOtherTokens = (
   db: Database.Interface["db"],
-  currentSession: SessionSchema.Info | { id: SessionSchema.ID; parentID?: SessionSchema.ID | null },
+  currentSession: SessionSchema.Info | { id: SessionSchema.ID; parentID?: SessionSchema.ID | null; model?: { providerID?: string; id?: string } },
+  settings?: Partial<Settings>,
 ) =>
   Effect.gen(function* () {
+    // If KV cache is not unified (kv_unified === false), slots are isolated and independent.
+    // Therefore, other slots' token usage should not reduce this session's headroom.
+    if (!isUnifiedKv(settings, currentSession.model)) {
+      return 0
+    }
+
     const allIDs = yield* resolveTreeSessionIDs(db, currentSession)
     // Find the root session id
     let rootID: SessionSchema.ID = currentSession.id

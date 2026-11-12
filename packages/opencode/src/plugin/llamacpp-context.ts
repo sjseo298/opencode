@@ -37,11 +37,13 @@ type PropsResponse = {
     n_ctx?: unknown
     total_slots?: unknown
     max_subagents?: unknown
+    kv_unified?: unknown
   }
   n_ctx?: unknown
   total_slots?: unknown
   parallel?: unknown
   max_subagents?: unknown
+  kv_unified?: unknown
 }
 
 function propsUrl(base: unknown): string | undefined {
@@ -90,7 +92,13 @@ export async function LlamacppContextPlugin(input: PluginInput): Promise<Hooks> 
           if (typeof value === "number" && Number.isFinite(value) && value > 0) nCtx = value
           const rawSlots = body.total_slots ?? body.parallel ?? body.default_generation_settings?.total_slots
           const rawMaxSub = body.max_subagents ?? body.default_generation_settings?.max_subagents
+          const rawKvUnified = body.kv_unified ?? body.default_generation_settings?.kv_unified
           const g = globalThis as any
+          if (typeof rawKvUnified === "boolean") {
+            g.__OPENCODE_KV_UNIFIED__ = rawKvUnified
+          } else if (rawKvUnified === "true" || rawKvUnified === "false") {
+            g.__OPENCODE_KV_UNIFIED__ = rawKvUnified === "true"
+          }
           if (typeof rawSlots === "number" && Number.isFinite(rawSlots) && rawSlots >= 1) {
             const slots = Math.floor(rawSlots)
             g.__OPENCODE_TOTAL_SLOTS__ = slots

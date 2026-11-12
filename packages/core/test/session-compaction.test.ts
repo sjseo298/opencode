@@ -1461,6 +1461,19 @@ test("isUnifiedKv defaults to true and detects config overrides and env flags", 
   expect(SessionCompaction.isUnifiedKv({})).toBe(false)
   delete process.env.OPENCODE_KV_UNIFIED
 
+  // Dynamic context store with kvUnified: false
+  const g = globalThis as any
+  g.__OPENCODE_DYNAMIC_CONTEXT__ = {
+    getKvUnified: (key?: string) => (key === "llamacpp/isolated" ? false : undefined),
+  }
+  expect(SessionCompaction.isUnifiedKv({}, { providerID: "llamacpp", id: "isolated" })).toBe(false)
+  delete g.__OPENCODE_DYNAMIC_CONTEXT__
+
+  // Global flag __OPENCODE_KV_UNIFIED__
+  g.__OPENCODE_KV_UNIFIED__ = false
+  expect(SessionCompaction.isUnifiedKv({})).toBe(false)
+  delete g.__OPENCODE_KV_UNIFIED__
+
   // Config wins over env
   process.env.OPENCODE_UNIFIED_KV = "false"
   expect(SessionCompaction.isUnifiedKv({ unified_kv: true })).toBe(true)

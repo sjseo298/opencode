@@ -112,8 +112,10 @@ describe("llamacpp-context", () => {
               default_generation_settings: {
                 n_ctx: 262144,
                 total_slots: 3,
+                kv_unified: false,
               },
               total_slots: 3,
+              kv_unified: false,
             })
           }
           return new Response("not found", { status: 404 })
@@ -124,11 +126,13 @@ describe("llamacpp-context", () => {
       expect(info.limit).toBe(262144)
       expect(info.totalSlots).toBe(3)
       expect(info.maxSubagents).toBe(2)
+      expect(info.kvUnified).toBe(false)
 
       const store = getOrCreateDynamicContextStore()
       store.set("llamacpp/qwen3.8", info)
       expect(store.getTotalSlots("llamacpp/qwen3.8")).toBe(3)
       expect(store.getMaxSubagents("llamacpp/qwen3.8")).toBe(2)
+      expect(store.getKvUnified("llamacpp/qwen3.8")).toBe(false)
     })
   })
 

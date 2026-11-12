@@ -8,11 +8,13 @@ export type PropsResponse = {
     n_ctx?: unknown
     total_slots?: unknown
     max_subagents?: unknown
+    kv_unified?: unknown
   }
   n_ctx?: unknown
   total_slots?: unknown
   parallel?: unknown
   max_subagents?: unknown
+  kv_unified?: unknown
 }
 
 export type ContextInfo = {
@@ -20,6 +22,7 @@ export type ContextInfo = {
   used?: number
   totalSlots?: number
   maxSubagents?: number
+  kvUnified?: boolean
 }
 
 export type CacheEntry = {
@@ -28,6 +31,7 @@ export type CacheEntry = {
   used?: number
   totalSlots?: number
   maxSubagents?: number
+  kvUnified?: boolean
 }
 
 export function endpointUrl(base: unknown, endpoint: string): string | undefined {
@@ -52,17 +56,36 @@ export function statusUrl(base: unknown): string | undefined {
   return endpointUrl(base, "status")
 }
 
+export function modelsUrl(base: unknown): string | undefined {
+  if (typeof base !== "string" || !base) return undefined
+  try {
+    const url = new URL(base)
+    const parts = url.pathname.split("/").filter(Boolean)
+    if (parts[parts.length - 1] === "v1") {
+      parts.push("models")
+    } else {
+      parts.push("v1", "models")
+    }
+    url.pathname = `/${parts.join("/")}`
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
 export type StatusResponse = {
   kv_ctx?: {
     total_tokens?: unknown
     used_tokens?: unknown
     parallel?: unknown
     max_subagents?: unknown
+    kv_unified?: unknown
   }
   slots?: {
     total?: unknown
     total_slots?: unknown
     max_subagents?: unknown
+    kv_unified?: unknown
     items?: Array<{
       total_tokens?: unknown
       used_tokens?: unknown
@@ -76,7 +99,9 @@ export type StatusResponse = {
     context_effective?: unknown
     parallel?: unknown
     max_subagents?: unknown
+    kv_unified?: unknown
   }
+  kv_unified?: unknown
 }
 
 export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Promise<ContextInfo> {
@@ -84,6 +109,7 @@ export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Prom
   let used: number | undefined
   let totalSlots: number | undefined
   let maxSubagents: number | undefined
+  let kvUnified: boolean | undefined
 
   const pUrl = propsUrl(baseURL)
   if (pUrl) {
@@ -109,6 +135,12 @@ export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Prom
         }
         if (totalSlots === undefined && maxSubagents !== undefined) {
           totalSlots = maxSubagents + 1
+        }
+        const rawKvUnified = body.kv_unified ?? body.default_generation_settings?.kv_unified
+        if (typeof rawKvUnified === "boolean") {
+          kvUnified = rawKvUnified
+        } else if (rawKvUnified === "true" || rawKvUnified === "false") {
+          kvUnified = rawKvUnified === "true"
         }
       }
     } catch {
@@ -175,13 +207,51 @@ export async function fetchContextInfo(baseURL: string, timeoutMs = 3_000): Prom
         if (totalSlots === undefined && maxSubagents !== undefined) {
           totalSlots = maxSubagents + 1
         }
+
+        if (kvUnified === undefined) {
+          const rawKvUnified =
+            body.kv_unified ??
+            body.model?.kv_unified ??
+            body.slots?.kv_unified ??
+            body.kv_ctx?.kv_unified
+          if (typeof rawKvUnified === "boolean") {
+            kvUnified = rawKvUnified
+          } else if (rawKvUnified === "true" || rawKvUnified === "false") {
+            kvUnified = rawKvUnified === "true"
+          }
+        }
       }
     } catch {
       // Ignore status fetch errors
     }
   }
 
-  return { limit, used, totalSlots, maxSubagents }
+  if (kvUnified === undefined) {
+    const mUrl = modelsUrl(baseURL)
+    if (mUrl) {
+      try {
+        const res = await fetch(mUrl, { signal: AbortSignal.timeout(timeoutMs) })
+        if (res.ok) {
+          const body = (await res.json()) as any
+          const list = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : []
+          for (const item of list) {
+            const raw = item?.kv_unified ?? item?.default_generation_settings?.kv_unified
+            if (typeof raw === "boolean") {
+              kvUnified = raw
+              break
+            } else if (raw === "true" || raw === "false") {
+              kvUnified = raw === "true"
+              break
+            }
+          }
+        }
+      } catch {
+        // Ignore models fetch errors
+      }
+    }
+  }
+
+  return { limit, used, totalSlots, maxSubagents, kvUnified }
 }
 
 export async function fetchContextLimit(baseURL: string, timeoutMs = 3_000): Promise<number | undefined> {
@@ -194,6 +264,7 @@ export type DynamicContextData = {
   used?: number
   totalSlots?: number
   maxSubagents?: number
+  kvUnified?: boolean
   timestamp: number
 }
 
@@ -202,12 +273,23 @@ export type DynamicContextStore = {
   listeners: Set<() => void>
   latestTotalSlots?: number
   latestMaxSubagents?: number
+  latestKvUnified?: boolean
   get(key: string): DynamicContextData | undefined
   getLimit(key: string): number | undefined
   getUsed(key: string): number | undefined
   getTotalSlots(key?: string): number | undefined
   getMaxSubagents(key?: string): number | undefined
-  set(key: string, data: { limit?: number; used?: number; totalSlots?: number; maxSubagents?: number }): void
+  getKvUnified(key?: string): boolean | undefined
+  set(
+    key: string,
+    data: {
+      limit?: number
+      used?: number
+      totalSlots?: number
+      maxSubagents?: number
+      kvUnified?: boolean
+    },
+  ): void
   subscribe(fn: () => void): () => void
 }
 
@@ -219,6 +301,7 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
       listeners: new Set<() => void>(),
       latestTotalSlots: undefined as number | undefined,
       latestMaxSubagents: undefined as number | undefined,
+      latestKvUnified: undefined as boolean | undefined,
       get(key: string): DynamicContextData | undefined {
         return this.entries.get(key)
       },
@@ -282,17 +365,46 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         }
         return this.latestMaxSubagents
       },
-      set(key: string, data: { limit?: number; used?: number; totalSlots?: number; maxSubagents?: number }) {
+      getKvUnified(key?: string): boolean | undefined {
+        if (key) {
+          const direct = this.entries.get(key)?.kvUnified
+          if (direct !== undefined) return direct
+          const slash = key.indexOf("/")
+          if (slash !== -1) {
+            const modelID = key.slice(slash + 1)
+            for (const [k, v] of this.entries) {
+              if ((k === modelID || k.endsWith("/" + modelID) || modelID.endsWith(k)) && v.kvUnified !== undefined) {
+                return v.kvUnified
+              }
+            }
+          }
+        }
+        if (this.latestKvUnified !== undefined) return this.latestKvUnified
+        if (typeof g.__OPENCODE_KV_UNIFIED__ === "boolean") return g.__OPENCODE_KV_UNIFIED__
+        return undefined
+      },
+      set(
+        key: string,
+        data: {
+          limit?: number
+          used?: number
+          totalSlots?: number
+          maxSubagents?: number
+          kvUnified?: boolean
+        },
+      ) {
         const existing = this.entries.get(key)
         const resolvedSlots = data.totalSlots ?? existing?.totalSlots
         const resolvedMaxSub =
           data.maxSubagents ??
           (resolvedSlots !== undefined ? Math.max(1, resolvedSlots - 1) : existing?.maxSubagents)
+        const resolvedKvUnified = data.kvUnified ?? existing?.kvUnified
         const updated: DynamicContextData = {
           limit: data.limit ?? existing?.limit,
           used: data.used ?? existing?.used,
           totalSlots: resolvedSlots,
           maxSubagents: resolvedMaxSub,
+          kvUnified: resolvedKvUnified,
           timestamp: Date.now(),
         }
         if (resolvedSlots !== undefined) {
@@ -302,6 +414,10 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         if (resolvedMaxSub !== undefined) {
           this.latestMaxSubagents = resolvedMaxSub
           g.__OPENCODE_MAX_SUBAGENTS__ = resolvedMaxSub
+        }
+        if (resolvedKvUnified !== undefined) {
+          this.latestKvUnified = resolvedKvUnified
+          g.__OPENCODE_KV_UNIFIED__ = resolvedKvUnified
         }
         this.entries.set(key, updated)
         const slash = key.indexOf("/")
@@ -475,13 +591,15 @@ export const Plugin = OpenCodePlugin.define({
         used: detected.used,
         totalSlots: detected.totalSlots,
         maxSubagents: detected.maxSubagents,
+        kvUnified: detected.kvUnified,
       })
 
       if (
         detected.limit !== undefined ||
         detected.used !== undefined ||
         detected.totalSlots !== undefined ||
-        detected.maxSubagents !== undefined
+        detected.maxSubagents !== undefined ||
+        detected.kvUnified !== undefined
       ) {
         dynamicStore.set(key, detected)
       }

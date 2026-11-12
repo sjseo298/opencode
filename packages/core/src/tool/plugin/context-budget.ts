@@ -93,8 +93,9 @@ export const Plugin = {
               const currentSessionTokens = UnifiedKV.estimateSessionTokens(messages)
 
               // Calculate other tokens in unified tree
-              const otherTreeTokens = yield* UnifiedKV.resolveTreeOtherTokens(db, session)
-              const unifiedKvTreeTokens = currentSessionTokens + otherTreeTokens
+              const isUnified = UnifiedKV.isUnifiedKv(undefined, session.model)
+              const otherTreeTokens = isUnified ? yield* UnifiedKV.resolveTreeOtherTokens(db, session) : 0
+              const unifiedKvTreeTokens = isUnified ? currentSessionTokens + otherTreeTokens : currentSessionTokens
 
               // Available headroom calculation
               // Buffer preserves 15% (minimum minSubagentBudget) of context window as safety margin
