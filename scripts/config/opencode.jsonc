@@ -13,9 +13,6 @@
           "name": "[VT]L: [esca] Qwen3.6-35B-A3B-Escha-W2",
           "author": "lmstudio",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -36,9 +33,6 @@
           "name": "[VT]L: [esca] Qwen3.8-27B-Escha-W2",
           "author": "lmstudio",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -59,9 +53,6 @@
           "name": "[VT]L: [gguf] bartowski/Laguna-XS-2.1-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -82,9 +73,6 @@
           "name": "[VT]L: [gguf] bartowski/Muse-Glimmer-30B-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -105,9 +93,6 @@
           "name": "[VT]L: [gguf] bartowski/Ornith-1.5-35B-A3B-Q4_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -128,9 +113,6 @@
           "name": "[VT]L: [gguf] bartowski/Ornith-1.5-35B-A3B-Q5_K_S.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -151,9 +133,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen3.8-27B-Q4_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -174,9 +153,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen3.8-27B-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -197,9 +173,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.5-9B-Q6_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -220,9 +193,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-27B-Q4_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -243,9 +213,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-27B-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -266,9 +233,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-27B-Q6_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -289,9 +253,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-35B-A3B-Q4_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -312,9 +273,6 @@
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-35B-A3B-Q5_K_L.gguf",
           "author": "bartowski",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -335,9 +293,6 @@
           "name": "[VT]L: [gguf] bottlecapai/ThinkingCap-Qwen3.8-27B-Q4_K_M.gguf",
           "author": "bottlecapai",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -358,9 +313,6 @@
           "name": "[VT]L: [gguf] bottlecapai/ThinkingCap-Qwen3.8-27B-Q6_K.gguf",
           "author": "bottlecapai",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -381,9 +333,6 @@
           "name": "[VT]L: [gguf] byteshape/Qwen3.6-35B-A3B-IQ4_XS-4.19bpw.gguf",
           "author": "byteshape",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -404,9 +353,6 @@
           "name": "[VT]L: [gguf] byteshape/Qwen3.8-27B-IQ4_XS-3.84bpw.gguf",
           "author": "byteshape",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -427,9 +373,6 @@
           "name": "[VT]L: [gguf] DavidAU/Qwen3.8-27B-Turbo-Brilliance-50X-RI-NEO-MAX-MTP-Q5_K_M.gguf",
           "author": "DavidAU",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -450,9 +393,6 @@
           "name": "[VT]L: [gguf] ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf",
           "author": "ggml-org",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -473,9 +413,6 @@
           "name": "[VT]L: [gguf] InternScience/Sage-A1.5-Q4_K_M.gguf",
           "author": "InternScience",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -496,9 +433,6 @@
           "name": "[VT]L: [gguf] lmstudio-community/Qwen3-8B-Q6_K.gguf",
           "author": "lmstudio-community",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -519,9 +453,6 @@
           "name": "[VT]L: [gguf] peculiar-ragdoll/Dirk-Qwen3.8-27B-UD-Q4_K_XL.gguf",
           "author": "peculiar-ragdoll",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -542,9 +473,6 @@
           "name": "[VT]L: [gguf] Qwen/Qwen3VL-2B-Thinking-Q4_K_M.gguf",
           "author": "Qwen",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -565,9 +493,6 @@
           "name": "[VT]L: [gguf] ukisai/Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf",
           "author": "ukisai",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -588,9 +513,6 @@
           "name": "[VT]L: [gguf] ukisai/Swift-1.5-Qwen3.8-27B-Q5_K_M.gguf",
           "author": "ukisai",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -611,9 +533,6 @@
           "name": "[VT]L: [gguf] unsloth/flint-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -634,9 +553,6 @@
           "name": "[VT]L: [gguf] unsloth/gemma-4-12b-it-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -657,9 +573,6 @@
           "name": "[VT]L: [gguf] unsloth/gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -680,9 +593,6 @@
           "name": "[VT]L: [gguf] unsloth/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -703,9 +613,6 @@
           "name": "[VT]L: [gguf] unsloth/gemma-4-31B-it-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -726,9 +633,6 @@
           "name": "[VT]L: [gguf] unsloth/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -749,9 +653,6 @@
           "name": "[VT]L: [gguf] unsloth/Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -772,9 +673,6 @@
           "name": "[VT]L: [gguf] unsloth/Muse-Glimmer-30B-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -795,9 +693,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -818,9 +713,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.5-2B-Q4_K_S.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -841,9 +733,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.5-2B-UD-Q8_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -864,9 +753,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.5-4B-Q8_0.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -887,9 +773,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.5-9B-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -910,9 +793,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-27B-Q5_K_M.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -933,9 +813,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-27B-Q6_K.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -956,9 +833,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-27B-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -979,9 +853,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1002,9 +873,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1025,9 +893,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1048,9 +913,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.8-27B-UD-Q4_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1071,9 +933,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.8-27B-UD-Q5_K_XL.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1094,9 +953,6 @@
           "name": "[VT]L: [gguf] unsloth/Qwen3.8-27B-UD-Q6_K.gguf",
           "author": "unsloth",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1117,9 +973,6 @@
           "name": "[VT]L: [mlx] Ternary-Bonsai-27B-mlx-2bit",
           "author": "lmstudio",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1140,9 +993,6 @@
           "name": "[VT]L: [splash] mlx-community/Qwen3.6-35B-A3B-4bit",
           "author": "mlx-community",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1163,9 +1013,6 @@
           "name": "[VT]L: [splash] mlx-community/Qwen3.8-27B-4bit",
           "author": "mlx-community",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1186,9 +1033,6 @@
           "name": "[VT]L: [strata] strata/Qwen3.8-Flash-Next-GSQ-RCO-Coder-IQ1_M-3.5bit.gguf",
           "author": "strata",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1209,9 +1053,6 @@
           "name": "[VT]L: [strata] strata/Qwen3.8-Flash-Next-Gyro-S-TQ1_0-1bit.gguf",
           "author": "strata",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1232,9 +1073,6 @@
           "name": "[VT]L: [strata] strata/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-3.5bit.gguf",
           "author": "strata",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1255,9 +1093,6 @@
           "name": "[VT]L: [strata] strata/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-3bit.gguf",
           "author": "strata",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1278,9 +1113,6 @@
           "name": "[VT]L: [strata] strata/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-2bit.gguf",
           "author": "strata",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",
@@ -1301,9 +1133,6 @@
           "name": "[VT]L: [strata] strata/Qwen3.8-Flash-Next-UD-Q4_K_XL-4.5bit.gguf",
           "author": "strata",
           "tool_call": true,
-          "reasoning": false,
-          "temperature": true,
-          "attachment": true,
           "modalities": {
             "input": [
               "text",

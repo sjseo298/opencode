@@ -761,9 +761,6 @@ def extract_llamacpp_models(data: dict) -> dict:
             "name": name,
             "author": author,
             "tool_call": True,
-            "reasoning": has_reasoning,
-            "temperature": True,
-            "attachment": has_vision or has_pdf_input,
             "modalities": {
                 "input": input_modalities,
                 "output": output_modalities,
@@ -846,9 +843,6 @@ def add_local_mlx_models_if_needed(llamacpp_models: dict, runtime: dict) -> dict
             "name": name,
             "author": author,
             "tool_call": True,
-            "reasoning": False,
-            "temperature": True,
-            "attachment": True,
             "modalities": {
                 "input": ["text", "pdf"],
                 "output": ["text"],
@@ -937,9 +931,6 @@ def extract_lmstudio_models(data: dict) -> dict:
             "name": name,
             "author": author,
             "tool_call": has_tool_use,
-            "reasoning": has_reasoning,
-            "temperature": True,
-            "attachment": has_vision,
             "modalities": {
                 "input": input_modalities,
                 "output": output_modalities,
@@ -1189,11 +1180,13 @@ def display_model_table(models: dict, server: str) -> None:
         output = inner.get("limit", {}).get("output", 0)
         author = inner.get("author", "")
         tool = "✓" if inner.get("tool_call") else ""
-        attach = "✓" if inner.get("attachment") else ""
-        reasoning = "✓" if inner.get("reasoning") else ""
-        effort = reasoning_effort_summary(inner) if inner.get("reasoning") else ""
         modalities = inner.get("modalities", {})
-        modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
+        inputs = modalities.get("input", []) if isinstance(modalities, dict) else []
+        attach = "✓" if (inner.get("attachment") or "image" in inputs or "pdf" in inputs) else ""
+        is_reasoning = bool(inner.get("reasoning") or inner.get("interleaved") or inner.get("variants"))
+        reasoning = "✓" if is_reasoning else ""
+        effort = reasoning_effort_summary(inner) if is_reasoning else ""
+        modality_str = "/".join(inputs) if inputs else "—"
 
         table.add_row(
             inner.get("name", model_id),
@@ -1323,11 +1316,74 @@ def action_launch_opencode() -> None:
             console.print(f"  Available binaries: {', '.join(available)}")
         return
     console.print("[bold]Launching opencode...[/]")
-    result = subprocess.run([str(binary)])
+    env = os.environ.copy()
+    cmd = [str(binary)]
+
+    # Attach to existing background service if running to prevent accidental SIGTERM replacement via version-mismatch
+    try:
+        status_proc = subprocess.run(
+            [str(binary), "service", "status"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if status_proc.returncode == 0:
+            url = status_proc.stdout.strip()
+            if url.startswith("http"):
+                pw_proc = subprocess.run(
+                    [str(binary), "service", "get", "password"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                password = pw_proc.stdout.strip() if pw_proc.returncode == 0 else ""
+                cmd.extend(["--server", url])
+                if password:
+                    env["OPENCODE_PASSWORD"] = password
+                env["OPENCODE_TUI_CHANNEL"] = "dev"
+                console.print(f"[cyan]🔗 Servicio activo detectado ({url}). Conectando sin interrumpir sesiones...[/]")
+    except Exception:
+        pass
+
+    result = subprocess.run(cmd, env=env)
     if result.returncode != 0:
         console.print()
         subprocess.run(["stty", "sane"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["reset"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def action_manage_service() -> None:
+    """Check or stop the background service daemon."""
+    import platform as _platform
+
+    cli_dist = SCRIPT_DIR.parent / "packages" / "cli" / "dist"
+    legacy_dist = SCRIPT_DIR.parent / "packages" / "opencode" / "dist"
+    machine = _platform.machine().lower()
+    arch_map = {"arm64": "arm64", "x86_64": "x64"} if sys.platform == "darwin" else {"x86_64": "x64", "aarch64": "arm64", "armv7l": "arm"}
+    arch = arch_map.get(machine, machine)
+    cli_target = f"cli-{sys.platform}-{arch}"
+    binary = cli_dist / cli_target / "bin" / "opencode"
+    if not binary.exists():
+        binary_cmd = "opencode"
+    else:
+        binary_cmd = str(binary)
+
+    console.print("\n[bold cyan]── Estado del Servicio en Segundo Plano ──[/]")
+    try:
+        proc = subprocess.run([binary_cmd, "service", "status"], capture_output=True, text=True, timeout=5)
+        status = proc.stdout.strip()
+        if status.startswith("http"):
+            console.print(f"  Estado: [green]En ejecución[/] en [bold]{status}[/]")
+            if Confirm.ask("\n  ¿Deseas detener el servicio en segundo plano limpiamente?"):
+                stop_proc = subprocess.run([binary_cmd, "service", "stop"], capture_output=True, text=True, timeout=10)
+                if stop_proc.returncode == 0:
+                    console.print("[green]✓ Servicio detenido correctamente.[/]")
+                else:
+                    console.print(f"[yellow]⚠ Error al detener: {stop_proc.stderr.strip()}[/]")
+        else:
+            console.print(f"  Estado: [yellow]{status or 'Detenido'}[/]")
+    except Exception as e:
+        console.print(f"[red]Error al consultar el servicio: {e}[/]")
 
 
 def action_sync_models() -> None:
@@ -1374,7 +1430,12 @@ def action_sync_models() -> None:
             output = inner.get("limit", {}).get("output", 0)
             author = inner.get("author", "")
             modalities = inner.get("modalities", {})
-            modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
+            inputs = modalities.get("input", []) if isinstance(modalities, dict) else []
+            attach = "✓" if (inner.get("attachment") or "image" in inputs or "pdf" in inputs) else ""
+            is_reasoning = bool(inner.get("reasoning") or inner.get("interleaved") or inner.get("variants"))
+            reasoning = "✓" if is_reasoning else ""
+            effort = reasoning_effort_summary(inner) if is_reasoning else ""
+            modality_str = "/".join(inputs) if inputs else "—"
             table.add_row(
                 "LlamaCPP",
                 inner.get("name", model_id),
@@ -1382,9 +1443,9 @@ def action_sync_models() -> None:
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
                 "✓" if inner.get("tool_call") else "",
-                "✓" if inner.get("attachment") else "",
-                "✓" if inner.get("reasoning") else "",
-                reasoning_effort_summary(inner) if inner.get("reasoning") else "",
+                attach,
+                reasoning,
+                effort,
                 modality_str,
             )
 
@@ -1394,7 +1455,12 @@ def action_sync_models() -> None:
             output = inner.get("limit", {}).get("output", 0)
             author = inner.get("author", "")
             modalities = inner.get("modalities", {})
-            modality_str = "/".join(modalities.get("input", [])) if modalities else "—"
+            inputs = modalities.get("input", []) if isinstance(modalities, dict) else []
+            attach = "✓" if (inner.get("attachment") or "image" in inputs or "pdf" in inputs) else ""
+            is_reasoning = bool(inner.get("reasoning") or inner.get("interleaved") or inner.get("variants"))
+            reasoning = "✓" if is_reasoning else ""
+            effort = reasoning_effort_summary(inner) if is_reasoning else ""
+            modality_str = "/".join(inputs) if inputs else "—"
             table.add_row(
                 "LM Studio",
                 inner.get("name", model_id),
@@ -1402,9 +1468,9 @@ def action_sync_models() -> None:
                 fmt_number(ctx) if ctx else "—",
                 fmt_number(output) if output else "—",
                 "✓" if inner.get("tool_call") else "",
-                "✓" if inner.get("attachment") else "",
-                "✓" if inner.get("reasoning") else "",
-                reasoning_effort_summary(inner) if inner.get("reasoning") else "",
+                attach,
+                reasoning,
+                effort,
                 modality_str,
             )
 
@@ -1558,15 +1624,19 @@ def fetch_all_available_models(config: dict) -> list[dict]:
                         existing["output"] = inner.get("limit", {}).get("output", 0)
                     if not existing.get("author") and author:
                         existing["author"] = author
+                    inputs = modalities.get("input", []) if isinstance(modalities, dict) else []
+                    has_attach = bool(inner.get("attachment") or "image" in inputs or "pdf" in inputs)
+                    has_reason = bool(inner.get("reasoning") or inner.get("interleaved") or inner.get("variants"))
                     if inner.get("tool_call"):
                         existing["tool_call"] = True
-                    if inner.get("attachment"):
+                    if has_attach:
                         existing["attachment"] = True
-                    if inner.get("reasoning"):
+                    if has_reason:
                         existing["reasoning"] = True
                     if modalities and existing.get("modalities") in ("—", ""):
-                        existing["modalities"] = "/".join(modalities.get("input", []))
+                        existing["modalities"] = "/".join(inputs)
                 else:
+                    inputs = modalities.get("input", []) if isinstance(modalities, dict) else []
                     models_map[key] = {
                         "provider": provider_name,
                         "id": model_id,
@@ -1575,9 +1645,9 @@ def fetch_all_available_models(config: dict) -> list[dict]:
                         "ctx": inner.get("limit", {}).get("context", 0),
                         "output": inner.get("limit", {}).get("output", 0),
                         "tool_call": inner.get("tool_call", False),
-                        "attachment": inner.get("attachment", False),
-                        "reasoning": inner.get("reasoning", False),
-                        "modalities": "/".join(modalities.get("input", [])) if modalities else "—",
+                        "attachment": bool(inner.get("attachment") or "image" in inputs or "pdf" in inputs),
+                        "reasoning": bool(inner.get("reasoning") or inner.get("interleaved") or inner.get("variants")),
+                        "modalities": "/".join(inputs) if inputs else "—",
                     }
 
     return sorted(models_map.values(), key=lambda m: (m["provider"], m["id"]))
@@ -2217,6 +2287,7 @@ def main() -> None:
         "7": ("Sync de Fork", action_sync_fork),
         "8": ("Limpiar temporales", prompt_temp_cleanup_on_startup),
         "9": ("Compilar proyecto", action_compile_project),
+        "s": ("Servicio de fondo", action_manage_service),
         "0": ("Salir", lambda: None),
     }
 
@@ -2228,7 +2299,7 @@ def main() -> None:
                 border_style="cyan",
             )
         )
-        console.print("  [1] Ejecutar opencode  — Lanza el TUI interactivo")
+        console.print("  [1] Ejecutar opencode  — Lanza el TUI interactivo (se conecta a servicio vivo)")
         console.print("  [2] Sync de Modelos    — Sincroniza modelos de LlamaCPP y LM Studio")
         console.print("  [3] Sync de PATH       — Gestiona la entrada de PATH en el shell")
         console.print("  [4] Ver Config         — Visualiza y compara configs de modelos")
@@ -2237,9 +2308,10 @@ def main() -> None:
         console.print("  [7] Sync de Fork       — Sync fork (origin) + instalar deps + compilar")
         console.print("  [8] Limpiar temporales — Escanea y limpia temporales según .gitignore")
         console.print("  [9] Compilar proyecto  — Instalar deps + compilar (sin sincronizar git)")
+        console.print("  [s] Servicio daemon    — Consulta o detiene el servidor en segundo plano")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], default="0")
+        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "s", "S"], default="0").lower()
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
@@ -2262,6 +2334,8 @@ def main() -> None:
             prompt_temp_cleanup_on_startup()
         elif choice == "9":
             action_compile_project()
+        elif choice == "s":
+            action_manage_service()
 
 
 if __name__ == "__main__":
