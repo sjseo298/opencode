@@ -108,6 +108,7 @@ function randomIndex(count: number) {
 
 export function PromptInterruptStatus(props: {
   armed: boolean
+  force?: boolean
   animations?: boolean
   text: RGBA
   subdued: RGBA
@@ -135,11 +136,17 @@ export function PromptInterruptStatus(props: {
     return tint(props.warning, props.flash, level)
   })
 
+  const label = createMemo(() => {
+    if (!props.armed) return "interrupt"
+    if (props.force) return "again to force stop"
+    return "again to interrupt"
+  })
+
   return (
     <text fg={props.armed ? armedColor() : props.text} wrapMode="none" truncate flexShrink={1}>
       esc{" "}
       <span style={{ fg: props.armed ? armedColor() : props.subdued }}>
-        {props.armed ? "again to interrupt" : "interrupt"}
+        {label()}
       </span>
     </text>
   )
@@ -371,6 +378,18 @@ export function Prompt(props: PromptProps) {
   })
   let disposed = false
   let pasteQueue = Promise.resolve()
+  let interruptTimer: ReturnType<typeof setTimeout> | undefined
+
+  onCleanup(() => {
+    clearTimeout(interruptTimer)
+  })
+
+  createEffect(() => {
+    if (status() !== "running" && store.interrupt > 0) {
+      clearTimeout(interruptTimer)
+      setStore("interrupt", 0)
+    }
+  })
 
   function enqueuePaste(run: (changed: () => boolean) => Promise<void>) {
     pasteQueue = pasteQueue
@@ -514,18 +533,26 @@ export function Prompt(props: PromptProps) {
           }
           if (!props.sessionID) return
 
-          setStore("interrupt", store.interrupt + 1)
-
-          setTimeout(() => {
+          clearTimeout(interruptTimer)
+          interruptTimer = setTimeout(() => {
             setStore("interrupt", 0)
           }, 5000)
 
-          if (store.interrupt >= 2) {
+          const next = store.interrupt + 1
+          setStore("interrupt", next)
+
+          if (next === 2) {
             void client.api.session.interrupt({
               sessionID: props.sessionID,
               resume: true,
             })
+          } else if (next >= 3) {
+            clearTimeout(interruptTimer)
             setStore("interrupt", 0)
+            void client.api.session.interrupt({
+              sessionID: props.sessionID,
+              resume: false,
+            })
           }
           dialog.clear()
         },
@@ -1919,6 +1946,7 @@ export function Prompt(props: PromptProps) {
                       </box>
                       <PromptInterruptStatus
                         armed={store.interrupt > 0}
+                        force={store.interrupt >= 2}
                         animations={animationsEnabled()}
                         text={theme.text.base}
                         subdued={theme.text.muted}

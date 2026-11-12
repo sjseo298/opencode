@@ -23,3 +23,26 @@ test("armed interrupt status renders visible warning text", async () => {
     app.renderer.destroy()
   }
 })
+
+test("force interrupt status renders visible force stop warning text", async () => {
+  const text = RGBA.fromHex("#ffffff")
+  const subdued = RGBA.fromHex("#808080")
+  const warning = RGBA.fromHex("#fbbf24")
+  const app = await testRender(
+    () => <PromptInterruptStatus armed force text={text} subdued={subdued} warning={warning} />,
+    {
+      width: 35,
+      height: 1,
+    },
+  )
+
+  try {
+    await app.renderOnce()
+    const line = app.renderer.currentRenderBuffer.getSpanLines()[0]!
+
+    expect(line.spans.map((span) => span.text).join("")).toContain("esc again to force stop")
+    expect(line.spans.filter((span) => span.text.trim()).every((span) => span.fg.equals(warning))).toBeTrue()
+  } finally {
+    app.renderer.destroy()
+  }
+})
