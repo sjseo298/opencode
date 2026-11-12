@@ -35,6 +35,7 @@ __pycache__/
 opencode-dev
 RELEASE_REVIEW.md
 logs/
+model_configs/
 *.bun-build
 tsconfig.tsbuildinfo
 /artifacts/
