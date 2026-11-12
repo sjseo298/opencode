@@ -3,7 +3,6 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { Credential, Integration, Model, Plugin, Provider } from "@opencode/plugin"
 
 import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth.ts"
-import { ANTIGRAVITY_REDIRECT_URI } from "./constants.ts"
 import { createAntigravityPlugin } from "./plugin.ts"
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./plugin/auth.ts"
 import { OPENCODE_V2_MODEL_DEFINITIONS, buildAccountModelDefinitions, ModelCatalogCacheSchema } from "./plugin/config/models-v2.ts"
@@ -436,17 +435,37 @@ export const AntigravityV2Plugin = Plugin.define({
               if (!state) throw new Error("Antigravity authorization did not provide OAuth state")
               const complete = (input: string) => runCredentialOperation(async () => {
                 let code = input.trim()
+                if (!code) throw new Error("Missing Antigravity authorization code or callback URL")
+                let callbackState = state
                 if (/^https?:\/\//i.test(code)) {
-                  const callback = new URL(code)
-                  const redirect = new URL(ANTIGRAVITY_REDIRECT_URI)
-                  if (callback.origin !== redirect.origin || callback.pathname !== redirect.pathname || callback.searchParams.get("state") !== state) {
-                    throw new Error("Invalid Antigravity OAuth callback URL or state")
+                  try {
+                    const callback = new URL(code)
+                    const errorParam = callback.searchParams.get("error")
+                    if (errorParam) {
+                      const desc = callback.searchParams.get("error_description")
+                      throw new Error(`Google returned an error: ${errorParam}${desc ? ` (${desc})` : ""}`)
+                    }
+                    const urlCode = callback.searchParams.get("code")
+                    const urlState = callback.searchParams.get("state")
+                    if (urlState && urlState !== state) {
+                      throw new Error("Invalid Antigravity OAuth callback state")
+                    }
+                    if (urlState) callbackState = urlState
+                    if (!urlCode) {
+                      throw new Error("Missing authorization code in callback URL")
+                    }
+                    code = urlCode
+                  } catch (err) {
+                    if (err instanceof Error && (err.message.includes("Google returned") || err.message.includes("state") || err.message.includes("authorization code"))) {
+                      throw err
+                    }
+                    throw new Error("Invalid Antigravity OAuth callback URL format")
                   }
-                  code = callback.searchParams.get("code") ?? ""
                 }
-                if (!code) throw new Error("Missing Antigravity authorization code")
-                const result = await exchangeAntigravity(code, state)
-                if (result.type !== "success") throw new Error("Antigravity authorization failed; please try signing in again")
+                const result = await exchangeAntigravity(code, callbackState)
+                if (result.type !== "success") {
+                  throw new Error(`Antigravity authorization failed: ${result.error || "please try signing in again"}`)
+                }
                 const account = await rememberAuth({ ...result, type: "oauth" }, result.email)
                 await updateAccounts(accounts => {
                   const current = accounts.accounts.find(item => item.id === account?.id)
@@ -482,7 +501,7 @@ export const AntigravityV2Plugin = Plugin.define({
                   log.warn("Could not start OAuth listener on port 51121, falling back to manual code entry", { error: String(error) })
                 }
               }
-              return { url: auth.url, instructions: "Open this URL, then paste the authorization code or full callback URL.", mode: "code", callback: complete }
+              return { url: auth.url, instructions: "Open this URL in your browser, complete Google sign-in, then copy the redirected localhost URL (or authorization code) and paste it here.", mode: "code", callback: complete }
             })
           },
           async refresh(credential) {

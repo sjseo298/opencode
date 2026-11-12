@@ -50,6 +50,29 @@ export const AntigravityTuiPlugin = {
           integrationID: "google", methodID: "antigravity", answer: { manual: false }, ...location(),
         })
         openUrl(attempt.url).catch(() => {})
+
+        if (attempt.mode === "code") {
+          ctx.ui.toast.show({ message: "Port 51121 is in use. Switched to manual input.", variant: "info" })
+          let completed = false
+          try {
+            const code = await ctx.ui.dialog.prompt({
+              title: "Connect Google (Antigravity)",
+              description: `Port 51121 is occupied by another process (e.g. VS Code).\n\n${attempt.instructions}\n\n${attempt.url}\n\nPaste authorization code or full callback URL:`,
+            })
+            if (!code?.trim()) return
+            await ctx.client.integration.oauth.complete({ integrationID: "google", attemptID: attempt.attemptID, code: code.trim(), ...location() })
+            completed = true
+            await rpc.models({}, location())
+            ctx.ui.toast.show({ message: "Google account connected successfully!", variant: "success" })
+            return
+          } catch (error) {
+            await ctx.ui.dialog.alert({ title: "Authorization Failed", message: error instanceof Error ? error.message : String(error) })
+            return
+          } finally {
+            if (!completed) await ctx.client.integration.oauth.cancel({ integrationID: "google", attemptID: attempt.attemptID, ...location() }).catch(() => {})
+          }
+        }
+
         ctx.ui.toast.show({ message: "Complete authorization in your browser...", variant: "info" })
 
         let completed = false
@@ -93,15 +116,17 @@ export const AntigravityTuiPlugin = {
         openUrl(attempt.url).catch(() => {})
         const code = await ctx.ui.dialog.prompt({
           title: "Connect Google (Antigravity)",
-          description: `${attempt.instructions}\n\n${attempt.url}\n\nPaste authorization code or redirect URL:`,
+          description: `${attempt.instructions}\n\n${attempt.url}\n\nPaste authorization code or full callback URL:`,
         })
         if (!code?.trim()) return
         await ctx.client.integration.oauth.complete({ integrationID: "google", attemptID: attempt.attemptID, code: code.trim(), ...location() })
         completed = true
         await rpc.models({}, location())
         ctx.ui.toast.show({ message: "Google account connected", variant: "success" })
+      } catch (error) {
+        await ctx.ui.dialog.alert({ title: "Authorization Failed", message: error instanceof Error ? error.message : String(error) })
       } finally {
-        if (!completed) await ctx.client.integration.oauth.cancel({ integrationID: "google", attemptID: attempt.attemptID, ...location() })
+        if (!completed) await ctx.client.integration.oauth.cancel({ integrationID: "google", attemptID: attempt.attemptID, ...location() }).catch(() => {})
       }
     }
 

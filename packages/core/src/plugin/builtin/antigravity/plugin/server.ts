@@ -112,7 +112,7 @@ function isRemoteEnvironment(): boolean {
  * 3. WSL/SSH/Remote: 0.0.0.0 (needed for cross-network access)
  * 4. Default: 127.0.0.1 (most secure for local development)
  */
-function getBindAddress(): string {
+function getBindAddress(): string | undefined {
   // Allow user override via environment variable
   const envBind = process.env.OPENCODE_ANTIGRAVITY_OAUTH_BIND;
   if (envBind) {
@@ -129,8 +129,8 @@ function getBindAddress(): string {
     return "0.0.0.0";
   }
   
-  // Default to 127.0.0.1 for security (local-only access)
-  return "127.0.0.1";
+  // Default to undefined to allow dual-stack binding (IPv4 and IPv6 localhost)
+  return undefined;
 }
 
 /**
@@ -337,10 +337,15 @@ const successResponse = `<!DOCTYPE html>
       reject(error);
     };
     server.once("error", handleError);
-    server.listen(port, bindAddress, () => {
+    const onListen = () => {
       server.off("error", handleError);
       resolve();
-    });
+    };
+    if (bindAddress) {
+      server.listen(port, bindAddress, onListen);
+    } else {
+      server.listen(port, onListen);
+    }
   });
 
   server.on("error", (error) => {

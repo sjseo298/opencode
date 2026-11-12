@@ -127,6 +127,28 @@ if (fs.existsSync(typesPath)) {
   fs.writeFileSync(typesPath, types);
 }
 
+// 3.1 server.ts dual-stack y robustez
+const serverPath = path.join('$TARGET_CORE', 'plugin/server.ts');
+if (fs.existsSync(serverPath)) {
+  let server = fs.readFileSync(serverPath, 'utf8');
+  server = server.replace(/function getBindAddress\(\): string {[\s\S]*?return \"127\.0\.0\.1\";\n}/,
+\`function getBindAddress(): string | undefined {
+  const envBind = process.env.OPENCODE_ANTIGRAVITY_OAUTH_BIND;
+  if (envBind) return envBind;
+  if (isOrbStackDockerHost()) return \"127.0.0.1\";
+  if (isWSL() || isRemoteEnvironment()) return \"0.0.0.0\";
+  return undefined;
+}\`);
+  server = server.replace(/server\.listen\(port, bindAddress, \(\) => {[\s\S]*?resolve\(\);\n\s*}\);/,
+\`const onListen = () => { server.off(\"error\", handleError); resolve(); };
+    if (bindAddress) {
+      server.listen(port, bindAddress, onListen);
+    } else {
+      server.listen(port, onListen);
+    }\`);
+  fs.writeFileSync(serverPath, server);
+}
+
 // 4. v2.ts compatibilidad fetch y bundle estático
 const v2Path = path.join('$TARGET_CORE', 'v2.ts');
 if (fs.existsSync(v2Path)) {
@@ -141,6 +163,54 @@ const GOOGLE_PACKAGE = \\\`aisdk:\\\${SDK_PACKAGE}\\\`\`);
     'fetch: scopedFetch(event.options.fetch, event.model.body) as any,');
   v2 = v2.replace(/{ key: \"manual\", type: \"boolean\", title: \"Paste an authorization code or callback URL\", default: true }/,
     '{ key: \"manual\", type: \"boolean\", title: \"Paste an authorization code or callback URL\", default: false }');
+  v2 = v2.replace(/const complete = \(input: string\) => runCredentialOperation\(async \(\) => {[\s\S]*?return oauthCredential\({ \.\.\.result, type: \"oauth\" \}, { \.\.\.\(result\.email \? { email: result\.email } : {}\), \.\.\.\(account\?\.id \? { antigravityAccountId: account\.id } : {}\) }\)\n\s*}\)/m,
+\`const complete = (input: string) => runCredentialOperation(async () => {
+                let code = input.trim()
+                if (!code) throw new Error("Missing Antigravity authorization code or callback URL")
+                let callbackState = state
+                if (/^https?:\\\/\\\//i.test(code)) {
+                  try {
+                    const callback = new URL(code)
+                    const errorParam = callback.searchParams.get("error")
+                    if (errorParam) {
+                      const desc = callback.searchParams.get("error_description")
+                      throw new Error(\\\`Google returned an error: \\\${errorParam}\\\${desc ? \\\` (\\\${desc})\\\` : ""}\\\`)
+                    }
+                    const urlCode = callback.searchParams.get("code")
+                    const urlState = callback.searchParams.get("state")
+                    if (urlState && urlState !== state) {
+                      throw new Error("Invalid Antigravity OAuth callback state")
+                    }
+                    if (urlState) callbackState = urlState
+                    if (!urlCode) {
+                      throw new Error("Missing authorization code in callback URL")
+                    }
+                    code = urlCode
+                  } catch (err) {
+                    if (err instanceof Error && (err.message.includes("Google returned") || err.message.includes("state") || err.message.includes("authorization code"))) {
+                      throw err
+                    }
+                    throw new Error("Invalid Antigravity OAuth callback URL format")
+                  }
+                }
+                const result = await exchangeAntigravity(code, callbackState)
+                if (result.type !== "success") {
+                  throw new Error(\\\`Antigravity authorization failed: \\\${result.error || "please try signing in again"}\\\`)
+                }
+                const account = await rememberAuth({ ...result, type: "oauth" }, result.email)
+                await updateAccounts(accounts => {
+                  const current = accounts.accounts.find(item => item.id === account?.id)
+                  if (!current) return
+                  current.enabled = true
+                  current.verificationRequired = false
+                  delete current.verificationRequiredAt
+                  delete current.verificationRequiredReason
+                  delete current.verificationUrl
+                })
+                await ctx.storage.remove("pool-selection")
+                invalidateLoader()
+                return oauthCredential({ ...result, type: "oauth" }, { ...(result.email ? { email: result.email } : {}), ...(account?.id ? { antigravityAccountId: account.id } : {}) })
+              })\`);
   v2 = v2.replace(/if \(answer\.manual !== false\) {[\s\S]*?mode: \"auto\", callback }/m,
     \`if (answer.manual !== true) {
                 try {
@@ -162,7 +232,7 @@ const GOOGLE_PACKAGE = \\\`aisdk:\\\${SDK_PACKAGE}\\\`\`);
                   log.warn(\"Could not start OAuth listener on port 51121, falling back to manual code entry\", { error: String(error) })
                 }
               }
-              return { url: auth.url, instructions: \"Open this URL, then paste the authorization code or full callback URL.\", mode: \"code\", callback: complete }\`);
+              return { url: auth.url, instructions: \"Open this URL in your browser, complete Google sign-in, then copy the redirected localhost URL (or authorization code) and paste it here.\", mode: \"code\", callback: complete }\`);
   fs.writeFileSync(v2Path, v2);
 }
 
