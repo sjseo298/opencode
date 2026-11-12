@@ -23,6 +23,10 @@ export class Info extends Schema.Class<Info>("ConfigExperimental.Info")({
     description:
       "Write each assistant part as its own session_part row instead of rewriting the whole message on every event. Defaults to false.",
   }),
+  session_restart: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Automatically resume interrupted sessions on server start with a restart notice. Defaults to false.",
+  }),
   image_generate: Schema.Union([
     Schema.Boolean,
     Schema.Struct({
