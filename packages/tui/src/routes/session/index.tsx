@@ -63,6 +63,7 @@ import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useClient } from "../../context/client"
 import { useEditorContext } from "../../context/editor"
 import { useDialog } from "../../ui/dialog"
+import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogSelect } from "../../ui/dialog-select"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { TodoItem } from "../../component/todo-item"
@@ -1081,6 +1082,42 @@ export function Session(props: {
   ]
 
   const baseCommands = createMemo(() => [
+    {
+      title: "Delete session",
+      id: "session.delete",
+      group: "Session",
+      suggested: true,
+      slash: { name: "delete", aliases: ["session.delete"] },
+      run: () => {
+        const sessionID = route.sessionID
+        const current = session()
+        const name = current?.title ?? sessionID
+        dialog.replace(
+          () => (
+            <DialogConfirm
+              title="Delete session"
+              message={`Are you sure you want to delete "${name}"? This will stop execution and remove the session.`}
+              label={{
+                confirm: "delete",
+                cancel: "cancel",
+              }}
+              onConfirm={() => {
+                void client.api.session
+                  .remove({ sessionID })
+                  .catch((error) => {
+                    toast.show({
+                      variant: "error",
+                      message: `Failed to delete session: ${errorMessage(error)}`,
+                    })
+                  })
+              }}
+            />
+          ),
+          undefined,
+          { size: "medium" },
+        )
+      },
+    },
     {
       title: "Rename session",
       id: "session.rename",
