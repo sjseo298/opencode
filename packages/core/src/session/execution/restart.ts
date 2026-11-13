@@ -1,9 +1,8 @@
 export * as SessionRestart from "./restart.js"
 
-import { Context, Effect, Layer, Option } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Bus } from "../../bus.js"
-import { Config } from "../../config.js"
 import { Job } from "../../job.js"
 import { Session } from "../../session.js"
 import { SessionEvent } from "../event.js"
@@ -30,11 +29,6 @@ export interface Options {
    * never accumulate: the budget is per-turn, not per-session.
    */
   readonly maxAttempts?: number
-  /**
-   * Whether to resume suspended sessions on boot.
-   * Defaults to false, cleanly releasing orphaned claims without resuming execution.
-   */
-  readonly enabled?: boolean
 }
 
 const DEFAULT_MAX_ATTEMPTS = 10
@@ -80,22 +74,6 @@ export const layer = (options?: Options) =>
       const sessions = yield* Session.Service
       const scope = yield* Effect.scope
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
-
-      const resolveEnabled = Effect.gen(function* () {
-        if (options?.enabled !== undefined) return options.enabled
-        if (process.env.OPENCODE_SESSION_RESTART !== undefined) {
-          return process.env.OPENCODE_SESSION_RESTART === "true"
-        }
-        const configService = yield* Effect.serviceOption(Config.Service)
-        if (Option.isSome(configService)) {
-          const entries = yield* configService.value.entries()
-          const experimental = Config.latest(entries, "experimental")
-          if (experimental?.session_restart !== undefined) {
-            return experimental.session_restart
-          }
-        }
-        return false
-      })
 
       const prepareResume = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
         // Durable before the resume runs, so a crash inside the resumed turn is
@@ -242,7 +220,6 @@ export const layer = (options?: Options) =>
 
       return Service.of({
         resumeSuspendedSessions: Effect.gen(function* () {
-          const enabled = yield* resolveEnabled
           const active = yield* execution.active
           const pending = yield* jobs.pendingBackground
           const children = pending.flatMap((background) =>
@@ -250,33 +227,6 @@ export const layer = (options?: Options) =>
               ? [background.recovery.childSessionID]
               : [],
           )
-
-          if (!enabled) {
-            // Clean up all orphaned child and session claims without resuming execution or emitting restart notices
-            yield* store.releaseChildClaims(children)
-            yield* Effect.forEach(
-              pending,
-              Effect.fnUntraced(function* (background) {
-                if (background.recovery.kind === "subagent") {
-                  if (background.status !== "running") {
-                    yield* recoverSubagent(background, background.recovery, new Set())
-                  } else {
-                    yield* jobs.completeBackground(background.notificationID)
-                  }
-                  return
-                }
-                yield* recoverToolJob(background, background.recovery)
-              }),
-              { discard: true },
-            )
-            yield* Effect.forEach(
-              (yield* store.listSuspended()).filter((sessionID) => !active.has(sessionID)),
-              (sessionID) => store.release(sessionID),
-              { concurrency: "unbounded", discard: true },
-            )
-            return
-          }
-
           // Early notices wait for recovery's accounting, including Sessions that exhaust their budget.
           const suspended = new Set(
             [...(yield* store.listSuspended()), ...children].filter((sessionID) => !active.has(sessionID)),
