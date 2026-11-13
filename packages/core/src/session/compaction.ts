@@ -294,7 +294,10 @@ export const layer = Layer.effect(
       const configured =
         !isSubagent && configuredModel
           ? yield* models
-              .resolve({ ...context.session, model: configuredModel }, catalog.available)
+              .resolve({ ...context.session, model: configuredModel }, catalog.available, {
+                kind: "compaction",
+                agent: context.agent.id,
+              })
               .pipe(Effect.orElseSucceed(() => undefined))
           : undefined
       const agent = isSubagent || native || configured ? undefined : yield* agents.get(Agent.ID.make("compaction"))

@@ -2536,6 +2536,9 @@ export type ConfigEntry =
           min_subagent_budget?: number
           embeddings_enabled?: boolean
           unattended?: boolean
+          llamacpp_kv_offload?: boolean
+          llamacpp_slot_save_path?: string
+          subagent_model?: string
         }
         skills?: Array<string>
         commands?: {
@@ -4948,6 +4951,9 @@ export type ExperimentalConfigUpdateInput = {
         readonly min_subagent_budget?: number | null
         readonly embeddings_enabled?: boolean | null
         readonly unattended?: boolean | null
+        readonly llamacpp_kv_offload?: boolean | null
+        readonly llamacpp_slot_save_path?: string | null
+        readonly subagent_model?: string | null
       }
     | undefined
 }

@@ -12,7 +12,6 @@ import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentJob } from "../../session/subagent-job.js"
-import { LlamaCppKV } from "../../session/llamacpp-kv.js"
 import { getObjectivesConfig } from "../../plugin/builtin/objectives-model.js"
 
 export const name = "subagent"

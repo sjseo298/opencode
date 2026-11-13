@@ -57,6 +57,7 @@ function DialogConnectedModels(props: {
   onConnect: () => void
 }) {
   const local = useLocal()
+  const dialog = useDialog()
   const newDesigns = useNewDesigns()
   const data = useData()
   const location = useLocation()

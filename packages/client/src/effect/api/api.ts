@@ -2826,6 +2826,9 @@ export type ExperimentalConfigUpdateInput = {
         readonly min_subagent_budget?: number | null | undefined
         readonly embeddings_enabled?: boolean | null | undefined
         readonly unattended?: boolean | null | undefined
+        readonly llamacpp_kv_offload?: boolean | null | undefined
+        readonly llamacpp_slot_save_path?: string | null | undefined
+        readonly subagent_model?: string | null | undefined
       }
     | undefined
 }
