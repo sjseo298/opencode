@@ -1666,7 +1666,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model, eligible)) {
                 const threshold = config.soft_quota_threshold_percent;
                 const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model, eligible);
-                const maxWaitMs = (config.max_rate_limit_wait_seconds ?? 300) * 1000;
+                const maxWaitMs = Math.min((config.max_rate_limit_wait_seconds ?? 300) * 1000, 15000);
                 
                 if (softQuotaWaitMs === null || (maxWaitMs > 0 && softQuotaWaitMs > maxWaitMs)) {
                   const waitTimeFormatted = softQuotaWaitMs ? formatWaitTime(softQuotaWaitMs) : "unknown";
@@ -1713,10 +1713,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 logRateLimitSnapshot(family, accountManager.getAccountsSnapshot());
               }
 
-              // If wait time exceeds max threshold, return error immediately instead of hanging
-              // 0 means disabled (wait indefinitely)
-              const maxWaitMs = (config.max_rate_limit_wait_seconds ?? 300) * 1000;
-              if (maxWaitMs > 0 && waitMs > maxWaitMs) {
+              // If wait time exceeds max threshold (capped at 15s max to prevent freezes), return error immediately
+              const maxWaitMs = Math.min((config.max_rate_limit_wait_seconds ?? 300) * 1000, 15000);
+              if (maxWaitMs <= 0 || waitMs > maxWaitMs) {
                 const waitTimeFormatted = formatWaitTime(waitMs);
                 await showToast(
                   `Rate limited for ${waitTimeFormatted}. Try again later or add another account.`,

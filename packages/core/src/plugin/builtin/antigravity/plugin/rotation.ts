@@ -266,6 +266,10 @@ export function selectHybridAccount(
     }));
 
   if (candidates.length === 0) {
+    const nonLimited = accounts.filter(acc => !acc.isRateLimited && !acc.isCoolingDown);
+    if (nonLimited.length > 0) {
+      return nonLimited.sort((a, b) => b.healthScore - a.healthScore)[0].index;
+    }
     return null;
   }
 
