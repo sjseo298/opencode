@@ -1320,6 +1320,7 @@ def action_launch_opencode() -> None:
     cmd = [str(binary)]
 
     # Attach to existing background service if running to prevent accidental SIGTERM replacement via version-mismatch
+    attached = False
     try:
         status_proc = subprocess.run(
             [str(binary), "service", "status"],
@@ -1342,8 +1343,13 @@ def action_launch_opencode() -> None:
                     env["OPENCODE_PASSWORD"] = password
                 env["OPENCODE_TUI_CHANNEL"] = "dev"
                 console.print(f"[cyan]🔗 Servicio activo detectado ({url}). Conectando sin interrumpir sesiones...[/]")
+                attached = True
     except Exception:
         pass
+
+    if not attached:
+        cmd.append("--standalone")
+        console.print("[cyan]🚀 Iniciando en modo --standalone (servidor privado independiente)...[/]")
 
     result = subprocess.run(cmd, env=env)
     if result.returncode != 0:
