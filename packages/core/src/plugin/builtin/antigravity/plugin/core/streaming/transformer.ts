@@ -301,8 +301,33 @@ export function createStreamingTransformer(
   const debugState = { injected: false };
   let hasSeenUsageMetadata = false;
 
+  const idleTimeoutMs = options.idleTimeoutMs ?? 60000;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const resetIdleTimer = (controller: TransformStreamDefaultController<Uint8Array>) => {
+    if (idleTimer) clearTimeout(idleTimer);
+    if (idleTimeoutMs <= 0) return;
+    idleTimer = setTimeout(() => {
+      controller.error(
+        new Error(`Stream idle timeout: No data received from Antigravity/Google API for ${Math.round(idleTimeoutMs / 1000)} seconds.`)
+      );
+    }, idleTimeoutMs);
+    idleTimer.unref?.();
+  };
+
+  const clearIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
   return new TransformStream({
+    start(controller) {
+      resetIdleTimer(controller);
+    },
     transform(chunk, controller) {
+      resetIdleTimer(controller);
       buffer += decoder.decode(chunk, { stream: true });
 
       const lines = buffer.split('\n');
@@ -327,6 +352,7 @@ export function createStreamingTransformer(
       }
     },
     flush(controller) {
+      clearIdleTimer();
       buffer += decoder.decode();
 
       if (buffer) {

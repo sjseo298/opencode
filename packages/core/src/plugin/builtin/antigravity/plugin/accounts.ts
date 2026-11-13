@@ -530,8 +530,21 @@ export class AccountManager {
     softQuotaThresholdPercent: number = 100,
     softQuotaCacheTtlMs: number = 10 * 60 * 1000,
     eligible: (account: ManagedAccount) => boolean = () => true,
+    autoRotate: boolean = false,
   ): ManagedAccount | null {
     const quotaKey = getQuotaKey(family, headerStyle, model);
+
+    if (!autoRotate) {
+      const currentCandidate = this.getCurrentAccountForFamily(family);
+      const current = (currentCandidate && eligible(currentCandidate))
+        ? currentCandidate
+        : (this.accounts.find(a => a.enabled !== false && eligible(a)) ?? null);
+      if (current) {
+        clearExpiredRateLimits(current);
+        this.markTouchedForQuota(current, quotaKey);
+      }
+      return current;
+    }
 
     if (strategy === 'round-robin') {
       const next = this.getNextForFamily(family, model, headerStyle, softQuotaThresholdPercent, softQuotaCacheTtlMs, eligible);

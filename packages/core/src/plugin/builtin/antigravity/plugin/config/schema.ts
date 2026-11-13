@@ -293,6 +293,37 @@ export const AntigravityConfigSchema = z.object({
    * @default "hybrid"
    */
   account_selection_strategy: AccountSelectionStrategySchema.default('hybrid'),
+
+  /**
+   * Automatically rotate between accounts on rate limits or new requests.
+   * When false (default), requests strictly stay on the active user-assigned account without switching.
+   * @default false
+   */
+  auto_rotate_accounts: z.boolean().default(false),
+
+  /**
+   * Maximum seconds to wait for initial HTTP response headers from Google API before timing out.
+   * @default 30
+   */
+  connection_timeout_seconds: z.number().min(5).max(300).default(30),
+
+  /**
+   * Maximum seconds of silence/inactivity during SSE streaming before aborting.
+   * @default 60
+   */
+  stream_idle_timeout_seconds: z.number().min(10).max(600).default(60),
+
+  /**
+   * Maximum retries for transient capacity / busy errors (503, 529, MODEL_CAPACITY_EXHAUSTED).
+   * @default 2
+   */
+  max_capacity_retries: z.number().min(0).max(5).default(2),
+
+  /**
+   * Maximum total accumulated delay in seconds for capacity errors before failing fast.
+   * @default 10
+   */
+  max_capacity_delay_seconds: z.number().min(1).max(60).default(10),
   
   /**
    * Enable PID-based account offset for multi-session distribution.
@@ -467,6 +498,11 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   quota_fallback: false,
   cli_first: false,
   account_selection_strategy: 'hybrid',
+  auto_rotate_accounts: false,
+  connection_timeout_seconds: 30,
+  stream_idle_timeout_seconds: 60,
+  max_capacity_retries: 2,
+  max_capacity_delay_seconds: 10,
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,
   scheduling_mode: 'cache_first',

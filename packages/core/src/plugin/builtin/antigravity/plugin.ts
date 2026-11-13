@@ -259,6 +259,90 @@ function shouldSkipLocalServer(): boolean {
   return isWSL2() || isRemoteEnvironment();
 }
 
+async function fetchWithHeaderTimeout(
+  fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+): Promise<Response> {
+  if (timeoutMs <= 0) {
+    return fetchFn(input, init);
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`Connection timed out waiting for response headers after ${Math.round(timeoutMs / 1000)}s`));
+  }, timeoutMs);
+  timeoutId.unref?.();
+
+  const onCallerAbort = () => {
+    controller.abort(callerSignal?.reason);
+  };
+
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      clearTimeout(timeoutId);
+      controller.abort(callerSignal.reason);
+    } else {
+      callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+  }
+
+  const existingSignal = init?.signal;
+  const onExistingAbort = () => {
+    controller.abort(existingSignal?.reason);
+  };
+  if (existingSignal && existingSignal !== callerSignal) {
+    if (existingSignal.aborted) {
+      clearTimeout(timeoutId);
+      controller.abort(existingSignal.reason);
+    } else {
+      existingSignal.addEventListener("abort", onExistingAbort, { once: true });
+    }
+  }
+
+  const requestSignal = input instanceof Request ? input.signal : undefined;
+  const onRequestAbort = () => {
+    controller.abort(requestSignal?.reason);
+  };
+  if (requestSignal && requestSignal !== callerSignal && requestSignal !== existingSignal) {
+    if (requestSignal.aborted) {
+      clearTimeout(timeoutId);
+      controller.abort(requestSignal.reason);
+    } else {
+      requestSignal.addEventListener("abort", onRequestAbort, { once: true });
+    }
+  }
+
+  try {
+    const response = await fetchFn(input, {
+      ...init,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (timedOut) {
+      throw new Error(`Connection timed out waiting for response headers after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw error;
+  } finally {
+    if (callerSignal) {
+      callerSignal.removeEventListener("abort", onCallerAbort);
+    }
+    if (existingSignal && existingSignal !== callerSignal) {
+      existingSignal.removeEventListener("abort", onExistingAbort);
+    }
+    if (requestSignal && requestSignal !== callerSignal && requestSignal !== existingSignal) {
+      requestSignal.removeEventListener("abort", onRequestAbort);
+    }
+  }
+}
+
 async function openBrowser(url: string): Promise<boolean> {
   try {
     if (process.platform === "darwin") {
@@ -1640,6 +1724,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               config.soft_quota_threshold_percent,
               softQuotaCacheTtlMs,
               eligible,
+              config.auto_rotate_accounts ?? false,
             );
 
             if (!account && allowQuotaFallback) {
@@ -1654,6 +1739,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 config.soft_quota_threshold_percent,
                 softQuotaCacheTtlMs,
                 eligible,
+                config.auto_rotate_accounts ?? false,
               );
               if (account) {
                 pushDebug(
@@ -1931,7 +2017,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
               try {
                 pushDebug("thinking-warmup: start");
-                const warmupResponse = await sendFetch(warmupUrl, warmupInit);
+                const headerTimeoutMs = (config.connection_timeout_seconds ?? 30) * 1000;
+                const warmupResponse = await fetchWithHeaderTimeout(
+                  sendFetch,
+                  warmupUrl,
+                  warmupInit,
+                  headerTimeoutMs,
+                  abortSignal,
+                );
                 const transformed = await transformAntigravityResponse(
                   warmupResponse,
                   true,
@@ -1941,6 +2034,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   warmupUrl,
                   prepared.effectiveModel,
                   prepared.sessionId,
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  (config.stream_idle_timeout_seconds ?? 60) * 1000,
                 );
                 await transformed.text();
                 markWarmupSuccess(prepared.sessionId);
@@ -1970,13 +2068,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (accountManager.isRateLimitedForHeaderStyle(account, family, headerStyle, model)) {
               // Antigravity-first fallback: exhaust antigravity across ALL accounts before gemini-cli
               if (allowQuotaFallback && family === "gemini" && headerStyle === "antigravity") {
-                // Check if ANY other account has antigravity available
-                if (accountManager.hasOtherAccountWithAntigravityAvailable(account.index, family, model, eligible)) {
+                // Check if ANY other account has antigravity available (only when auto_rotate_accounts is enabled)
+                if (config.auto_rotate_accounts && accountManager.hasOtherAccountWithAntigravityAvailable(account.index, family, model, eligible)) {
                   // Switch to another account with antigravity (preserve antigravity priority)
                   pushDebug(`antigravity rate-limited on account ${account.index}, but available on other accounts. Switching.`);
                   shouldSwitchAccount = true;
                 } else {
-                  // All accounts exhausted antigravity - fall back to gemini-cli on this account
+                  // Fall back to gemini-cli on this account
                   const alternateStyle = accountManager.getAvailableHeaderStyle(account, family, model);
                   const fallbackStyle = resolveQuotaFallbackHeaderStyle({
                     family,
@@ -1985,12 +2083,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   });
                   if (fallbackStyle) {
                     await showToast(
-                      `Antigravity quota exhausted on all accounts. Using Gemini CLI quota.`,
+                      `Antigravity quota exhausted on active account. Using Gemini CLI quota.`,
                       "warning"
                     );
                     headerStyle = fallbackStyle;
-                    pushDebug(`all-accounts antigravity exhausted, quota fallback: ${headerStyle}`);
+                    pushDebug(`active account antigravity exhausted, quota fallback: ${headerStyle}`);
                   } else {
+                    if (!config.auto_rotate_accounts) {
+                      lastError = new Error(`Active Antigravity account has exhausted available quotas for ${family}. Account auto-rotation is disabled.`);
+                    }
                     shouldSwitchAccount = true;
                   }
                 }
@@ -2012,9 +2113,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   headerStyle = fallbackStyle;
                   pushDebug(`quota fallback: ${headerStyle}`);
                 } else {
+                  if (!config.auto_rotate_accounts) {
+                    lastError = new Error(`Active Antigravity account has exhausted available quotas for ${family}. Account auto-rotation is disabled.`);
+                  }
                   shouldSwitchAccount = true;
                 }
               } else {
+                if (!config.auto_rotate_accounts) {
+                  lastError = new Error(`Active Antigravity account is rate-limited for ${family}. Account auto-rotation is disabled.`);
+                }
                 shouldSwitchAccount = true;
               }
             }
@@ -2027,18 +2134,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
             // Track if token was consumed (for hybrid strategy refund on error)
             let tokenConsumed = false;
             
-            // Track capacity retries per endpoint to prevent infinite loops
+            // Track capacity retries and delay across endpoints to prevent infinite loops and long freezes
             let capacityRetryCount = 0;
-            let lastEndpointIndex = -1;
+            let totalCapacityDelayMs = 0;
             
             const endpoints = getEndpointFallbacks(headerStyle);
             for (let i = 0; i < endpoints.length; i++) {
-              // Reset capacity retry counter when switching to a new endpoint
-              if (i !== lastEndpointIndex) {
-                capacityRetryCount = 0;
-                lastEndpointIndex = i;
-              }
-
               const currentEndpoint = endpoints[i];
 
               try {
@@ -2100,7 +2201,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = getTokenTracker().consume(account.index);
                 }
 
-                const response = await sendFetch(prepared.request, prepared.init);
+                const headerTimeoutMs = (config.connection_timeout_seconds ?? 30) * 1000;
+                const response = await fetchWithHeaderTimeout(
+                  sendFetch,
+                  prepared.request,
+                  prepared.init,
+                  headerTimeoutMs,
+                  abortSignal,
+                );
                 pushDebug(`status=${response.status} ${response.statusText}`);
 
 
@@ -2123,44 +2231,41 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   const rateLimitReason = parseRateLimitReason(bodyInfo.reason, bodyInfo.message, response.status);
 
                   // STRATEGY 1: CAPACITY / SERVER ERROR (Transient)
-                  // Goal: Wait and Retry SAME Account. DO NOT LOCK.
+                  // Goal: Wait and Retry SAME Account. DO NOT LOCK OR ROTATE.
                   // We handle this FIRST to avoid calling getRateLimitBackoff() and polluting the global rate limit state for transient errors.
                   if (rateLimitReason === "MODEL_CAPACITY_EXHAUSTED" || rateLimitReason === "SERVER_ERROR") {
-                     // Exponential backoff with jitter for capacity errors: 1s → 2s → 4s → 8s (max)
-                     // Matches Antigravity-Manager's ExponentialBackoff(1s, 8s)
-                     const baseDelayMs = 1000;
-                     const maxDelayMs = 8000;
-                     const exponentialDelay = Math.min(baseDelayMs * Math.pow(2, capacityRetryCount), maxDelayMs);
-                     // Add ±10% jitter to prevent thundering herd
-                     const jitter = exponentialDelay * (0.9 + Math.random() * 0.2);
-                     const waitMs = Math.round(jitter);
-                     const waitSec = Math.round(waitMs / 1000);
-                     
-                     pushDebug(`Server busy (${rateLimitReason}) on account ${account.index}, exponential backoff ${waitMs}ms (attempt ${capacityRetryCount + 1})`);
+                    const maxRetries = config.max_capacity_retries ?? 2;
+                    const maxDelayMs = (config.max_capacity_delay_seconds ?? 10) * 1000;
 
-                     await showToast(
-                       `⏳ Server busy (${response.status}). Retrying in ${waitSec}s...`,
-                       "warning",
-                     );
-                     
-                     await sleep(waitMs, abortSignal);
-                     
-                     // CRITICAL FIX: Decrement i so that the loop 'continue' retries the SAME endpoint index
-                     // (i++ in the loop will bring it back to the current index)
-                     // But limit retries to prevent infinite loops (Greptile feedback)
-                     if (capacityRetryCount < 3) {
-                       capacityRetryCount++;
-                       i -= 1;
-                       continue; 
-                      } else {
-                        pushDebug(`Max capacity retries (3) exhausted for endpoint ${currentEndpoint}, regenerating fingerprint...`);
-                        // Regenerate fingerprint to get fresh device identity before trying next endpoint
-                        const newFingerprint = accountManager.regenerateAccountFingerprint(account.index);
-                        if (newFingerprint) {
-                          pushDebug(`Fingerprint regenerated for account ${account.index}`);
-                        }
-                        continue;
-                      }
+                    const baseDelayMs = 1000;
+                    const exponentialDelay = Math.min(baseDelayMs * Math.pow(2, capacityRetryCount), 8000);
+                    const jitter = exponentialDelay * (0.9 + Math.random() * 0.2);
+                    const waitMs = Math.round(jitter);
+
+                    if (capacityRetryCount < maxRetries && (totalCapacityDelayMs + waitMs) <= maxDelayMs) {
+                      capacityRetryCount++;
+                      totalCapacityDelayMs += waitMs;
+                      const waitSec = Math.round(waitMs / 1000);
+
+                      pushDebug(
+                        `Server busy (${rateLimitReason}) on account ${account.index}, exponential backoff ${waitMs}ms (attempt ${capacityRetryCount}/${maxRetries}, totalDelay=${totalCapacityDelayMs}ms)`
+                      );
+
+                      await showToast(
+                        `⏳ Server busy (${response.status}). Retrying in ${waitSec}s (${capacityRetryCount}/${maxRetries})...`,
+                        "warning",
+                      );
+
+                      await sleep(waitMs, abortSignal);
+                      i -= 1; // Retry same endpoint
+                      continue;
+                    }
+
+                    pushDebug(
+                      `Capacity retries exhausted for account ${account.index} (retries=${capacityRetryCount}/${maxRetries}, totalDelay=${totalCapacityDelayMs}ms). Failing fast.`
+                    );
+                    lastFailure = createFailureContext(response);
+                    break; // Exit endpoint loop without rotating accounts
                   }
 
                   // STRATEGY 2: RATE LIMIT EXCEEDED (RPM) / QUOTA EXHAUSTED / UNKNOWN
@@ -2222,7 +2327,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       pushDebug(`cache_first: wait ${effectiveDelayMs}ms exceeds max ${maxCacheFirstWaitMs}ms, switching account`);
                     }
                     
-                    if (config.switch_on_first_rate_limit && accountCount > 1) {
+                    if (config.auto_rotate_accounts && config.switch_on_first_rate_limit && accountCount > 1) {
                       accountManager.markRateLimitedWithReason(account, family, headerStyle, model, rateLimitReason, serverRetryMs, config.failure_ttl_seconds * 1000);
                       shouldSwitchAccount = true;
                       break;
@@ -2241,7 +2346,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   if (family === "gemini") {
                     if (headerStyle === "antigravity") {
                       // Check if any other account has Antigravity quota for this model
-                      if (hasOtherAccountWithAntigravity(account)) {
+                      if (config.auto_rotate_accounts && hasOtherAccountWithAntigravity(account)) {
                         pushDebug(`antigravity exhausted on account ${account.index}, but available on others. Switching account.`);
                         await showToast(`Rate limited again. Switching account in 5s...`, "warning");
                         await sleep(SWITCH_ACCOUNT_DELAY_MS, abortSignal);
@@ -2291,23 +2396,33 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     }
                   }
 
-                  if (accountCount > 1) {
+                  if (config.auto_rotate_accounts && accountCount > 1) {
                     const quotaMsg = bodyInfo.quotaResetTime 
                       ? ` (quota resets ${bodyInfo.quotaResetTime})`
                       : ``;
                     await showToast(`Rate limited again. Switching account in 5s...${quotaMsg}`, "warning");
                     await sleep(SWITCH_ACCOUNT_DELAY_MS, abortSignal);
+                    lastFailure = createFailureContext(response);
+                    shouldSwitchAccount = true;
+                    break;
                   } else {
-                    // Single account: exponential backoff (1s, 2s, 4s, 8s... max 60s)
+                    if (rateLimitReason === "QUOTA_EXHAUSTED") {
+                      lastFailure = createFailureContext(response);
+                      break;
+                    }
+                    // Single account or auto-rotation disabled: exponential backoff (1s, 2s, 4s, 8s... max 60s)
                     const expBackoffMs = Math.min(FIRST_RETRY_DELAY_MS * Math.pow(2, attempt - 1), 60000);
+                    const maxWaitMs = Math.min((config.max_rate_limit_wait_seconds ?? 300) * 1000, 15000);
+                    if (expBackoffMs > maxWaitMs) {
+                      lastFailure = createFailureContext(response);
+                      break;
+                    }
                     const expBackoffFormatted = expBackoffMs >= 1000 ? `${Math.round(expBackoffMs / 1000)}s` : `${expBackoffMs}ms`;
                     await showToast(`Rate limited. Retrying in ${expBackoffFormatted} (attempt ${attempt})...`, "warning");
                     await sleep(expBackoffMs, abortSignal);
+                    i -= 1;
+                    continue;
                   }
-
-                  lastFailure = createFailureContext(response);
-                  shouldSwitchAccount = true;
-                  break;
                 }
 
                 // Success - reset rate limit backoff state for this quota
@@ -2454,6 +2569,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   prepared.toolDebugSummary,
                   prepared.toolDebugPayload,
                   debugLines,
+                  (config.stream_idle_timeout_seconds ?? 60) * 1000,
                 );
 
                 // Check for context errors and show appropriate toast
@@ -2528,8 +2644,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             } // end headerStyleLoop
             
             if (shouldSwitchAccount) {
-              // Avoid tight retry loops when there's only one account.
-              if (accountCount <= 1) {
+              // Avoid tight retry loops when there's only one account or auto-rotation is disabled.
+              if (accountCount <= 1 || !config.auto_rotate_accounts) {
                 if (lastFailure) {
                   return transformAntigravityResponse(
                     lastFailure.response,
@@ -2544,6 +2660,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     lastFailure.toolDebugSummary,
                     lastFailure.toolDebugPayload,
                     debugLines,
+                    (config.stream_idle_timeout_seconds ?? 60) * 1000,
                   );
                 }
 
@@ -2568,6 +2685,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 lastFailure.toolDebugSummary,
                 lastFailure.toolDebugPayload,
                 debugLines,
+                (config.stream_idle_timeout_seconds ?? 60) * 1000,
               );
             }
 
