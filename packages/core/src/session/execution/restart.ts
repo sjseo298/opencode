@@ -5,7 +5,6 @@ import { isReadonlyArrayNonEmpty } from "effect/Array"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Shell as ShellSchema } from "@opencode/schema/shell"
 import { Bus } from "../../bus.js"
-import { Config } from "../../config.js"
 import { Database } from "../../database/database.js"
 import { Instance } from "../../instance/service.js"
 import { Job } from "../../job.js"
@@ -38,11 +37,6 @@ export interface Options {
    * never accumulate: the budget is per-turn, not per-session.
    */
   readonly maxAttempts?: number
-  /**
-   * Whether to resume suspended sessions on boot.
-   * Defaults to false, cleanly releasing orphaned claims without resuming execution.
-   */
-  readonly enabled?: boolean
 }
 
 const DEFAULT_MAX_ATTEMPTS = 10
@@ -92,22 +86,6 @@ export const layer = (options?: Options) =>
       const db = (yield* Database.Service).db
       const scope = yield* Effect.scope
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
-
-      const resolveEnabled = Effect.gen(function* () {
-        if (options?.enabled !== undefined) return options.enabled
-        if (process.env.OPENCODE_SESSION_RESTART !== undefined) {
-          return process.env.OPENCODE_SESSION_RESTART === "true"
-        }
-        const configService = yield* Effect.serviceOption(Config.Service)
-        if (Option.isSome(configService)) {
-          const entries = yield* configService.value.entries()
-          const experimental = Config.latest(entries, "experimental")
-          if (experimental?.session_restart !== undefined) {
-            return experimental.session_restart
-          }
-        }
-        return false
-      })
 
       const wake = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
         const owner = yield* store.get(sessionID)
@@ -388,7 +366,6 @@ export const layer = (options?: Options) =>
 
       return Service.of({
         resumeSuspendedSessions: Effect.gen(function* () {
-          const enabled = yield* resolveEnabled
           const active = yield* execution.active
           const pending = yield* jobs.pendingBackground
           const children = new Set(
@@ -461,24 +438,6 @@ export const layer = (options?: Options) =>
               ),
             { discard: true },
           )
-          if (!enabled) {
-            yield* Effect.forEach(
-              pending,
-              Effect.fnUntraced(function* (background) {
-                if (background.recovery.kind === "subagent" && background.status === "running") {
-                  yield* jobs.completeBackground(background.notificationID)
-                }
-              }),
-              { discard: true },
-            )
-            yield* Effect.forEach(
-              (yield* store.listSuspended()).filter((sessionID) => !active.has(sessionID)),
-              (sessionID) => store.release(sessionID),
-              { concurrency: "unbounded", discard: true },
-            )
-            return
-          }
-
           const resumable: ResumableSubagent[] = []
           yield* Effect.forEach(
             pending,
