@@ -435,6 +435,30 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("when disabled, clears suspended session claims without resuming", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const sessionID = Session.ID.make("ses_disabled_restart")
+      yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const drained: string[] = []
+      const context = yield* buildExecution(
+        scope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        { enabled: false },
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      yield* restart.resumeSuspendedSessions
+
+      expect(drained).toEqual([])
+      expect(yield* store.listSuspended()).toEqual([])
+      expect(yield* claims(database)).toEqual({ [sessionID]: false })
+    }),
+  )
+
   it.effect("terminalizes a turn that exhausts its resume budget instead of crash-looping", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -2155,8 +2179,9 @@ function buildExecution(
           >,
       ),
     )
+    const restartOptions: SessionRestart.Options = { enabled: true, ...options }
     return yield* Layer.buildWithScope(
-      SessionRestart.layer(options).pipe(
+      SessionRestart.layer(restartOptions).pipe(
         Layer.provideMerge(sessionLayer),
         Layer.provideMerge(Layer.fresh(SessionExecution.layer)),
         Layer.provide(Layer.succeed(Database.Service, database)),
