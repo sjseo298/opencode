@@ -544,14 +544,12 @@ export function Prompt(props: PromptProps) {
           if (next === 2) {
             void client.api.session.interrupt({
               sessionID: props.sessionID,
-              resume: true,
             })
           } else if (next >= 3) {
             clearTimeout(interruptTimer)
             setStore("interrupt", 0)
             void client.api.session.interrupt({
               sessionID: props.sessionID,
-              resume: false,
             })
           }
           dialog.clear()
