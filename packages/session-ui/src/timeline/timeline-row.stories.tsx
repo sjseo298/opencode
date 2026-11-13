@@ -4,7 +4,8 @@ import type {
   SessionMessageInfo,
   SessionMessageUser,
 } from "@opencode/client/promise"
-import { createMemo, For, onCleanup, onMount } from "solid-js"
+import { createEffect, createMemo, For, onCleanup, onMount } from "solid-js"
+import { Dynamic } from "solid-js/web"
 import { createStore } from "solid-js/store"
 import type { SessionDocument } from "../document"
 import { SessionTimeline } from "./session-timeline"
@@ -49,7 +50,14 @@ export default {
 }
 
 export const AgentThinking = {
-  render: () => <AgentReasoningStory mode="compact" reasoning="heading" tool={false} text="" />,
+  args: { mode: "compact", reasoning: "heading", tool: false, text: "" },
+  argTypes: {
+    mode: { options: ["hidden", "compact", "full"] },
+    reasoning: { options: ["none", "blank", "heading"] },
+  },
+  render: (args: { mode: ReasoningMode; reasoning: string; tool: boolean; text: string }) => (
+    <AgentReasoningStory {...args} />
+  ),
 }
 
 export const StreamingReasoningAndText = {
@@ -125,65 +133,66 @@ export const ResponseSpeed = {
 }
 
 function AgentReasoningStory(props: { mode: ReasoningMode; reasoning: string; tool: boolean; text: string }) {
-  const content = [
-    ...(props.reasoning === "none"
-      ? []
-      : [
-          {
-            type: "reasoning" as const,
-            text:
-              props.reasoning === "blank"
-                ? "   "
-                : "## Inspecting stability\n\nI will inspect the timeline before changing its state.",
-            time: { created: STORY_TIME + 100, completed: props.tool || props.text ? STORY_TIME + 7100 : undefined },
-          },
-        ]),
-    ...(props.tool
-      ? [
-          {
-            type: "tool" as const,
-            id: "tool_reasoning_projection_skill",
-            name: "skill",
-            state: { status: "running" as const, input: { name: "inspect" }, metadata: {} },
-            time: { created: STORY_TIME + 7200, ran: STORY_TIME + 7250 },
-          },
-        ]
-      : []),
-    ...(props.text ? [{ type: "text" as const, text: props.text }] : []),
-  ] satisfies SessionMessageAssistant["content"]
+  const content = createMemo(
+    () =>
+      [
+        ...(props.reasoning === "none"
+          ? []
+          : [
+              {
+                type: "reasoning" as const,
+                text:
+                  props.reasoning === "blank"
+                    ? "   "
+                    : "## Inspecting stability\n\nI will inspect the timeline before changing its state.",
+                time: {
+                  created: STORY_TIME + 100,
+                  completed: props.tool || props.text ? STORY_TIME + 7100 : undefined,
+                },
+              },
+            ]),
+        ...(props.tool
+          ? [
+              {
+                type: "tool" as const,
+                id: "tool_reasoning_projection_skill",
+                name: "skill",
+                state: { status: "running" as const, input: { name: "inspect" }, metadata: {} },
+                time: { created: STORY_TIME + 7200, ran: STORY_TIME + 7250 },
+              },
+            ]
+          : []),
+        ...(props.text ? [{ type: "text" as const, text: props.text }] : []),
+      ] satisfies SessionMessageAssistant["content"],
+  )
 
-  const document = {
-    sessionID: CURRENT_SESSION_ID,
-    messages: [
-      ...thinkingDocument.messages,
-      {
-        id: "msg_projection_assistant",
-        type: "assistant",
-        agent: "build",
-        model: STORY_MODEL,
-        content,
-        time: { created: STORY_TIME },
-      },
-    ],
-    status: { type: "busy" },
-    diffs: [],
-  } satisfies SessionDocument
+  const document = createMemo(
+    () =>
+      ({
+        sessionID: CURRENT_SESSION_ID,
+        messages: [
+          ...thinkingDocument.messages,
+          {
+            id: "msg_projection_assistant",
+            type: "assistant",
+            agent: "build",
+            model: STORY_MODEL,
+            content: content(),
+            time: { created: STORY_TIME },
+          },
+        ],
+        status: { type: "busy" },
+        diffs: [],
+      }) satisfies SessionDocument,
+  )
 
   return (
     <section class="mx-auto w-full max-w-[720px] p-6">
-      <CurrentSessionProviders document={document}>
-        <SessionTimeline document={document} reasoningMode={props.mode} />
+      <CurrentSessionProviders document={document()}>
+        <SessionTimeline document={document()} reasoningMode={props.mode} />
       </CurrentSessionProviders>
     </section>
   )
-}
-
-const AgentReasoning = {
-  args: { mode: "compact", reasoning: "heading", tool: false, text: "" },
-  argTypes: { reasoning: { control: "select", options: ["none", "blank", "heading"] } },
-  render: (args: { mode: ReasoningMode; reasoning: string; tool: boolean; text: string }) => (
-    <AgentReasoningStory {...args} />
-  ),
 }
 
 function HiddenReasoningStory() {
@@ -929,7 +938,7 @@ const MediaAttachmentRetry = {
 }
 
 const conversationScenarios = {
-  reasoning: AgentReasoning,
+  reasoning: AgentThinking,
   hidden: WorkingWithoutReasoningDetails,
   retry: RetryAndRecover,
   notices: AgentActivityNotices,
@@ -942,19 +951,112 @@ const conversationScenarios = {
   media: MediaAttachmentRetry,
 }
 
-export const Conversation = {
-  args: { scenario: "notices", mode: "compact", reasoning: "heading", tool: false, text: "" },
-  argTypes: {
-    scenario: { control: "select", options: Object.keys(conversationScenarios) },
-    reasoning: { control: "select", options: ["none", "blank", "heading"] },
-    mode: { control: "select", options: ["hidden", "compact", "full"] },
-  },
-  render: (args: { scenario: string; mode: ReasoningMode; reasoning: string; tool: boolean; text: string }) => {
-    if (args.scenario === "reasoning") return <AgentReasoningStory {...args} />
+/**
+ * A stack of three prompts arriving, a prompt sent with another model that stands alone, then two steers waiting behind
+ * the running turn. Send next adds the next prompt; Deliver next delivers the oldest steer.
+ */
+export const PromptRuns = {
+  args: { count: 1 },
+  argTypes: { count: { control: { type: "range", min: 1, max: 6, step: 1 } } },
+  render: (args: { count: number }) => {
+    const start = Date.now() - 10 * 60_000
 
-    // SAFETY: the scenario control only offers conversationScenarios keys, and "reasoning" returned above.
-    return conversationScenarios[args.scenario as Exclude<keyof typeof conversationScenarios, "reasoning">].render()
+    const prompt = (id: string, text: string, minute: number, variant?: string) => ({
+      id,
+      type: "user" as const,
+      text,
+      time: { created: start + minute * 60_000 },
+      metadata: {
+        agent: "build",
+        model: { providerID: "anthropic", id: "claude-opus-5-5", variant: variant ?? "high" },
+      },
+    })
+
+    const prompts = [
+      prompt("msg_end_0", "You don't need to update the tests yet", 0),
+      prompt("msg_end_1", "just play this back against the old fixture first", 1),
+      prompt("msg_end_2", "So that we can see what actually changed", 2),
+      prompt("msg_end_3", "Now try it with max effort", 5, "max"),
+      prompt("msg_end_4", "Also check the retry path", 7, "max"),
+      prompt("msg_end_5", "And rebase on beta first", 8, "max"),
+    ]
+
+    const steers = ["msg_end_4", "msg_end_5"]
+
+    const [state, setState] = createStore<{ count: number; delivered: string[]; removed: string[] }>({
+      count: args.count,
+      delivered: [],
+      removed: [],
+    })
+
+    createEffect(() => setState({ count: args.count, delivered: [], removed: [] }))
+
+    const session = createMemo(
+      (): SessionDocument => ({
+        sessionID: CURRENT_SESSION_ID,
+        messages: prompts.slice(0, state.count).filter((message) => !state.removed.includes(message.id)),
+        status: { type: "busy" },
+        diffs: [],
+      }),
+    )
+
+    const take = async (input: { messageID: string }) => setState("removed", (ids) => [...ids, input.messageID])
+
+    const actions = {
+      revert: () => {},
+      fork: () => {},
+      pending: {
+        status: (messageID: string) =>
+          steers.includes(messageID) && !state.delivered.includes(messageID) ? ("steering" as const) : undefined,
+        queue: take,
+        remove: take,
+      },
+    }
+
+    const deliverNext = () => {
+      const next = steers.find((id) => !state.delivered.includes(id) && !state.removed.includes(id))
+
+      if (next) setState("delivered", (ids) => [...ids, next])
+    }
+
+    return (
+      <section class="mx-auto flex w-full max-w-[760px] flex-col gap-4 p-6 pb-0">
+        <div class="flex gap-2">
+          <button type="button" onClick={() => setState("count", (value) => Math.min(value + 1, prompts.length))}>
+            Send next
+          </button>
+          <button type="button" onClick={deliverNext}>
+            Deliver next
+          </button>
+        </div>
+        {/* Room above, as in a real session, so menus open upward. */}
+        <div class="h-56" />
+        <CurrentSessionProviders document={session()}>
+          <SessionTimeline document={session()} actions={actions} />
+        </CurrentSessionProviders>
+      </section>
+    )
   },
+}
+
+export const Conversation = {
+  args: { ...AgentThinking.args, scenario: "notices" },
+  argTypes: {
+    ...AgentThinking.argTypes,
+    scenario: { control: "select", options: Object.keys(conversationScenarios) },
+  },
+  render: (args: {
+    scenario: keyof typeof conversationScenarios
+    mode: ReasoningMode
+    reasoning: string
+    tool: boolean
+    text: string
+  }) => (
+    <Dynamic
+      component={conversationScenarios[args.scenario]?.render ?? conversationScenarios.notices.render}
+      {...args}
+    />
+  ),
 }
 
 export const InstructionsUpdatedSingle = {

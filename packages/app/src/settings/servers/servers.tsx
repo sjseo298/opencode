@@ -78,15 +78,12 @@ export const SettingsServerList: Component<{
               aria-label={entry.name}
             >
               <SettingsList>
-                <ServerConnectionRow entry={entry} onServerChange={props.onServerChange} />
-                <Show when={serverPagesConnection(entry.availability)} keyed>
-                  {(server) => (
-                    <ServerShell
-                      server={server}
-                      action={entry.key === props.selected ? undefined : `settings-shell:${entry.key}`}
-                    />
-                  )}
-                </Show>
+                <ServerConnectionRow
+                  entry={entry}
+                  onServerChange={props.onServerChange}
+                  shellMenu
+                  action={entry.key === props.selected ? undefined : `settings-shell:${entry.key}`}
+                />
               </SettingsList>
             </section>
           )}
@@ -117,6 +114,9 @@ function SettingsServersHeader(props: { title: string; onAddServer: () => void }
 function ServerConnectionRow(props: {
   entry: SettingsServer
   onServerChange?: (server: ServerConnection.Any) => void
+  shellMenu?: boolean
+  /** Search reveals the row with the default action; the Servers page names the other servers' rows apart. */
+  action?: string
 }) {
   const dialog = useDialog()
   const language = useLanguage()
@@ -153,7 +153,21 @@ function ServerConnectionRow(props: {
                     </Button>
                   )}
                 </Show>
-                <ServerRowMenu server={server()} domain={controller} onEdit={edit} />
+                <Show
+                  when={props.shellMenu && serverPagesConnection(props.entry.availability)}
+                  keyed
+                  fallback={<ServerRowMenu server={server()} domain={controller} onEdit={edit} />}
+                >
+                  {(ready) => (
+                    <ServerRowMenu
+                      server={server()}
+                      domain={controller}
+                      onEdit={edit}
+                      shell={createServerShellController(() => ready)}
+                      action={props.action ?? "settings-shell"}
+                    />
+                  )}
+                </Show>
               </div>
             </div>
           )}
@@ -165,10 +179,10 @@ function ServerConnectionRow(props: {
   )
 }
 
-function ServerShell(props: { server: ServerConnection.Any; action?: string }) {
+function ServerShell(props: { server: ServerConnection.Any }) {
   const controller = createServerShellController(() => props.server)
 
-  return <ShellSetting controller={controller} action={props.action} />
+  return <ShellSetting controller={controller} />
 }
 
 function ServerCompactionModel(props: { server: ServerConnection.Any; action?: string }) {
