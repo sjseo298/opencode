@@ -192,6 +192,7 @@ export async function registerAccountManagement(
         stream_idle_timeout_seconds: current.stream_idle_timeout_seconds ?? 180,
         max_capacity_retries: current.max_capacity_retries ?? 4,
         max_capacity_delay_seconds: current.max_capacity_delay_seconds ?? 30,
+        split_system_instruction: current.split_system_instruction ?? true,
       }
     },
     async updateConfig(patch: Partial<AntigravitySettings>): Promise<AntigravitySettings> {
@@ -220,6 +221,7 @@ export async function registerAccountManagement(
         stream_idle_timeout_seconds: resolved.stream_idle_timeout_seconds ?? 180,
         max_capacity_retries: resolved.max_capacity_retries ?? 4,
         max_capacity_delay_seconds: resolved.max_capacity_delay_seconds ?? 30,
+        split_system_instruction: resolved.split_system_instruction ?? true,
       }
     },
   })

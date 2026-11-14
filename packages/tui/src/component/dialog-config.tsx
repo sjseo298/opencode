@@ -638,6 +638,17 @@ export const settings: Setting[] = [
     format: (value) => `${value} s (def: 30 s)`,
     keywords: ["antigravity", "delay", "capacity", "max_capacity_delay_seconds"],
   },
+  {
+    title: "Dividir systemInstruction grande",
+    category: "Antigravity",
+    path: ["antigravity", "split_system_instruction"],
+    description:
+      "Divide systemInstruction >14,000 chars hacia contents para evitar límites 429 en Gemini (por defecto: on)",
+    default: true,
+    values: [false, true],
+    labels: ["off", "on"],
+    keywords: ["antigravity", "system", "instruction", "split", "429", "split_system_instruction"],
+  },
 ]
 
 export function settingID(setting: Setting) {
@@ -690,6 +701,7 @@ export function DialogConfig(props: { current?: string }) {
     stream_idle_timeout_seconds: 180,
     max_capacity_retries: 4,
     max_capacity_delay_seconds: 30,
+    split_system_instruction: true,
   })
 
   const [antigravityConfig, { mutate: setAntigravityConfig }] = createResource(async () => {

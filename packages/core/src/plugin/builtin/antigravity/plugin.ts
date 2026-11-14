@@ -2156,6 +2156,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     claudeToolHardening: config.claude_tool_hardening,
                     claudePromptAutoCaching: config.claude_prompt_auto_caching,
                     fingerprint: account.fingerprint,
+                    splitSystemInstruction: config.split_system_instruction,
                   },
                 );
 
@@ -2244,6 +2245,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   // Goal: Wait and Retry SAME Account. DO NOT LOCK OR ROTATE.
                   // We handle this FIRST to avoid calling getRateLimitBackoff() and polluting the global rate limit state for transient errors.
                   if (rateLimitReason === "MODEL_CAPACITY_EXHAUSTED" || rateLimitReason === "SERVER_ERROR") {
+                    await logResponseBody(debugContext, response, response.status);
                     const maxRetries = config.max_capacity_retries ?? 2;
                     const maxDelayMs = (config.max_capacity_delay_seconds ?? 10) * 1000;
 
@@ -2260,6 +2262,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       pushDebug(
                         `Server busy (${rateLimitReason}) on account ${account.index}, exponential backoff ${waitMs}ms (attempt ${capacityRetryCount}/${maxRetries}, totalDelay=${totalCapacityDelayMs}ms)`
                       );
+                      log.warn("Transient capacity/server error; retrying", {
+                        status: response.status,
+                        endpoint: currentEndpoint,
+                        model,
+                        headerStyle,
+                        reason: rateLimitReason,
+                        message: bodyInfo.message,
+                        attempt: capacityRetryCount,
+                        maxRetries,
+                        waitMs,
+                      });
 
                       await showToast(
                         `⏳ Server busy (${response.status}). Retrying in ${waitSec}s (${capacityRetryCount}/${maxRetries})...`,
@@ -2274,6 +2287,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     pushDebug(
                       `Capacity retries exhausted for account ${account.index} (retries=${capacityRetryCount}/${maxRetries}, totalDelay=${totalCapacityDelayMs}ms). Failing fast.`
                     );
+                    log.error("Capacity retries exhausted", {
+                      status: response.status,
+                      endpoint: currentEndpoint,
+                      model,
+                      headerStyle,
+                      reason: rateLimitReason,
+                      message: bodyInfo.message,
+                      retries: capacityRetryCount,
+                      maxRetries,
+                      totalDelayMs: totalCapacityDelayMs,
+                    });
                     lastFailure = createFailureContext(response);
                     break; // Exit endpoint loop without rotating accounts
                   }
@@ -2312,6 +2336,16 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   );
 
                   await logResponseBody(debugContext, response, 429);
+                  log.warn("Rate limit received", {
+                    status: response.status,
+                    endpoint: currentEndpoint,
+                    model,
+                    headerStyle,
+                    reason: rateLimitReason,
+                    message: bodyInfo.message,
+                    attempt,
+                    delayMs: effectiveDelayMs,
+                  });
 
                   getHealthTracker().recordRateLimit(account.index);
 
@@ -2443,6 +2477,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 if (response.status === 403) {
                   const errorBodyText = await response.clone().text().catch(() => "");
                   const extracted = extractVerificationErrorDetails(errorBodyText);
+                  log.error("Antigravity request forbidden (403)", {
+                    endpoint: currentEndpoint,
+                    model,
+                    headerStyle,
+                    projectId: projectContext.effectiveProjectId,
+                    validationRequired: extracted.validationRequired,
+                    message: extracted.message ?? errorBodyText.slice(0, 500),
+                  });
 
                   if (extracted.validationRequired) {
                     const verificationReason = extracted.message ?? "Google requires account verification.";

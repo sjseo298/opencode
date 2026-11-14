@@ -5,6 +5,7 @@ import { ANTIGRAVITY_ENDPOINT, ANTIGRAVITY_SCOPES } from "../../../src/plugin/bu
 import { AntigravityConfigSchema, DEFAULT_CONFIG } from "../../../src/plugin/builtin/antigravity/plugin/config/schema.js"
 import { loadConfig } from "../../../src/plugin/builtin/antigravity/plugin/config/loader.js"
 import { parseRateLimitReason } from "../../../src/plugin/builtin/antigravity/plugin/accounts.js"
+import { splitOverflowSystemInstruction } from "../../../src/plugin/builtin/antigravity/plugin/request.js"
 import { __testExports } from "../../../src/plugin/builtin/antigravity/plugin.js"
 
 describe("Antigravity Builtin Plugin", () => {
@@ -157,5 +158,33 @@ describe("Antigravity Builtin Plugin", () => {
     releaseFirst()
     await thirdWaiter
     expect(events).toEqual(["first-acquired", "third-acquired"])
+  })
+
+  test("splitOverflowSystemInstruction leaves small systemInstruction untouched and splits oversized ones into contents", () => {
+    const smallPayload: Record<string, unknown> = {
+      systemInstruction: { role: "user", parts: [{ text: "Short instructions" }] },
+      contents: [{ role: "user", parts: [{ text: "hola" }] }],
+    }
+    expect(splitOverflowSystemInstruction(smallPayload, 14_000)).toBe(false)
+    expect((smallPayload.contents as unknown[]).length).toBe(1)
+
+    const part1 = "Rule 1: Always verify.\n\n".repeat(400)
+    const part2 = "Rule 2: Keep tests passing.\n\n".repeat(400)
+    const largePayload: Record<string, unknown> = {
+      systemInstruction: { role: "user", parts: [{ text: part1 + part2 }] },
+      contents: [{ role: "user", parts: [{ text: "hola" }] }],
+    }
+
+    expect(splitOverflowSystemInstruction(largePayload, 14_000)).toBe(true)
+    const sysText = ((largePayload.systemInstruction as { parts: Array<{ text: string }> }).parts[0]!).text
+    expect(sysText.length).toBeLessThanOrEqual(14_000)
+    expect(sysText).toContain("Additional system instructions continue in the first user message below")
+
+    const contents = largePayload.contents as Array<{ role: string; parts: Array<{ text: string }> }>
+    expect(contents.length).toBe(3)
+    expect(contents[0]!.role).toBe("user")
+    expect(contents[0]!.parts[0]!.text).toContain("Rule 2: Keep tests passing.")
+    expect(contents[1]!.role).toBe("model")
+    expect(contents[2]!.parts[0]!.text).toBe("hola")
   })
 })

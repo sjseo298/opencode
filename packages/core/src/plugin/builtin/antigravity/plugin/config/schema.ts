@@ -326,6 +326,13 @@ export const AntigravityConfigSchema = z.object({
    * @default 30
    */
   max_capacity_delay_seconds: z.number().min(1).max(60).default(30),
+
+  /**
+   * Split oversized Gemini `systemInstruction` payloads (>14,000 chars) into `contents`
+   * to avoid Cloud Code 429 limits on large system instructions.
+   * @default true
+   */
+  split_system_instruction: z.boolean().default(true),
   
   /**
    * Enable PID-based account offset for multi-session distribution.
@@ -505,6 +512,7 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   stream_idle_timeout_seconds: 180,
   max_capacity_retries: 4,
   max_capacity_delay_seconds: 30,
+  split_system_instruction: true,
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,
   scheduling_mode: 'cache_first',

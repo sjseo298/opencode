@@ -20,6 +20,7 @@ export const AntigravitySettings = z.object({
   stream_idle_timeout_seconds: z.number().min(10).max(600).default(180),
   max_capacity_retries: z.number().min(0).max(5).default(4),
   max_capacity_delay_seconds: z.number().min(1).max(60).default(30),
+  split_system_instruction: z.boolean().default(true),
 })
 export type AntigravitySettings = z.infer<typeof AntigravitySettings>
 

@@ -60,8 +60,8 @@ export function createLogger(module: string): Logger {
   const service = `antigravity.${module}`;
 
   const log = (level: LogLevel, message: string, extra?: Record<string, unknown>): void => {
-    // TUI logging: controlled only by debug_tui policy
-    if (isDebugTuiEnabled()) {
+    // Always forward warn/error to opencode.log; gate debug/info on debug_tui policy
+    if (level === "warn" || level === "error" || isDebugTuiEnabled()) {
       const app = _client?.app;
       if (app && typeof app.log === "function") {
         app

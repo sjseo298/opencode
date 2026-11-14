@@ -735,11 +735,81 @@ export interface PrepareRequestOptions {
   claudePromptAutoCaching?: boolean;
   /** Google Search configuration (global default) */
   googleSearch?: GoogleSearchConfig;
+  /** Split oversized Gemini systemInstruction into contents (default: true) */
+  splitSystemInstruction?: boolean;
   /**
    * Per-account fingerprint. Kept for API compatibility: Antigravity requests always send
    * the current Hub User-Agent, never a stored fingerprint userAgent.
    */
   fingerprint?: Fingerprint;
+}
+
+const MAX_ANTIGRAVITY_SYSTEM_INSTRUCTION_CHARS = 14_000;
+const SYSTEM_INSTRUCTION_CONTINUATION_NOTE =
+  "\n\n[Note: Additional system instructions continue in the first user message below. Follow both parts consistently.]";
+
+/**
+ * Splits oversized Gemini `systemInstruction` text into `contents` so requests stay
+ * below Cloud Code's per-field `systemInstruction` threshold without dropping instructions.
+ */
+export function splitOverflowSystemInstruction(
+  requestPayload: Record<string, unknown>,
+  maxChars: number = MAX_ANTIGRAVITY_SYSTEM_INSTRUCTION_CHARS,
+): boolean {
+  const sys = requestPayload.systemInstruction;
+  if (!sys || typeof sys !== "object" || Array.isArray(sys)) return false;
+
+  const sysRecord = sys as Record<string, unknown>;
+  if (!Array.isArray(sysRecord.parts) || sysRecord.parts.length === 0) return false;
+
+  const firstPart = sysRecord.parts[0] as Record<string, unknown> | undefined;
+  if (!firstPart || typeof firstPart.text !== "string") return false;
+
+  const fullText = firstPart.text;
+  if (fullText.length <= maxChars) return false;
+
+  const headBudget = Math.max(1000, maxChars - SYSTEM_INSTRUCTION_CONTINUATION_NOTE.length);
+  const paragraphBreak = fullText.lastIndexOf("\n\n", headBudget);
+  const lineBreak = fullText.lastIndexOf("\n", headBudget);
+  const minCleanSplit = Math.floor(headBudget * 0.5);
+  const splitIndex =
+    paragraphBreak >= minCleanSplit
+      ? paragraphBreak
+      : lineBreak >= minCleanSplit
+        ? lineBreak
+        : headBudget;
+
+  const head = fullText.slice(0, splitIndex).trimEnd();
+  const tail = fullText.slice(splitIndex).trimStart();
+  if (!tail) return false;
+
+  const nextSystemText = head + SYSTEM_INSTRUCTION_CONTINUATION_NOTE;
+  firstPart.text = nextSystemText;
+
+  const existingContents = Array.isArray(requestPayload.contents) ? requestPayload.contents : [];
+  requestPayload.contents = [
+    {
+      role: "user",
+      parts: [
+        {
+          text: `Additional system instructions (Part 2 — follow these together with the system instructions above):\n\n${tail}`,
+        },
+      ],
+    },
+    {
+      role: "model",
+      parts: [{ text: "Understood. I will follow all system instructions from both parts consistently." }],
+    },
+    ...existingContents,
+  ];
+
+  log.debug("Split overflow systemInstruction into contents", {
+    totalChars: fullText.length,
+    systemChars: nextSystemText.length,
+    overflowChars: tail.length,
+  });
+
+  return true;
 }
 
 export function prepareAntigravityRequest(
@@ -1493,6 +1563,10 @@ export function prepareAntigravityRequest(
               role: "user",
               parts: [{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION }],
             };
+          }
+
+          if (!isClaude && options?.splitSystemInstruction !== false) {
+            splitOverflowSystemInstruction(requestPayload);
           }
         }
 
