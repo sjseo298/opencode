@@ -2017,7 +2017,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
               try {
                 pushDebug("thinking-warmup: start");
-                const headerTimeoutMs = (config.connection_timeout_seconds ?? 30) * 1000;
+                const liveConfig = loadConfig(directory);
+                const headerTimeoutMs = (liveConfig.connection_timeout_seconds ?? config.connection_timeout_seconds ?? 120) * 1000;
                 const warmupResponse = await fetchWithHeaderTimeout(
                   sendFetch,
                   warmupUrl,
@@ -2038,7 +2039,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   undefined,
                   undefined,
                   undefined,
-                  (config.stream_idle_timeout_seconds ?? 60) * 1000,
+                  (liveConfig.stream_idle_timeout_seconds ?? config.stream_idle_timeout_seconds ?? 180) * 1000,
                 );
                 await transformed.text();
                 markWarmupSuccess(prepared.sessionId);
@@ -2201,7 +2202,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = getTokenTracker().consume(account.index);
                 }
 
-                const headerTimeoutMs = (config.connection_timeout_seconds ?? 30) * 1000;
+                // Read live config dynamically so changes in antigravity.json / Settings take effect immediately
+                const liveConfig = loadConfig(directory);
+                const headerTimeoutMs = (liveConfig.connection_timeout_seconds ?? config.connection_timeout_seconds ?? 120) * 1000;
                 const response = await fetchWithHeaderTimeout(
                   sendFetch,
                   prepared.request,
@@ -2569,7 +2572,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   prepared.toolDebugSummary,
                   prepared.toolDebugPayload,
                   debugLines,
-                  (config.stream_idle_timeout_seconds ?? 60) * 1000,
+                  (liveConfig.stream_idle_timeout_seconds ?? config.stream_idle_timeout_seconds ?? 180) * 1000,
                 );
 
                 // Check for context errors and show appropriate toast
