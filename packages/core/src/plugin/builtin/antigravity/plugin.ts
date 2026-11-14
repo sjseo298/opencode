@@ -2205,13 +2205,20 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 // Read live config dynamically so changes in antigravity.json / Settings take effect immediately
                 const liveConfig = loadConfig(directory);
                 const headerTimeoutMs = (liveConfig.connection_timeout_seconds ?? config.connection_timeout_seconds ?? 120) * 1000;
-                const response = await fetchWithHeaderTimeout(
-                  sendFetch,
-                  prepared.request,
-                  prepared.init,
-                  headerTimeoutMs,
-                  abortSignal,
-                );
+                const accountSlotKey = account.email ?? String(account.index);
+                const releaseAccountSlot = await acquireAccountSlot(accountSlotKey, abortSignal);
+                let response: Response;
+                try {
+                  response = await fetchWithHeaderTimeout(
+                    sendFetch,
+                    prepared.request,
+                    prepared.init,
+                    headerTimeoutMs,
+                    abortSignal,
+                  );
+                } finally {
+                  releaseAccountSlot();
+                }
                 pushDebug(`status=${response.status} ${response.statusText}`);
 
 
@@ -3609,7 +3616,7 @@ function resolveHeaderRoutingDecision(
     cliFirst,
     preferredHeaderStyle,
     explicitQuota,
-    allowQuotaFallback: family === "gemini",
+    allowQuotaFallback: family === "gemini" && !explicitQuota && (config.quota_fallback ?? false),
   };
 }
 
@@ -3642,7 +3649,63 @@ function isExplicitQuotaFromUrl(urlString: string): boolean {
   return explicitQuota ?? false;
 }
 
+const accountRequestQueues = new Map<string, Promise<void>>();
+
+/**
+ * Serializes in-flight HTTP request initiation per account so concurrent calls
+ * (e.g., title generation + main prompt) do not burst the same account simultaneously.
+ */
+async function acquireAccountSlot(accountKey: string, abortSignal?: AbortSignal): Promise<() => void> {
+  if (abortSignal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+
+  const previous = accountRequestQueues.get(accountKey) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const chained = previous.then(() => current, () => current);
+  accountRequestQueues.set(accountKey, chained);
+
+  const release = () => {
+    releaseCurrent();
+    if (accountRequestQueues.get(accountKey) === chained) {
+      accountRequestQueues.delete(accountKey);
+    }
+  };
+
+  try {
+    if (abortSignal) {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+        previous.then(
+          () => {
+            abortSignal.removeEventListener("abort", onAbort);
+            resolve();
+          },
+          () => {
+            abortSignal.removeEventListener("abort", onAbort);
+            resolve();
+          },
+        );
+      });
+    } else {
+      await previous;
+    }
+  } catch (error) {
+    release();
+    throw error;
+  }
+
+  return release;
+}
+
 export const __testExports = {
+  acquireAccountSlot,
   getHeaderStyleFromUrl,
   resolveHeaderRoutingDecision,
   resolveQuotaFallbackHeaderStyle,

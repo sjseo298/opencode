@@ -4,6 +4,8 @@ import { generatePKCE, authorizeAntigravity } from "../../../src/plugin/builtin/
 import { ANTIGRAVITY_ENDPOINT, ANTIGRAVITY_SCOPES } from "../../../src/plugin/builtin/antigravity/constants.js"
 import { AntigravityConfigSchema, DEFAULT_CONFIG } from "../../../src/plugin/builtin/antigravity/plugin/config/schema.js"
 import { loadConfig } from "../../../src/plugin/builtin/antigravity/plugin/config/loader.js"
+import { parseRateLimitReason } from "../../../src/plugin/builtin/antigravity/plugin/accounts.js"
+import { __testExports } from "../../../src/plugin/builtin/antigravity/plugin.js"
 
 describe("Antigravity Builtin Plugin", () => {
   test("plugin is defined with correct ID", () => {
@@ -99,5 +101,61 @@ describe("Antigravity Builtin Plugin", () => {
     // Surfaces Google errors
     expect(() => parseCallback(`http://localhost:51121/oauth-callback?error=access_denied&error_description=User%20denied`))
       .toThrow("Google returned an error: access_denied (User denied)")
+  })
+
+  test("resolveHeaderRoutingDecision respects quota_fallback and explicitQuota", () => {
+    const explicitUrl = "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-hydrogen-medium:streamGenerateContent?alt=sse"
+    const genericUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse"
+
+    const defaultDecision = __testExports.resolveHeaderRoutingDecision(genericUrl, "gemini", DEFAULT_CONFIG)
+    expect(defaultDecision.preferredHeaderStyle).toBe("antigravity")
+    expect(defaultDecision.allowQuotaFallback).toBe(false)
+
+    const enabledDecision = __testExports.resolveHeaderRoutingDecision(genericUrl, "gemini", {
+      ...DEFAULT_CONFIG,
+      quota_fallback: true,
+    })
+    expect(enabledDecision.allowQuotaFallback).toBe(true)
+
+    const explicitDecision = __testExports.resolveHeaderRoutingDecision(explicitUrl, "gemini", {
+      ...DEFAULT_CONFIG,
+      quota_fallback: true,
+    })
+    expect(explicitDecision.explicitQuota).toBe(true)
+    expect(explicitDecision.allowQuotaFallback).toBe(false)
+
+    const claudeDecision = __testExports.resolveHeaderRoutingDecision(genericUrl, "claude", {
+      ...DEFAULT_CONFIG,
+      quota_fallback: true,
+    })
+    expect(claudeDecision.allowQuotaFallback).toBe(false)
+  })
+
+  test("parseRateLimitReason treats generic 'Resource has been exhausted' without explicit reason as capacity", () => {
+    expect(parseRateLimitReason(undefined, "Resource has been exhausted (e.g. check quota).", 429))
+      .toBe("MODEL_CAPACITY_EXHAUSTED")
+    expect(parseRateLimitReason("QUOTA_EXHAUSTED", "Resource has been exhausted (e.g. check quota).", 429))
+      .toBe("QUOTA_EXHAUSTED")
+  })
+
+  test("acquireAccountSlot serializes concurrent requests per account and supports abort", async () => {
+    const events: string[] = []
+    const releaseFirst = await __testExports.acquireAccountSlot("acct-test")
+    events.push("first-acquired")
+
+    const controller = new AbortController()
+    const abortedWaiter = __testExports.acquireAccountSlot("acct-test", controller.signal)
+    const thirdWaiter = __testExports.acquireAccountSlot("acct-test").then((release) => {
+      events.push("third-acquired")
+      release()
+    })
+
+    controller.abort()
+    await expect(abortedWaiter).rejects.toThrow("Aborted")
+    expect(events).toEqual(["first-acquired"])
+
+    releaseFirst()
+    await thirdWaiter
+    expect(events).toEqual(["first-acquired", "third-acquired"])
   })
 })

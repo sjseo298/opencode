@@ -269,9 +269,11 @@ export const AntigravityConfigSchema = z.object({
   max_rate_limit_wait_seconds: z.number().min(0).max(3600).default(300),
   
   /**
-   * @deprecated Kept only for backward compatibility.
-   * This flag is ignored at runtime.
-   * Gemini requests always fall back between Antigravity and Gemini CLI quotas.
+   * Enable automatic fallback from Antigravity quota to Gemini CLI quota (and vice versa)
+   * for Gemini models when the preferred quota is rate-limited.
+   *
+   * Disabled by default because Gemini CLI (`cloudcode-pa.googleapis.com`) rejects
+   * Antigravity-only models and accounts without a Gemini Code Assist license with 403 Forbidden.
    *
    * @default false
    */

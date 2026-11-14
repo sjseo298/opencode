@@ -75,7 +75,12 @@ export function parseRateLimitReason(
     }
     
     // Capacity / Overloaded (Transient) - Check FIRST before "exhausted"
-    if (lower.includes("capacity") || lower.includes("overloaded") || lower.includes("resource exhausted")) {
+    if (
+      lower.includes("capacity") ||
+      lower.includes("overloaded") ||
+      lower.includes("resource exhausted") ||
+      lower.includes("resource has been exhausted")
+    ) {
       return "MODEL_CAPACITY_EXHAUSTED";
     }
 
