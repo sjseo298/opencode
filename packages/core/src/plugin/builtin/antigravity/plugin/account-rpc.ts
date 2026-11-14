@@ -15,6 +15,14 @@ export const AccountSummary = z.object({
   }).optional(),
 })
 
+export const AntigravitySettings = z.object({
+  connection_timeout_seconds: z.number().min(5).max(300).default(120),
+  stream_idle_timeout_seconds: z.number().min(10).max(600).default(180),
+  max_capacity_retries: z.number().min(0).max(5).default(4),
+  max_capacity_delay_seconds: z.number().min(1).max(60).default(30),
+})
+export type AntigravitySettings = z.infer<typeof AntigravitySettings>
+
 export const AntigravityAccountsRpc = Rpc.define({
   id: "antigravity.accounts",
   methods: {
@@ -29,6 +37,8 @@ export const AntigravityAccountsRpc = Rpc.define({
       output: z.object({ message: z.string() }),
     },
     models: { input: z.object({}), output: z.object({ count: z.number() }) },
+    getConfig: { input: z.object({}), output: AntigravitySettings },
+    updateConfig: { input: AntigravitySettings.partial(), output: AntigravitySettings },
   },
   events: {},
 })

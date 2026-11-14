@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto"
 import type { Plugin } from "@opencode/plugin"
-import { AntigravityAccountsRpc, type AccountSummary } from "./account-rpc.ts"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { dirname } from "node:path"
+import { getUserConfigPath, loadConfig } from "./config/loader.ts"
+import { AntigravityAccountsRpc, type AccountSummary, type AntigravitySettings } from "./account-rpc.ts"
 import { parseRefreshParts } from "./auth.ts"
 import { checkAccountsQuota } from "./quota.ts"
 import { formatAccountQuotaReport } from "./ui/quota.ts"
@@ -182,5 +185,42 @@ export async function registerAccountManagement(
       return { message: action === "select" ? "Account selected" : action === "delete" ? "Account deleted" : action === "enable" ? "Account enabled" : "Account disabled" }
     },
     async models() { return { count: await refreshModels() } },
+    async getConfig(): Promise<AntigravitySettings> {
+      const current = loadConfig(process.cwd())
+      return {
+        connection_timeout_seconds: current.connection_timeout_seconds ?? 120,
+        stream_idle_timeout_seconds: current.stream_idle_timeout_seconds ?? 180,
+        max_capacity_retries: current.max_capacity_retries ?? 4,
+        max_capacity_delay_seconds: current.max_capacity_delay_seconds ?? 30,
+      }
+    },
+    async updateConfig(patch: Partial<AntigravitySettings>): Promise<AntigravitySettings> {
+      await beforeWrite()
+      const userConfigPath = getUserConfigPath()
+      let existing: Record<string, unknown> = {}
+      if (existsSync(userConfigPath)) {
+        try {
+          existing = JSON.parse(readFileSync(userConfigPath, "utf-8"))
+        } catch {
+          existing = {}
+        }
+      }
+      const updated = {
+        ...existing,
+        ...patch,
+      }
+      const dir = dirname(userConfigPath)
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true })
+      }
+      writeFileSync(userConfigPath, JSON.stringify(updated, null, 2), "utf-8")
+      const resolved = loadConfig(process.cwd())
+      return {
+        connection_timeout_seconds: resolved.connection_timeout_seconds ?? 120,
+        stream_idle_timeout_seconds: resolved.stream_idle_timeout_seconds ?? 180,
+        max_capacity_retries: resolved.max_capacity_retries ?? 4,
+        max_capacity_delay_seconds: resolved.max_capacity_delay_seconds ?? 30,
+      }
+    },
   })
 }

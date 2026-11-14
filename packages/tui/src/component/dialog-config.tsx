@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createResource, createSignal } from "solid-js"
 import { useConfig, useNewDesigns } from "../config"
 import { useClient } from "../context/client"
 import { useData } from "../context/data"
@@ -8,6 +8,7 @@ import { useDialog, type DialogContext } from "../ui/dialog"
 import { DialogSelect, DialogSelectChoice } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { DialogThemeList } from "./dialog-theme-list"
+import { AntigravityAccountsRpc, type AntigravitySettings } from "../feature-plugins/antigravity/account-rpc"
 
 type Setting = {
   title: string
@@ -584,6 +585,58 @@ export const settings: Setting[] = [
     labels: ["off", "on (def)"],
     keywords: ["objectives", "objetivos", "llamacpp", "kv", "offload", "subagent", "parallel"],
   },
+  {
+    title: "Timeout de conexión inicial (Google API)",
+    category: "Antigravity",
+    path: ["antigravity", "connection_timeout_seconds"],
+    description:
+      "Tiempo máximo en segundos de espera para recibir cabeceras HTTP de Google tras enviar el prompt (por defecto: 120s para contextos largos)",
+    default: 120,
+    step: 10,
+    min: 5,
+    max: 300,
+    format: (value) => `${value} s (def: 120 s)`,
+    keywords: ["antigravity", "timeout", "connection", "google", "headers", "connection_timeout_seconds"],
+  },
+  {
+    title: "Timeout de inactividad de stream SSE",
+    category: "Antigravity",
+    path: ["antigravity", "stream_idle_timeout_seconds"],
+    description:
+      "Tiempo máximo de silencio en segundos durante el streaming antes de abortar la conexión (por defecto: 180s ante alta demanda)",
+    default: 180,
+    step: 15,
+    min: 10,
+    max: 600,
+    format: (value) => `${value} s (def: 180 s)`,
+    keywords: ["antigravity", "timeout", "idle", "stream", "sse", "stream_idle_timeout_seconds"],
+  },
+  {
+    title: "Reintentos por saturación (503/529)",
+    category: "Antigravity",
+    path: ["antigravity", "max_capacity_retries"],
+    description:
+      "Número máximo de reintentos con backoff exponencial cuando Google reporta servidor saturado o capacidad agotada (por defecto: 4)",
+    default: 4,
+    step: 1,
+    min: 0,
+    max: 5,
+    format: (value) => `${value} (def: 4)`,
+    keywords: ["antigravity", "retries", "capacity", "503", "529", "max_capacity_retries"],
+  },
+  {
+    title: "Espera máxima acumulada por saturación",
+    category: "Antigravity",
+    path: ["antigravity", "max_capacity_delay_seconds"],
+    description:
+      "Tiempo acumulado máximo en segundos de espera durante los reintentos de saturación antes de fallar (por defecto: 30s)",
+    default: 30,
+    step: 5,
+    min: 1,
+    max: 60,
+    format: (value) => `${value} s (def: 30 s)`,
+    keywords: ["antigravity", "delay", "capacity", "max_capacity_delay_seconds"],
+  },
 ]
 
 export function settingID(setting: Setting) {
@@ -631,6 +684,14 @@ export function DialogConfig(props: { current?: string }) {
     return merged
   })
 
+  const [antigravityConfig, { mutate: setAntigravityConfig }] = createResource(async () => {
+    try {
+      return await client.api.rpc(AntigravityAccountsRpc).getConfig({}, { location: location.ref })
+    } catch {
+      return null
+    }
+  })
+
   const availableModels = createMemo(() =>
     (data.location.model.list(location.ref) ?? [])
       .map((item) => `${item.providerID}/${item.id}`)
@@ -646,6 +707,11 @@ export function DialogConfig(props: { current?: string }) {
     if (setting.path.join(".") === "compaction.model") return serverCompactionModel() ?? current ?? setting.default
     if (setting.path[0] === "objectives" && setting.path[1]) {
       return serverObjectivesConfig()[setting.path[1]] ?? current ?? setting.default
+    }
+    if (setting.path[0] === "antigravity" && setting.path[1]) {
+      const field = setting.path[1] as keyof AntigravitySettings
+      const rpcVal = antigravityConfig()?.[field]
+      return rpcVal ?? current ?? setting.default
     }
     return current ?? setting.default
   }
@@ -691,6 +757,7 @@ export function DialogConfig(props: { current?: string }) {
     setSaving(true)
     const isCompactionModel = setting.path.join(".") === "compaction.model"
     const isObjectivesSetting = setting.path[0] === "objectives" && Boolean(setting.path[1])
+    const isAntigravitySetting = setting.path[0] === "antigravity" && Boolean(setting.path[1])
     await Promise.all([
       config.update((draft) => {
         const parent = setting.path.slice(0, -1).reduce<Record<string, unknown>>((result, key) => {
@@ -711,6 +778,17 @@ export function DialogConfig(props: { current?: string }) {
             client.api.experimental.config.update({
               objectives: { [setting.path[1]!]: next },
             }),
+          ]
+        : []),
+      ...(isAntigravitySetting
+        ? [
+            client.api
+              .rpc(AntigravityAccountsRpc)
+              .updateConfig({ [setting.path[1]!]: next }, { location: location.ref })
+              .then((updated) => setAntigravityConfig(updated))
+              .catch((err) => {
+                toast.error(err instanceof Error ? err.message : String(err))
+              }),
           ]
         : []),
     ])
