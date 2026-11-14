@@ -8,6 +8,7 @@ import { useDialog, type DialogContext } from "../ui/dialog"
 import { DialogSelect, DialogSelectChoice } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { DialogThemeList } from "./dialog-theme-list"
+import { errorMessage } from "../util/error"
 import { AntigravityAccountsRpc, type AntigravitySettings } from "../feature-plugins/antigravity/account-rpc"
 
 type Setting = {
@@ -684,9 +685,20 @@ export function DialogConfig(props: { current?: string }) {
     return merged
   })
 
+  const [localAntigravity, setLocalAntigravity] = createSignal<Partial<AntigravitySettings>>({
+    connection_timeout_seconds: 120,
+    stream_idle_timeout_seconds: 180,
+    max_capacity_retries: 4,
+    max_capacity_delay_seconds: 30,
+  })
+
   const [antigravityConfig, { mutate: setAntigravityConfig }] = createResource(async () => {
     try {
-      return await client.api.rpc(AntigravityAccountsRpc).getConfig({}, { location: location.ref })
+      const data = await client.api.rpc(AntigravityAccountsRpc).getConfig({}, { location: location.ref })
+      if (data) {
+        setLocalAntigravity((prev) => ({ ...prev, ...data }))
+      }
+      return data
     } catch {
       return null
     }
@@ -710,8 +722,7 @@ export function DialogConfig(props: { current?: string }) {
     }
     if (setting.path[0] === "antigravity" && setting.path[1]) {
       const field = setting.path[1] as keyof AntigravitySettings
-      const rpcVal = antigravityConfig()?.[field]
-      return rpcVal ?? current ?? setting.default
+      return localAntigravity()[field] ?? antigravityConfig()?.[field] ?? setting.default
     }
     return current ?? setting.default
   }
@@ -758,6 +769,26 @@ export function DialogConfig(props: { current?: string }) {
     const isCompactionModel = setting.path.join(".") === "compaction.model"
     const isObjectivesSetting = setting.path[0] === "objectives" && Boolean(setting.path[1])
     const isAntigravitySetting = setting.path[0] === "antigravity" && Boolean(setting.path[1])
+    if (isAntigravitySetting) {
+      const field = setting.path[1] as keyof AntigravitySettings
+      setLocalAntigravity((prev) => ({ ...prev, [field]: next }))
+      try {
+        const updated = await client.api
+          .rpc(AntigravityAccountsRpc)
+          .updateConfig({ [field]: next }, { location: location.ref })
+        setAntigravityConfig(updated)
+      } catch (err) {
+        toast.show({
+          message: `Failed to update Antigravity setting: ${errorMessage(err)}`,
+          variant: "error",
+          duration: 5000,
+        })
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
+
     await Promise.all([
       config.update((draft) => {
         const parent = setting.path.slice(0, -1).reduce<Record<string, unknown>>((result, key) => {
@@ -780,19 +811,8 @@ export function DialogConfig(props: { current?: string }) {
             }),
           ]
         : []),
-      ...(isAntigravitySetting
-        ? [
-            client.api
-              .rpc(AntigravityAccountsRpc)
-              .updateConfig({ [setting.path[1]!]: next }, { location: location.ref })
-              .then((updated) => setAntigravityConfig(updated))
-              .catch((err) => {
-                toast.error(err instanceof Error ? err.message : String(err))
-              }),
-          ]
-        : []),
     ])
-      .catch(toast.error)
+      .catch((err) => toast.show({ message: errorMessage(err), variant: "error", duration: 5000 }))
       .finally(() => setSaving(false))
   }
 

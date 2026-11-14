@@ -65,6 +65,7 @@ import { useClient } from "../../context/client"
 import { useEditorContext } from "../../context/editor"
 import { useDialog } from "../../ui/dialog"
 import { DialogConfirm } from "../../ui/dialog-confirm"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogSelect } from "../../ui/dialog-select"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { TodoItem } from "../../component/todo-item"
@@ -1232,6 +1233,151 @@ export function Session(props: {
           })
           .catch((error) => toast.show({ message: errorMessage(error), variant: "error" }))
         dialog.clear()
+      },
+    },
+    {
+      title: "Set session context limit",
+      id: "session.context.limit",
+      group: "Session",
+      slash: {
+        name: "setContextLimit",
+        aliases: ["setcontextlimit"],
+        arguments: true as const,
+      },
+      run: (args?: string) => {
+        const ensureStore = () => {
+          const g = globalThis as any
+          if (!g.__OPENCODE_DYNAMIC_CONTEXT__) {
+            g.__OPENCODE_DYNAMIC_CONTEXT__ = {
+              entries: new Map(),
+              listeners: new Set(),
+              get(key: string) { return this.entries.get(key) },
+              getLimit(key: string) {
+                const direct = this.entries.get(key)?.limit
+                if (direct) return direct
+                const slashIdx = key.indexOf("/")
+                if (slashIdx !== -1) {
+                  const mId = key.slice(slashIdx + 1)
+                  for (const [k, v] of this.entries) {
+                    if ((k === mId || k.endsWith("/" + mId) || mId.endsWith(k)) && v.limit) return v.limit
+                  }
+                }
+                return undefined
+              },
+              set(key: string, data: any) {
+                const existing = this.entries.get(key)
+                const updated = { ...existing, ...data, timestamp: Date.now() }
+                this.entries.set(key, updated)
+                const slashIdx = key.indexOf("/")
+                if (slashIdx !== -1) this.entries.set(key.slice(slashIdx + 1), updated)
+                for (const fn of this.listeners) {
+                  try { fn() } catch {}
+                }
+              },
+              subscribe(fn: () => void) {
+                this.listeners.add(fn)
+                return () => this.listeners.delete(fn)
+              },
+            }
+          }
+          return g.__OPENCODE_DYNAMIC_CONTEXT__
+        }
+
+        const applyLimit = (targetKey: string, newLimit: number) => {
+          const store = ensureStore()
+          store.set(targetKey, { limit: newLimit })
+          toast.show({
+            message: `Context limit for ${targetKey} set to ${Locale.number(newLimit)} tokens (session only)`,
+            variant: "success",
+            duration: 4000,
+          })
+          dialog.clear()
+        }
+
+        const parseTokenCount = (val: string): number | undefined => {
+          const clean = val.trim().toLowerCase()
+          if (!clean) return undefined
+          if (clean.endsWith("k")) {
+            const num = parseFloat(clean.slice(0, -1))
+            return !isNaN(num) && num > 0 ? Math.round(num * 1000) : undefined
+          }
+          if (clean.endsWith("m")) {
+            const num = parseFloat(clean.slice(0, -1))
+            return !isNaN(num) && num > 0 ? Math.round(num * 1_000_000) : undefined
+          }
+          const num = parseInt(clean.replace(/[,._]/g, ""), 10)
+          return !isNaN(num) && num > 0 ? num : undefined
+        }
+
+        const activeSelection = local.model.current()
+        const activeKey = activeSelection ? `${activeSelection.providerID}/${activeSelection.modelID}` : undefined
+
+        const text = args?.trim()
+        if (text) {
+          const parts = text.split(/\s+/)
+          if (parts.length === 1) {
+            const parsed = parseTokenCount(parts[0]!)
+            if (parsed && activeKey) {
+              applyLimit(activeKey, parsed)
+              return
+            } else if (parsed && !activeKey) {
+              toast.show({ message: "No active model in session to apply limit", variant: "error" })
+              return
+            }
+          } else if (parts.length >= 2) {
+            const targetModel = parts[0]!
+            const parsed = parseTokenCount(parts[1]!)
+            if (parsed) {
+              applyLimit(targetModel, parsed)
+              return
+            }
+          }
+        }
+
+        // Si no se proporcionaron argumentos válidos, abrir diálogo interactivo
+        const allModels = models()
+        const openLimitPrompt = (modelKey: string, currentLimit?: number) => {
+          dialog.replace(() => (
+            <DialogPrompt
+              title={`Context limit: ${modelKey}`}
+              placeholder="e.g. 64000, 128k, 256k, 1m"
+              value={currentLimit ? String(currentLimit) : undefined}
+              onConfirm={(input) => {
+                const parsed = parseTokenCount(input)
+                if (!parsed) {
+                  toast.show({ message: "Invalid context token limit", variant: "error" })
+                  return
+                }
+                applyLimit(modelKey, parsed)
+              }}
+              onCancel={() => dialog.clear()}
+            />
+          ))
+        }
+
+        const modelOptions = allModels.map((m) => {
+          const key = `${m.providerID}/${m.id}`
+          const isCurrent = key === activeKey
+          return {
+            title: `${m.name || m.id}${isCurrent ? " (active)" : ""}`,
+            category: m.providerID,
+            footer: key,
+            value: key,
+            description: `Default: ${m.limit?.context ? Locale.number(m.limit.context) : "unknown"} tokens`,
+          }
+        })
+
+        dialog.replace(() => (
+          <DialogSelect
+            title="Set session context limit (Select model)"
+            options={modelOptions}
+            onSelect={(option) => {
+              const selectedModel = allModels.find((m) => `${m.providerID}/${m.id}` === option.value)
+              const existingDynamic = ensureStore().getLimit(option.value)
+              openLimitPrompt(option.value, existingDynamic ?? selectedModel?.limit?.context)
+            }}
+          />
+        ))
       },
     },
     {

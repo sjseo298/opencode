@@ -15,6 +15,7 @@ import { Session } from "../../session.js"
 import { SessionHistory } from "../../session/history.js"
 import { UnifiedKV } from "../../session/unified-kv.js"
 import { getDetectedSubagentCapacity } from "../../plugin/builtin/subagent-mandatory-instruction.js"
+import { getEffectiveContextLimit } from "../../plugin/builtin/subagent-mandatory-instruction.js"
 import { getObjectivesConfig } from "../../plugin/builtin/objectives-model.js"
 
 export const name = "context_budget"
@@ -77,14 +78,17 @@ export const Plugin = {
                 )
 
               // Determine context limit from current model or available models
-              let contextLimit = 128_000
+              let contextLimit = getEffectiveContextLimit(session.model)
               if (session.model) {
                 const available = yield* models.available().pipe(Effect.orElseSucceed(() => []))
                 const found = available.find(
                   (m) => m.providerID === session.model?.providerID && m.id === session.model?.id,
                 )
                 if (found?.limit?.context && found.limit.context > 0) {
-                  contextLimit = found.limit.context
+                  const dynamicLimit = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__?.getLimit?.(
+                    `${session.model.providerID}/${session.model.id}`,
+                  )
+                  contextLimit = dynamicLimit ?? found.limit.context
                 }
               }
 
