@@ -263,6 +263,39 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
 }
 await purgeResiduals()
 
+// FORK: Terminate running instances of opencode so subsequent launches use the freshly built binary
+try {
+  const currentPid = process.pid
+  const isWindows = process.platform === "win32"
+  if (isWindows) {
+    await $`taskkill /F /IM opencode.exe`.quiet().nothrow()
+  } else {
+    const output = await $`pgrep -f "opencode.*(serve|dist/cli)"`.quiet().nothrow().text()
+    const pids = output
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && Number(s) !== currentPid)
+    for (const pidStr of pids) {
+      const pid = Number(pidStr)
+      if (!isNaN(pid) && pid > 0) {
+        try { process.kill(pid, "SIGTERM") } catch {}
+      }
+    }
+    if (pids.length > 0) {
+      await Bun.sleep(500)
+      for (const pidStr of pids) {
+        const pid = Number(pidStr)
+        if (!isNaN(pid) && pid > 0) {
+          try { process.kill(pid, "SIGKILL") } catch {}
+        }
+      }
+      console.log(`[build] Terminated ${pids.length} running opencode instance(s)`)
+    }
+  }
+} catch {
+  // Never fail the build if process termination cannot be completed
+}
+
 async function compileExecutable(item: (typeof allTargets)[number]) {
   const release = process.env.BUN_COMPILE_RELEASE
   if (!release) return

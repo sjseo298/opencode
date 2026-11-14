@@ -286,6 +286,31 @@ clean_residuals() {
   echo "✅ Archivos residuales eliminados."
 }
 
+# ── terminate running opencode instances ───────────────────────────
+terminate_running_servers() {
+  echo "🛑  Verificando y terminando instancias previas de OpenCode en ejecución..."
+  local current_pid=$$
+  # Find all running processes matching opencode binary or serve, excluding current script PID
+  local pids
+  pids="$(pgrep -f "opencode.*(serve|dist/cli)" 2>/dev/null | grep -v "^${current_pid}$" || true)"
+  if [[ -n "$pids" ]]; then
+    echo "   Instancias detectadas (PIDs: $(echo "$pids" | tr '\n' ' ')). Terminando..."
+    for pid in $pids; do
+      kill -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 0.8
+    # Force kill any stubborn instances
+    for pid in $pids; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+    done
+    echo "✅ Instancias previas terminadas. La próxima ejecución cargará el binario recién compilado."
+  else
+    echo "✅ No hay servidores de OpenCode previos en ejecución."
+  fi
+}
+
 clean_turbo() {
   clean_residuals
 }
@@ -417,6 +442,7 @@ if [[ "$skip_sync" == true ]]; then
   fi
   clean_turbo
   build
+  terminate_running_servers
   test_plugins
   typecheck_report
   configure_path
@@ -441,6 +467,7 @@ else
   install_deps
   clean_turbo
   build
+  terminate_running_servers
   test_plugins
   typecheck_report
   configure_path
