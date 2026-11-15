@@ -290,11 +290,26 @@ clean_residuals() {
 terminate_running_servers() {
   echo "🛑  Verificando y terminando instancias previas de OpenCode en ejecución..."
   local current_pid=$$
-  # Find all running processes matching opencode binary or serve, excluding current script PID
-  local pids
-  pids="$(pgrep -f "opencode.*(serve|dist/cli)" 2>/dev/null | grep -v "^${current_pid}$" || true)"
+  # Collect current PID and all ancestor PIDs so build.sh never terminates its own parent OpenCode session
+  local protected_pids="|${current_pid}|"
+  local walk_pid="$current_pid"
+  while [[ -n "$walk_pid" && "$walk_pid" -gt 1 ]]; do
+    local ppid
+    ppid="$(ps -o ppid= -p "$walk_pid" 2>/dev/null | tr -d ' ' || true)"
+    [[ -z "$ppid" || "$ppid" == "$walk_pid" ]] && break
+    protected_pids="${protected_pids}${ppid}|"
+    walk_pid="$ppid"
+  done
+  # Find all running processes matching opencode binary or serve, excluding protected ancestor PIDs
+  local raw_pids pids=""
+  raw_pids="$(pgrep -f "opencode.*(serve|dist/cli)" 2>/dev/null || true)"
+  for pid in $raw_pids; do
+    if [[ "$protected_pids" != *"|${pid}|"* ]]; then
+      pids="${pids}${pids:+ }${pid}"
+    fi
+  done
   if [[ -n "$pids" ]]; then
-    echo "   Instancias detectadas (PIDs: $(echo "$pids" | tr '\n' ' ')). Terminando..."
+    echo "   Instancias detectadas (PIDs: $pids). Terminando..."
     for pid in $pids; do
       kill -TERM "$pid" 2>/dev/null || true
     done

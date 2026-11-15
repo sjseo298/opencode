@@ -618,7 +618,7 @@ describe("SubagentTool", () => {
                 type: "tool-call",
                 id,
                 name: SubagentTool.name,
-                input: { agent: "reviewer", description: "review", prompt: id, ...input },
+                input: { agent: "reviewer", description: "review", prompt: id, contextBudget: validBudget, ...input },
               },
             }).pipe(Effect.timeout("2 seconds"))
 
@@ -928,7 +928,7 @@ const reportingFixture = () =>
           type: "tool-call" as const,
           id,
           name: SubagentTool.name,
-          input: { agent: "reviewer", description: "review", prompt: "review this", ...input },
+          input: { agent: "reviewer", description: "review", prompt: "review this", contextBudget: validBudget, ...input },
         },
       })
     // A notice is either still queued or already delivered to the parent; count both.

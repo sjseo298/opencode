@@ -75,7 +75,7 @@ export function PromptFooter(props: {
     const contextLimit =
       typeof dynamicLimit === "number" && dynamicLimit > 0
         ? dynamicLimit
-        : (activeModel?.limit.context ?? usage?.contextLimit)
+        : (activeModel?.limit?.context ?? usage?.contextLimit)
     const max = contextLimit ? `max ${Locale.number(contextLimit)}` : undefined
     return [
       max,

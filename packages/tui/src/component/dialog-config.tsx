@@ -661,9 +661,18 @@ export function DialogConfig(props: { current?: string }) {
   const dialog = useDialog()
   const toast = useToast()
   const themes = useThemes()
-  const data = useData()
-  const location = useLocation()
-  const client = useClient()
+  let data: ReturnType<typeof useData> | undefined
+  let location: ReturnType<typeof useLocation> | undefined
+  let client: ReturnType<typeof useClient> | undefined
+  try {
+    data = useData()
+  } catch {}
+  try {
+    location = useLocation()
+  } catch {}
+  try {
+    client = useClient()
+  } catch {}
   const current = Math.max(
     0,
     settings.findIndex((setting) => settingID(setting) === props.current),
@@ -672,7 +681,7 @@ export function DialogConfig(props: { current?: string }) {
   const [saving, setSaving] = createSignal(false)
 
   const serverCompactionModel = createMemo(() => {
-    const entries = data.location.config.list(location.ref) ?? []
+    const entries = data && location ? (data.location.config.list(location.ref) ?? []) : []
     return entries
       .flatMap((entry) => {
         if (entry.type !== "document" || !entry.info.compaction?.model) return []
@@ -685,7 +694,7 @@ export function DialogConfig(props: { current?: string }) {
   })
 
   const serverObjectivesConfig = createMemo(() => {
-    const entries = data.location.config.list(location.ref) ?? []
+    const entries = data && location ? (data.location.config.list(location.ref) ?? []) : []
     const merged: Record<string, unknown> = {}
     for (const entry of entries) {
       if (entry.type !== "document" || !entry.info.objectives) continue
@@ -705,19 +714,20 @@ export function DialogConfig(props: { current?: string }) {
   })
 
   const [antigravityConfig, { mutate: setAntigravityConfig }] = createResource(async () => {
+    if (!client || !location) return null
     try {
-      const data = await client.api.rpc(AntigravityAccountsRpc).getConfig({}, { location: location.ref })
-      if (data) {
-        setLocalAntigravity((prev) => ({ ...prev, ...data }))
+      const result = await client.api.rpc(AntigravityAccountsRpc).getConfig({}, { location: location.ref })
+      if (result) {
+        setLocalAntigravity((prev) => ({ ...prev, ...result }))
       }
-      return data
+      return result
     } catch {
       return null
     }
   })
 
   const availableModels = createMemo(() =>
-    (data.location.model.list(location.ref) ?? [])
+    (data && location ? (data.location.model.list(location.ref) ?? []) : [])
       .map((item) => `${item.providerID}/${item.id}`)
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
   )
@@ -784,6 +794,10 @@ export function DialogConfig(props: { current?: string }) {
     if (isAntigravitySetting) {
       const field = setting.path[1] as keyof AntigravitySettings
       setLocalAntigravity((prev) => ({ ...prev, [field]: next }))
+      if (!client || !location) {
+        setSaving(false)
+        return
+      }
       try {
         const updated = await client.api
           .rpc(AntigravityAccountsRpc)
@@ -809,14 +823,14 @@ export function DialogConfig(props: { current?: string }) {
         }, draft)
         parent[setting.path.at(-1)!] = next
       }),
-      ...(isCompactionModel
+      ...(isCompactionModel && client
         ? [
             client.api.experimental.config.update({
               compaction: { model: next === "active" ? null : String(next) },
             }),
           ]
         : []),
-      ...(isObjectivesSetting
+      ...(isObjectivesSetting && client
         ? [
             client.api.experimental.config.update({
               objectives: { [setting.path[1]!]: next },

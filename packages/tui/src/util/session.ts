@@ -74,7 +74,7 @@ export function contextUsage(
   const model = models?.find((model) => model.providerID === modelProviderID && model.id === modelID)
 
   const dynamicLimit = modelKey ? store?.getLimit?.(modelKey) : undefined
-  const contextLimit = typeof dynamicLimit === "number" && dynamicLimit > 0 ? dynamicLimit : model?.limit.context
+  const contextLimit = typeof dynamicLimit === "number" && dynamicLimit > 0 ? dynamicLimit : model?.limit?.context
 
   return {
     tokens,
