@@ -4494,6 +4494,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       const po = sessionObjectives.get(sessionID)
       if (po) {
         po.unattended = true
+        po.approvedByUser = true
         po.status = "exploring"
         po.phase = { ...po.phase, paused: false, reason: input.reason?.trim() || "Unattended auto-approval" }
         po.updatedAt = Date.now()

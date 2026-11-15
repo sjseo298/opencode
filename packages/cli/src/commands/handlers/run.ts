@@ -6,7 +6,8 @@ import { Env } from "../../env"
 
 export default Runtime.handler(Commands.commands.run, (input) =>
   Effect.gen(function* () {
-    Env.applyObjectivesCliFlags(input)
+    const auto = input.auto || input.yolo || input.dangerouslySkipPermissions
+    Env.applyObjectivesCliFlags(input, { defaultUnattended: auto })
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
     // A one-off run uses the background service when it is already up, but never leaves a new one running.
     const server = yield* ServerConnection.resolve({ autostart: false }).pipe(

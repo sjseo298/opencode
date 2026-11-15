@@ -3394,6 +3394,63 @@ describe("hierarchical-objectives plugin", () => {
       }
     })
 
+    test("Feature: OPENCODE_OBJECTIVES_CLI_OVERRIDES unattended auto-approves incremental plan and sets approvedByUser", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("unattended-cli-overrides")
+
+      const prevOverrides = process.env.OPENCODE_OBJECTIVES_CLI_OVERRIDES
+      try {
+        process.env.OPENCODE_OBJECTIVES_CLI_OVERRIDES = JSON.stringify({ unattended: true })
+
+        const initRes = await tool.execute(
+          {
+            action: "set_primary",
+            title: "Incremental Unattended Task",
+            definitionOfDone: "Completed autonomously",
+            plannedSecondaryCount: 1,
+            delegation: { mode: "main", justification: "Autonomous run" },
+          },
+          { sessionID: sid },
+        )
+        expect(initRes.output.success).toBe(true)
+
+        const addRes = await tool.execute(
+          {
+            action: "add_secondary",
+            title: "Execute autonomous update",
+            rationale: "Needed for completion",
+            delegation: { mode: "main", justification: "Main thread execution" },
+          },
+          { sessionID: sid },
+        )
+        expect(addRes.output.success).toBe(true)
+
+        const presRes = await tool.execute({ action: "present_plan" }, { sessionID: sid })
+        expect(presRes.output.success).toBe(true)
+        expect(presRes.output.message).toContain("unattended mode (auto-approved)")
+
+        const po = getObjectives(sid)!
+        expect(po.status).toBe("exploring")
+        expect(po.unattended).toBe(true)
+        expect(po.approvedByUser).toBe(true)
+
+        const startRes = await tool.execute(
+          {
+            action: "update_secondary",
+            id: "SO-1",
+            status: "exploring",
+            delegation: { mode: "main", justification: "Proceeding immediately" },
+          },
+          { sessionID: sid },
+        )
+        expect(startRes.output.success).toBe(true)
+      } finally {
+        if (prevOverrides === undefined) delete process.env.OPENCODE_OBJECTIVES_CLI_OVERRIDES
+        else process.env.OPENCODE_OBJECTIVES_CLI_OVERRIDES = prevOverrides
+      }
+    })
+
     test("Feature: interactive plan presentation emits context metrics, recommendations, and 3 confirmation options", async () => {
       const { getRegisteredTool } = await setupPluginInstanceLocal()
       const tool = getRegisteredTool()

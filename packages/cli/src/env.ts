@@ -55,8 +55,21 @@ function extractObjectivesConfigFromJson(obj: Record<string, any>): Record<strin
   return obj
 }
 
-export function applyObjectivesCliFlags(input: Record<string, unknown>) {
+export function applyObjectivesCliFlags(
+  input: Record<string, unknown>,
+  options?: { defaultUnattended?: boolean },
+) {
   const overrides: Record<string, unknown> = {}
+  const existingOverrides = process.env.OPENCODE_OBJECTIVES_CLI_OVERRIDES
+  if (typeof existingOverrides === "string" && existingOverrides.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(existingOverrides)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        Object.assign(overrides, parsed)
+      }
+    } catch {}
+  }
+
   const rawConfig = unwrapOption(input.objectivesConfig)
   if (typeof rawConfig === "string" && rawConfig.trim()) {
     Object.assign(overrides, parseJsonOrFileConfig(rawConfig))
@@ -87,6 +100,15 @@ export function applyObjectivesCliFlags(input: Record<string, unknown>) {
     if (val !== undefined) {
       overrides[configKey] = val
     }
+  }
+
+  if (
+    options?.defaultUnattended &&
+    overrides.unattended === undefined &&
+    process.env.OPENCODE_OBJECTIVES_UNATTENDED === undefined &&
+    process.env.OPENCODE_UNATTENDED === undefined
+  ) {
+    overrides.unattended = true
   }
 
   if (Object.keys(overrides).length > 0) {
