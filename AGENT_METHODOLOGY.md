@@ -649,6 +649,7 @@ When resolving complex tasks, an agent may leverage the `subagent` tool to offlo
 2. **Slot-Based Subagent Concurrency (`max_subagents = total_slots - 1`)**:
    * When querying the server's maximum available context (`/props` and `/status`), the API reports `total_slots` (between 2 and 4) and `max_subagents = total_slots - 1`, because **1 slot is occupied by the active primary agent session**.
    * You may enable at most **`total_slots - 1` concurrent subagents** (`1` subagent when 2 slots are active, `2` subagents when 3 slots are active, or `3` subagents when 4 slots are active; defaulting to strictly 1 subagent at a time if not reported). Never exceed `total_slots - 1` simultaneous subagents.
+   * **Parent Turn Yielding (`awaitIdle` Synchronization)**: Subagent execution waits until the parent session completes its current response and becomes idle (`awaitIdle`). After calling `subagent`, the orchestrator must end its response immediately so the subagent can start.
 3. **Subagent Task Sizing & Context Protection (Mandatory)**:
    * **Do NOT delegate overly large tasks to subagents**, or they will exhaust their available context window before finishing.
    * Always assign **medium-sized, achievable tasks** (*tareas medianas y realizables*) with a clear, bounded scope.

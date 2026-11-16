@@ -39,9 +39,10 @@ export function buildOrchestratorGuide(capacity = getDetectedSubagentCapacity())
     maxSubagents <= 1
       ? `- Server Capacity Rule (\`max_subagents = total_slots - 1\`): The server reports ${totalSlots} parallel slots; 1 slot is used by your active primary session, leaving **1 subagent slot** available.
 - CRITICAL CONCURRENCY RULE: Delegate to only ONE subagent at a time. Never launch multiple subagents in parallel or concurrently.
-- Wait for the active subagent to conclude, review its evidence and output, and integrate it into your active objective before delegating any subsequent task.`
+- End your response immediately after delegating so the parent session becomes idle and the subagent can start; you will receive its <subagent> report to review and integrate before delegating any subsequent task.`
       : `- Server Capacity Rule (\`max_subagents = total_slots - 1\`): The server reports ${totalSlots} parallel slots; 1 slot is used by your active primary session, leaving **up to ${maxSubagents} concurrent subagents** available.
-- CRITICAL CONCURRENCY RULE: You may enable at most **${maxSubagents} subagents** concurrently (${totalSlots} total slots minus 1 active primary slot). Never exceed ${maxSubagents} simultaneous subagents.`
+- CRITICAL CONCURRENCY RULE: You may enable at most **${maxSubagents} subagents** concurrently (${totalSlots} total slots minus 1 active primary slot). Never exceed ${maxSubagents} simultaneous subagents.
+- End your response immediately after delegating so the parent session becomes idle and the queued subagents can start.`
 
   return `${concurrencyHeader}
 - You can leverage subagents to offload focused, deep investigations or isolated subtasks to preserve your context window.
