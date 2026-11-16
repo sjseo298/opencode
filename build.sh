@@ -289,6 +289,19 @@ clean_residuals() {
 # ── terminate running opencode instances ───────────────────────────
 terminate_running_servers() {
   echo "🛑  Verificando y terminando instancias previas de OpenCode en ejecución..."
+  local os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  local arch="$(uname -m)"
+  [[ "$arch" == "x86_64" ]] && arch="x64"
+  [[ "$arch" == "aarch64" ]] && arch="arm64"
+  local target_bin="$OPENCODE_DIR/dist/cli-${os}-${arch}/bin/opencode"
+
+  # Stop managed background service cleanly if active before sweeping remaining processes
+  if [[ -x "$target_bin" ]]; then
+    "$target_bin" service stop >/dev/null 2>&1 || true
+  elif command -v opencode >/dev/null 2>&1; then
+    opencode service stop >/dev/null 2>&1 || true
+  fi
+
   local current_pid=$$
   # Collect current PID and all ancestor PIDs so build.sh never terminates its own parent OpenCode session
   local protected_pids="|${current_pid}|"
@@ -300,14 +313,25 @@ terminate_running_servers() {
     protected_pids="${protected_pids}${ppid}|"
     walk_pid="$ppid"
   done
-  # Find all running processes matching opencode binary or serve, excluding protected ancestor PIDs
-  local raw_pids pids=""
-  raw_pids="$(pgrep -f "opencode.*(serve|dist/cli)" 2>/dev/null || true)"
-  for pid in $raw_pids; do
-    if [[ "$protected_pids" != *"|${pid}|"* ]]; then
-      pids="${pids}${pids:+ }${pid}"
+
+  # Find all running opencode processes (TUI, serve --stdio, serve --service, run, scripts/opencode),
+  # excluding opencodeplus, opencode-pty, wrapper shells, and protected ancestor PIDs.
+  local pids="" line pid cmd first_arg
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pid="${line%% *}"
+    cmd="${line#* }"
+    first_arg="${cmd%% *}"
+    if [[ "$first_arg" =~ (^|/)opencode$ ]]; then
+      if [[ "$cmd" == *"opencodeplus"* ]] || [[ "$cmd" == *"opencode-pty"* ]]; then
+        continue
+      fi
+      if [[ "$protected_pids" != *"|${pid}|"* ]]; then
+        pids="${pids}${pids:+ }${pid}"
+      fi
     fi
-  done
+  done < <(ps -eo pid=,args= 2>/dev/null | sed -E 's/^[[:space:]]+//' || true)
+
   if [[ -n "$pids" ]]; then
     echo "   Instancias detectadas (PIDs: $pids). Terminando..."
     for pid in $pids; do
@@ -322,7 +346,7 @@ terminate_running_servers() {
     done
     echo "✅ Instancias previas terminadas. La próxima ejecución cargará el binario recién compilado."
   else
-    echo "✅ No hay servidores de OpenCode previos en ejecución."
+    echo "✅ No hay instancias previas de OpenCode en ejecución."
   fi
 }
 
