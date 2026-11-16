@@ -1023,6 +1023,144 @@ describe("SubagentTool reporting", () => {
       expect(reports[0]?.text).toContain("provider exploded")
     }),
   )
+
+  completionIt.live("waits for an active parent to reach idle before starting the subagent and queues follow-ups", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reportingFixture()
+      const execution = yield* SessionExecution.Service
+      const jobs = yield* Job.Service
+      const llm = yield* TestLLM.Test
+
+      const parentStep2Started = yield* Deferred.make<void>()
+      const releaseParentStep2 = yield* Deferred.make<void>()
+      let parentWasActiveWhenChildStarted: boolean | undefined
+      let childRequestMessages: ReadonlyArray<unknown> = []
+      let step = 0
+
+      yield* llm.serve((request) => {
+        const sessionHeader = request.headers?.["x-opencode-session-id"]
+        if (sessionHeader === fixture.parent.id) {
+          step++
+          if (step === 1) {
+            return TestLLM.toolCall("call-launch", SubagentTool.name, {
+              agent: "reviewer",
+              description: "sync review",
+              prompt: "review sync",
+              contextBudget: validBudget,
+            })
+          }
+          if (step === 2) {
+            return Stream.unwrap(
+              Deferred.succeed(parentStep2Started, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseParentStep2)),
+                Effect.as(Stream.fromIterable(TestLLM.text("parent ack", "parent-2"))),
+              ),
+            )
+          }
+          return TestLLM.text("parent final", "parent-3")
+        }
+        childRequestMessages = request.messages
+        return Stream.unwrap(
+          execution.isActive(fixture.parent.id).pipe(
+            Effect.tap((active) =>
+              Effect.sync(() => {
+                parentWasActiveWhenChildStarted = active
+              }),
+            ),
+            Effect.as(Stream.fromIterable(TestLLM.text("child synced answer", "child-1"))),
+          ),
+        )
+      })
+
+      yield* fixture.sessions.prompt({ sessionID: fixture.parent.id, text: "delegate this" })
+      yield* Deferred.await(parentStep2Started)
+
+      const children = yield* fixture.sessions.list({ parentID: fixture.parent.id })
+      expect(children.data).toHaveLength(1)
+      const childID = children.data[0]!.id
+
+      expect(yield* execution.isActive(fixture.parent.id)).toBe(true)
+      expect(yield* execution.isActive(childID)).toBe(false)
+      expect((yield* jobs.get(childID))?.status).toBe("running")
+      expect(yield* llm.requests()).toHaveLength(2)
+
+      // A follow-up while the parent is still active must queue without waking the child early.
+      const followUp = yield* fixture.call("call-followup", {
+        sessionID: childID,
+        prompt: "follow-up while waiting",
+      })
+      expect(followUp).toMatchObject({ status: "completed", metadata: { sessionID: childID, status: "running" } })
+      expect(yield* execution.isActive(childID)).toBe(false)
+      expect(yield* llm.requests()).toHaveLength(2)
+
+      yield* Deferred.succeed(releaseParentStep2, undefined)
+      yield* jobs.wait({ id: childID })
+      yield* fixture.sessions.wait(childID)
+      yield* fixture.sessions.wait(fixture.parent.id)
+
+      expect(parentWasActiveWhenChildStarted).toBe(false)
+      expect(JSON.stringify(childRequestMessages)).toContain("review sync")
+      expect(JSON.stringify(childRequestMessages)).toContain("follow-up while waiting")
+
+      const reports = (yield* fixture.notices).filter((notice) => notice.metadata?.["source"] === "subagent")
+      expect(reports).toHaveLength(1)
+      expect(reports[0]?.text).toContain(`<subagent sessionID="${childID}" state="completed"`)
+      expect(reports[0]?.text).toContain("child synced answer")
+    }),
+  )
+
+  completionIt.live("cleans up job and notifies parent when cancelled while waiting for parent idle", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reportingFixture()
+      const execution = yield* SessionExecution.Service
+      const jobs = yield* Job.Service
+      const llm = yield* TestLLM.Test
+
+      const parentStarted = yield* Deferred.make<void>()
+      const releaseParent = yield* Deferred.make<void>()
+      let parentReq = 0
+
+      yield* llm.serve((request) => {
+        if (request.headers?.["x-opencode-session-id"] === fixture.parent.id) {
+          parentReq++
+          if (parentReq === 1) {
+            return Stream.unwrap(
+              Deferred.succeed(parentStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseParent)),
+                Effect.as(Stream.fromIterable(TestLLM.text("parent working", "parent-1"))),
+              ),
+            )
+          }
+          return TestLLM.text("parent saw cancel", "parent-2")
+        }
+        return TestLLM.text("child should not run", "child-1")
+      })
+
+      yield* fixture.sessions.prompt({ sessionID: fixture.parent.id, text: "start parent" })
+      yield* Deferred.await(parentStarted)
+
+      const launched = yield* fixture.call("call-pre-cancel", { description: "pre-start cancel" })
+      const childID = outputSessionID(launched.metadata)
+      expect((yield* jobs.get(childID))?.status).toBe("running")
+      expect(yield* execution.isActive(childID)).toBe(false)
+
+      yield* jobs.cancel(childID)
+      expect(yield* jobs.pendingBackground).toEqual([])
+
+      yield* Deferred.succeed(releaseParent, undefined)
+      yield* fixture.sessions.wait(fixture.parent.id)
+
+      const childRequests = (yield* llm.requests()).filter(
+        (request) => request.headers?.["x-opencode-session-id"] === childID,
+      )
+      expect(childRequests).toHaveLength(0)
+
+      const reports = (yield* fixture.notices).filter((notice) => notice.metadata?.["source"] === "subagent")
+      expect(reports).toHaveLength(1)
+      expect(reports[0]?.text).toContain(`<subagent sessionID="${childID}" state="cancelled"`)
+      expect(yield* jobs.pendingBackground).toEqual([])
+    }),
+  )
 })
 
 describe("SubagentJob cancellation", () => {

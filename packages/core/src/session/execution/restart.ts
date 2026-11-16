@@ -460,7 +460,9 @@ export const layer = (options?: Options) =>
             direct,
             Effect.fnUntraced(function* (sessionID) {
               suspended.delete(sessionID)
-              yield* execution.resume(sessionID).pipe(Effect.ignore, Effect.forkIn(scope))
+              // Start immediately so parent executions register in the coordinator before
+              // SubagentJob.start checks awaitIdle(parentSessionID).
+              yield* execution.resume(sessionID).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
             }),
             { concurrency: "unbounded", discard: true },
           )
@@ -471,7 +473,9 @@ export const layer = (options?: Options) =>
           yield* Effect.forEach(
             resumable,
             Effect.fnUntraced(function* ({ background, recovery }) {
-              yield* SubagentJob.start(jobs, execution, recovery, background.notificationID)
+              yield* SubagentJob.start(jobs, execution, recovery, background.notificationID, (notificationID) =>
+                deliverSubagentSafe(sessions, notificationID, recovery, { status: "cancelled" }),
+              )
               suspended.delete(recovery.childSessionID)
             }),
             { discard: true },

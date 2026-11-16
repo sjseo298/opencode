@@ -6,7 +6,6 @@ import type { SessionHooks } from "@opencode/plugin/effect/session"
 import { Effect, Predicate, Schema } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
-import { Job } from "../../job.js"
 import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
@@ -20,10 +19,10 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
   output: [
-    `The subagent is working in the background (sessionID: ${sessionID}). You will receive a <subagent> message when it goes idle, and again after each later round of work.`,
+    `The subagent is queued to start working in the background once this session stops and becomes idle (sessionID: ${sessionID}). You will receive a <subagent> message when it goes idle, and again after each later round of work.`,
     "DO NOT sleep, poll, proactively check on its progress, or duplicate this subagent's work.",
-    "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
-    "To send it follow-ups or change its instructions while it runs, call subagent again with this sessionID.",
+    "Briefly tell the user what you launched and end your response so the subagent can start.",
+    "To send it follow-ups or change its instructions, call subagent again with this sessionID.",
   ].join("\n"),
 })
 
@@ -65,8 +64,8 @@ export const Output = Schema.Struct({
 })
 export const description = [
   "Spawns an agent in a child session to work on the specified task.",
-  "Subagents always run in the background: the call returns immediately with a sessionID, and you receive a `<subagent>` message each time the child goes idle, including after later work.",
-  "Keep working on non-overlapping tasks, or briefly tell the user what you launched and end your response. Do not sleep, poll, or proactively check on the child's progress.",
+  "Subagents always run in the background after the parent stops: the call returns immediately with a sessionID, the child begins once this parent session reaches idle, and you receive a `<subagent>` message each time the child goes idle, including after later work.",
+  "Briefly tell the user what you launched and end your response so the child can start. Do not sleep, poll, or proactively check on the child's progress.",
   "MANDATORY REQUIREMENT: You MUST invoke the `context_budget` tool BEFORE calling this tool, and provide `contextBudget: { availableHeadroom: <number> }`.",
   "Verify that the task fits into `maxRecommendedSubagentBudget`. If it exceeds that budget, decompose the task into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) instead of spawning an oversized subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
@@ -77,7 +76,6 @@ export const Plugin = {
   id: "opencode.tool.subagent",
   effect: Effect.fn("SubagentTool.Plugin")(function* (ctx: Context) {
     const sessions = yield* Session.Service
-    const jobs = yield* Job.Service
     const agents = yield* Agent.Service
     const config = yield* Config.Service
     const permission = yield* Permission.Service
@@ -244,11 +242,9 @@ export const Plugin = {
                     ),
                   ))
 
-              // A child that is not draining yet must be admitted without waking: the job's resume
-              // owns the start, so the period cannot run before its boundary is registered.
-              const running =
-                existing !== undefined &&
-                ((yield* sessions.active).has(existing.id) || (yield* jobs.get(existing.id))?.status === "running")
+              // Only wake an already-draining child directly; an idle child or one still waiting
+              // for the parent to go idle must be admitted without waking so the job owns its start.
+              const active = existing !== undefined && (yield* sessions.active).has(existing.id)
               yield* context.progress({ sessionID: child.id, status: "running" })
 
               yield* sessions
@@ -258,7 +254,7 @@ export const Plugin = {
                     existing === undefined
                       ? ["You are a subagent spawned by another session.", input.prompt].join("\n")
                       : input.prompt,
-                  ...(running ? {} : { resume: false }),
+                  ...(active ? {} : { resume: false }),
                 })
                 .pipe(
                   Effect.mapError(
