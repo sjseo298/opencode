@@ -166,6 +166,7 @@ export interface Interface {
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
   readonly cancelSession: (sessionID: SessionSchema.ID) => Effect.Effect<Info[]>
   readonly pendingBackground: Effect.Effect<readonly Background[]>
+  readonly pendingBackgroundFor: (id: string) => Effect.Effect<readonly Background[]>
   readonly runningBackground: Effect.Effect<readonly Recovery[]>
   readonly backgroundJobs: Effect.Effect<readonly JobList.Item[]>
   readonly completeBackground: (notificationID: SessionMessage.ID) => Effect.Effect<void>
@@ -577,14 +578,8 @@ export const make = Effect.gen(function* () {
     return cancelled.filter((info): info is Info => info !== undefined)
   })
 
-  const pendingBackground: Interface["pendingBackground"] = Effect.gen(function* () {
-    const rows = yield* db
-      .select()
-      .from(JobTable)
-      .orderBy(asc(JobTable.time_created), asc(JobTable.notification_id))
-      .all()
-      .pipe(Effect.orDie)
-    return Array.filterMap(rows, (row) =>
+  const decodeBackgroundRows = (rows: ReadonlyArray<typeof JobTable.$inferSelect>) =>
+    Array.filterMap(rows, (row) =>
       decodeBackground({
         id: row.id,
         notificationID: row.notification_id,
@@ -594,7 +589,29 @@ export const make = Effect.gen(function* () {
         ...(row.error !== null ? { error: row.error } : {}),
       }),
     )
+
+  const pendingBackground: Interface["pendingBackground"] = Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(JobTable)
+      .orderBy(asc(JobTable.time_created), asc(JobTable.notification_id))
+      .all()
+      .pipe(Effect.orDie)
+    return decodeBackgroundRows(rows)
   }).pipe(Effect.withSpan("Job.pendingBackground"))
+
+  const pendingBackgroundFor: Interface["pendingBackgroundFor"] = Effect.fn("Job.pendingBackgroundFor")(
+    function* (id) {
+      const rows = yield* db
+        .select()
+        .from(JobTable)
+        .where(eq(JobTable.id, id))
+        .orderBy(asc(JobTable.time_created), asc(JobTable.notification_id))
+        .all()
+        .pipe(Effect.orDie)
+      return decodeBackgroundRows(rows)
+    },
+  )
 
   const runningBackground: Interface["runningBackground"] = SynchronizedRef.get(state.jobs).pipe(
     Effect.map((jobs) =>
@@ -714,6 +731,7 @@ export const make = Effect.gen(function* () {
     cancel,
     cancelSession,
     pendingBackground,
+    pendingBackgroundFor,
     runningBackground,
     backgroundJobs: JobList.read(db, state.jobs),
     completeBackground,

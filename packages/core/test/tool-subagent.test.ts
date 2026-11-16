@@ -920,7 +920,7 @@ const reportingFixture = () =>
     yield* withSubagent(parent.location)
     const locations = yield* LocationServiceMap.Service
     const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
-    const call = (id: string, input: Record<string, unknown> = {}) =>
+    const callRaw = (id: string, input: Record<string, unknown>) =>
       executeTool(registry, {
         sessionID: parent.id,
         ...toolIdentity,
@@ -928,9 +928,11 @@ const reportingFixture = () =>
           type: "tool-call" as const,
           id,
           name: SubagentTool.name,
-          input: { agent: "reviewer", description: "review", prompt: "review this", contextBudget: validBudget, ...input },
+          input,
         },
       })
+    const call = (id: string, input: Record<string, unknown> = {}) =>
+      callRaw(id, { agent: "reviewer", description: "review", prompt: "review this", contextBudget: validBudget, ...input })
     // A notice is either still queued or already delivered to the parent; count both.
     const notices = Effect.gen(function* () {
       const pending = (yield* sessions.inbox(parent.id)).flatMap((item) =>
@@ -941,7 +943,7 @@ const reportingFixture = () =>
       )
       return [...pending, ...delivered]
     })
-    return { parent, sessions, call, notices }
+    return { parent, sessions, call, callRaw, notices }
   })
 
 describe("SubagentTool reporting", () => {
@@ -1159,6 +1161,221 @@ describe("SubagentTool reporting", () => {
       expect(reports).toHaveLength(1)
       expect(reports[0]?.text).toContain(`<subagent sessionID="${childID}" state="cancelled"`)
       expect(yield* jobs.pendingBackground).toEqual([])
+    }),
+  )
+
+  completionIt.live("idempotently resumes a queued or running subagent without duplicating prompts or jobs", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reportingFixture()
+      const execution = yield* SessionExecution.Service
+      const jobs = yield* Job.Service
+      const llm = yield* TestLLM.Test
+
+      const parentStarted = yield* Deferred.make<void>()
+      const releaseParent = yield* Deferred.make<void>()
+      const childStarted = yield* Deferred.make<void>()
+      const releaseChild = yield* Deferred.make<void>()
+      let parentReq = 0
+
+      yield* llm.serve((request) => {
+        if (request.headers?.["x-opencode-session-id"] === fixture.parent.id) {
+          parentReq++
+          if (parentReq === 1) {
+            return Stream.unwrap(
+              Deferred.succeed(parentStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseParent)),
+                Effect.as(Stream.fromIterable(TestLLM.text("parent done", "parent-1"))),
+              ),
+            )
+          }
+          return TestLLM.text("parent ack", "parent-2")
+        }
+        return Stream.unwrap(
+          Deferred.succeed(childStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseChild)),
+            Effect.as(Stream.fromIterable(TestLLM.text("child idempotent answer", "child-1"))),
+          ),
+        )
+      })
+
+      yield* fixture.sessions.prompt({ sessionID: fixture.parent.id, text: "start parent" })
+      yield* Deferred.await(parentStarted)
+
+      const launched = yield* fixture.call("call-launch")
+      const childID = outputSessionID(launched.metadata)
+      expect((yield* fixture.sessions.inbox(childID)).filter((item) => item.type === "user")).toHaveLength(1)
+
+      // Calling action: "resume" while queued behind parent does not duplicate inbox prompts or jobs.
+      const queuedResume = yield* fixture.callRaw("call-resume-queued", {
+        action: "resume",
+        sessionID: childID,
+      })
+      expect(queuedResume).toMatchObject({
+        status: "completed",
+        output: { sessionID: childID, status: "running" },
+      })
+      expect((queuedResume as { output: { output: string } }).output.output).toContain("already queued")
+      expect((yield* fixture.sessions.inbox(childID)).filter((item) => item.type === "user")).toHaveLength(1)
+      expect(yield* execution.isActive(childID)).toBe(false)
+
+      yield* Deferred.succeed(releaseParent, undefined)
+      yield* Deferred.await(childStarted)
+
+      // Calling action: "resume" while actively draining is also an idempotent no-op.
+      const activeResume = yield* fixture.callRaw("call-resume-active", {
+        action: "resume",
+        sessionID: childID,
+      })
+      expect(activeResume).toMatchObject({
+        status: "completed",
+        output: { sessionID: childID, status: "running" },
+      })
+      expect((activeResume as { output: { output: string } }).output.output).toContain("already running")
+      expect(yield* fixture.sessions.inbox(childID)).toEqual([])
+
+      yield* Deferred.succeed(releaseChild, undefined)
+      yield* jobs.wait({ id: childID })
+      yield* fixture.sessions.wait(childID)
+      yield* fixture.sessions.wait(fixture.parent.id)
+
+      // Calling action: "resume" once settled returns completed status and output without restarting.
+      const settledResume = yield* fixture.callRaw("call-resume-settled", {
+        action: "resume",
+        sessionID: childID,
+      })
+      expect(settledResume).toMatchObject({
+        status: "completed",
+        output: { sessionID: childID, status: "completed" },
+      })
+      expect((settledResume as { output: { output: string } }).output.output).toContain("child idempotent answer")
+    }),
+  )
+
+  completionIt.live("recovers an orphaned running job and suspended claim via action: resume without leaking rows", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reportingFixture()
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const jobs = yield* Job.Service
+      const llm = yield* TestLLM.Test
+
+      yield* llm.serve((request) => {
+        if (request.headers?.["x-opencode-session-id"] === fixture.parent.id) {
+          return TestLLM.text("parent ack", "parent-1")
+        }
+        return TestLLM.text("recovered child result", "child-recovered")
+      })
+
+      const child = yield* fixture.sessions.create({
+        parentID: fixture.parent.id,
+        agent: Agent.ID.make("reviewer"),
+        title: "orphaned translation",
+      })
+      yield* fixture.sessions.prompt({ sessionID: child.id, text: "You are a subagent.\nTranslate unit 9", resume: false })
+      // Simulate a previous server crash mid-turn: claim held + orphaned "running" row in JobTable,
+      // but nothing active in memory.
+      yield* store.claim(child.id)
+      const orphanNotificationID = SessionMessage.ID.create()
+      yield* database.db
+        .insert(JobTable)
+        .values({
+          notification_id: orphanNotificationID,
+          id: child.id,
+          session_id: fixture.parent.id,
+          child_session_id: child.id,
+          kind: "subagent",
+          title: "orphaned translation",
+          status: "running",
+          output: null,
+          error: null,
+          recovery: {
+            kind: "subagent",
+            parentSessionID: fixture.parent.id,
+            childSessionID: child.id,
+            agent: "reviewer",
+            description: "orphaned translation",
+          },
+          time_created: 1000,
+          time_updated: 1000,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      const resumed = yield* fixture.callRaw("call-recover-orphan", {
+        action: "resume",
+        sessionID: child.id,
+      })
+      expect(resumed).toMatchObject({
+        status: "completed",
+        output: { sessionID: child.id, status: "running" },
+      })
+      // Reuses the existing orphaned notification_id row instead of inserting a second JobTable row.
+      const rowsWhileRunning = yield* database.db.select().from(JobTable).all().pipe(Effect.orDie)
+      expect(rowsWhileRunning).toHaveLength(1)
+      expect(rowsWhileRunning[0]?.notification_id).toBe(orphanNotificationID)
+
+      yield* jobs.wait({ id: child.id })
+      yield* fixture.sessions.wait(child.id)
+      yield* fixture.sessions.wait(fixture.parent.id)
+
+      expect(yield* jobs.pendingBackground).toEqual([])
+      const reports = (yield* fixture.notices).filter((notice) => notice.metadata?.["source"] === "subagent")
+      expect(reports).toHaveLength(1)
+      expect(reports[0]?.text).toContain("recovered child result")
+    }),
+  )
+
+  completionIt.live("delivers an undelivered terminal outbox report when action: resume is called", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reportingFixture()
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+
+      const child = yield* fixture.sessions.create({
+        parentID: fixture.parent.id,
+        agent: Agent.ID.make("reviewer"),
+        title: "undelivered report",
+      })
+      const notificationID = SessionMessage.ID.create()
+      yield* database.db
+        .insert(JobTable)
+        .values({
+          notification_id: notificationID,
+          id: child.id,
+          session_id: fixture.parent.id,
+          child_session_id: child.id,
+          kind: "subagent",
+          title: "undelivered report",
+          status: "completed",
+          output: "finished before crash",
+          error: null,
+          recovery: {
+            kind: "subagent",
+            parentSessionID: fixture.parent.id,
+            childSessionID: child.id,
+            agent: "reviewer",
+            description: "undelivered report",
+          },
+          time_created: 1000,
+          time_updated: 1000,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      const resumed = yield* fixture.callRaw("call-deliver-outbox", {
+        action: "resume",
+        sessionID: child.id,
+      })
+      expect(resumed).toMatchObject({
+        status: "completed",
+        output: { sessionID: child.id, status: "completed" },
+      })
+      expect((resumed as { output: { output: string } }).output.output).toContain("finished before crash")
+      expect(yield* jobs.pendingBackground).toEqual([])
+
+      const reports = (yield* fixture.notices).filter((notice) => notice.metadata?.["source"] === "subagent")
+      expect(reports).toHaveLength(1)
+      expect(reports[0]?.text).toContain("finished before crash")
     }),
   )
 })

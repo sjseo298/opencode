@@ -22,23 +22,75 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
     `The subagent is queued to start working in the background once this session stops and becomes idle (sessionID: ${sessionID}). You will receive a <subagent> message when it goes idle, and again after each later round of work.`,
     "DO NOT sleep, poll, proactively check on its progress, or duplicate this subagent's work.",
     "Briefly tell the user what you launched and end your response so the subagent can start.",
-    "To send it follow-ups or change its instructions, call subagent again with this sessionID.",
+    "To send it follow-ups or change its instructions, call subagent again with this sessionID. If a subagent stalls or fails to start after a restart, call subagent with action: \"resume\" and this sessionID.",
   ].join("\n"),
 })
 
+const resumeResult = (sessionID: SessionSchema.ID, ensured: SubagentJob.EnsureResult) => {
+  if (ensured.status === "running") {
+    if (ensured.state === "active") {
+      return {
+        sessionID,
+        status: "running" as const,
+        output: [
+          `Subagent is already running (sessionID: ${sessionID}).`,
+          "End your response and wait for its <subagent> completion message.",
+        ].join("\n"),
+      }
+    }
+    if (ensured.state === "queued") {
+      return {
+        sessionID,
+        status: "running" as const,
+        output: [
+          `Subagent is already queued to start working in the background once this session becomes idle (sessionID: ${sessionID}).`,
+          "Briefly end your response so the subagent can start.",
+        ].join("\n"),
+      }
+    }
+    return {
+      sessionID,
+      status: "running" as const,
+      output: [
+        `Subagent recovery queued to start working in the background once this session becomes idle (sessionID: ${sessionID}).`,
+        "End your response immediately so the subagent can resume.",
+      ].join("\n"),
+    }
+  }
+  const verb = ensured.state === "delivered" ? "already finished and its report has been delivered" : "already settled"
+  return {
+    sessionID,
+    status: ensured.status,
+    output: [
+      `Subagent ${sessionID} ${verb} (status: ${ensured.status}).`,
+      "",
+      ensured.body,
+    ].join("\n"),
+  }
+}
+
 export const Input = Schema.Struct({
-  agent: Schema.String.annotate({
+  action: Schema.optionalKey(Schema.Literals(["start", "resume"])).annotate({
     description:
-      "The type of specialized agent to use for this task. If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+      'Action to perform: "start" (default: spawn a new subagent or send a follow-up prompt) or "resume" (idempotently start, resume, or collect status of an existing subagent by sessionID without duplicating prompts or requiring contextBudget).',
   }),
-  description: Schema.String.annotate({ description: "A short 3-5 word label for the task, displayed to the user" }),
-  prompt: Schema.String.annotate({ description: "The task for the subagent to perform" }),
+  agent: Schema.optionalKey(Schema.String).annotate({
+    description:
+      "The type of specialized agent to use for this task (required for action \"start\"). If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+  }),
+  description: Schema.optionalKey(Schema.String).annotate({
+    description: 'A short 3-5 word label for the task, displayed to the user (required for action "start")',
+  }),
+  prompt: Schema.optionalKey(Schema.String).annotate({
+    description: 'The task for the subagent to perform (required for action "start"; optional for action "resume")',
+  }),
   model: Schema.optionalKey(Schema.String).annotate({
     description:
       'NEVER set this unless the user explicitly asks for a particular model or variant. It must be a chat model; image and decision models can\'t run subagents. The value is written as "providerID/modelID", or "providerID/modelID#variant" to include a variant. Do not guess the ID: look the model up with the models tool, filtering to your own provider first.',
   }),
   sessionID: Schema.optionalKey(SessionSchema.ID).annotate({
-    description: "Send a follow-up to an existing subagent, running or finished. Omit to start a new one.",
+    description:
+      'Existing subagent sessionID. Omit to start a new subagent; pass with action "start" for a follow-up, or with action "resume" to idempotently ensure it starts/recovers.',
   }),
   contextBudget: Schema.optionalKey(
     Schema.Struct({
@@ -53,20 +105,21 @@ export const Input = Schema.Struct({
     }),
   ).annotate({
     description:
-      "MANDATORY context verification: You must run context_budget before delegating to assess headroom and task sizing.",
+      'MANDATORY context verification for action "start": You must run context_budget before spawning/prompting a subagent.',
   }),
 })
 
 export const Output = Schema.Struct({
   sessionID: SessionSchema.ID,
-  status: Schema.Literal("running"),
+  status: Schema.Literals(["running", "completed", "error", "cancelled"]),
   output: Schema.String,
 })
 export const description = [
-  "Spawns an agent in a child session to work on the specified task.",
+  "Spawns an agent in a child session to work on the specified task, or idempotently resumes an existing child session.",
   "Subagents always run in the background after the parent stops: the call returns immediately with a sessionID, the child begins once this parent session reaches idle, and you receive a `<subagent>` message each time the child goes idle, including after later work.",
   "Briefly tell the user what you launched and end your response so the child can start. Do not sleep, poll, or proactively check on the child's progress.",
-  "MANDATORY REQUIREMENT: You MUST invoke the `context_budget` tool BEFORE calling this tool, and provide `contextBudget: { availableHeadroom: <number> }`.",
+  "If an existing subagent appears stalled or failed to resume (for instance after a restart), call `subagent` with `action: \"resume\"` and its `sessionID` (idempotent; no duplicate prompt or `context_budget` required) to ensure it starts or retrieve its settled state.",
+  "MANDATORY REQUIREMENT for `action: \"start\"`: You MUST invoke the `context_budget` tool BEFORE calling this tool, and provide `contextBudget: { availableHeadroom: <number> }`.",
   "Verify that the task fits into `maxRecommendedSubagentBudget`. If it exceeds that budget, decompose the task into smaller Level-3 subtasks (SO-N-T1...SO-N-TN; create as many as needed, not limited to 3) instead of spawning an oversized subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
   "Pass the returned sessionID to continue that specific child conversation. A follow-up to a running child joins its current run.",
@@ -123,6 +176,85 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              const mode = input.action ?? "start"
+              if (mode === "resume") {
+                if (input.sessionID === undefined) {
+                  return yield* new ToolFailure({
+                    message: 'Parameter "sessionID" is required when action is "resume".',
+                  })
+                }
+                const existing = yield* sessions
+                  .get(input.sessionID)
+                  .pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({ message: `Subagent session not found: ${input.sessionID}`, error }),
+                    ),
+                  )
+                if (existing.parentID !== context.sessionID)
+                  return yield* new ToolFailure({
+                    message: `Session ${existing.id} is not a child of the current session`,
+                  })
+                const agentName = input.agent ?? existing.agent ?? "general"
+                const agent = yield* agents.resolve(agentName)
+                if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${agentName}` })
+                if (agent.mode === "primary")
+                  return yield* new ToolFailure({ message: `Agent ${agentName} cannot run as a subagent` })
+                yield* permission
+                  .assert({
+                    action: name,
+                    resources: [agent.id],
+                    save: [agent.id],
+                    ...Permission.invocation(context),
+                  })
+                  .pipe(Effect.mapError((error) => new ToolFailure({ message: `Subagent denied: ${agent.id}`, error })))
+
+                const override = input.model === undefined ? undefined : yield* resolveModel(input.model)
+                const switched = input.agent !== undefined && existing.agent !== agent.id
+                const model = override ?? (switched ? agent.model : undefined)
+                if (switched || model !== undefined) {
+                  yield* Effect.all([
+                    switched ? sessions.switchAgent({ sessionID: existing.id, agent: agent.id }) : Effect.void,
+                    model === undefined ? Effect.void : sessions.switchModel({ sessionID: existing.id, model }),
+                  ]).pipe(
+                    Effect.mapError(
+                      (error) => new ToolFailure({ message: `Failed to switch subagent session: ${existing.id}`, error }),
+                    ),
+                  )
+                }
+
+                const promptText = input.prompt?.trim()
+                const active = (yield* sessions.active).has(existing.id)
+                if (promptText) {
+                  yield* sessions
+                    .prompt({
+                      sessionID: existing.id,
+                      text: promptText,
+                      ...(active ? {} : { resume: false }),
+                    })
+                    .pipe(
+                      Effect.mapError(
+                        (error) => new ToolFailure({ message: `Failed to prompt subagent: ${existing.id}`, error }),
+                      ),
+                    )
+                }
+
+                const ensured = yield* subagents.ensure(
+                  {
+                    kind: "subagent",
+                    parentSessionID: context.sessionID,
+                    childSessionID: existing.id,
+                    agent: agent.name,
+                    description: input.description ?? existing.title ?? "Subagent",
+                  },
+                  { hasNewWork: Boolean(promptText) },
+                )
+                if (ensured.status === "running") {
+                  yield* context.progress({ sessionID: existing.id, status: "running" })
+                }
+                return resumeResult(existing.id, ensured)
+              }
+
               if (
                 input.contextBudget?.availableHeadroom === undefined ||
                 typeof input.contextBudget.availableHeadroom !== "number" ||
@@ -149,6 +281,15 @@ export const Plugin = {
                 })
               }
 
+              if (!input.agent || !input.description || input.prompt === undefined) {
+                return yield* new ToolFailure({
+                  message: 'Parameters "agent", "description", and "prompt" are required when action is "start".',
+                })
+              }
+              const agentInput = input.agent
+              const taskDescription = input.description
+              const taskPrompt = input.prompt
+
               const parent = yield* sessions
                 .get(context.sessionID)
                 .pipe(
@@ -173,10 +314,10 @@ export const Plugin = {
                 return yield* new ToolFailure({
                   message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
                 })
-              const agent = yield* agents.resolve(input.agent)
-              if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${input.agent}` })
+              const agent = yield* agents.resolve(agentInput)
+              if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${agentInput}` })
               if (agent.mode === "primary")
-                return yield* new ToolFailure({ message: `Agent ${input.agent} cannot run as a subagent` })
+                return yield* new ToolFailure({ message: `Agent ${agentInput} cannot run as a subagent` })
               yield* permission
                 .assert({
                   action: name,
@@ -232,7 +373,7 @@ export const Plugin = {
                 (yield* sessions
                   .create({
                     parentID: context.sessionID,
-                    title: input.description,
+                    title: taskDescription,
                     agent: agent.id,
                     model,
                   })
@@ -252,8 +393,8 @@ export const Plugin = {
                   sessionID: child.id,
                   text:
                     existing === undefined
-                      ? ["You are a subagent spawned by another session.", input.prompt].join("\n")
-                      : input.prompt,
+                      ? ["You are a subagent spawned by another session.", taskPrompt].join("\n")
+                      : taskPrompt,
                   ...(active ? {} : { resume: false }),
                 })
                 .pipe(
@@ -267,9 +408,10 @@ export const Plugin = {
                 parentSessionID: context.sessionID,
                 childSessionID: child.id,
                 agent: agent.name,
-                description: input.description,
+                description: taskDescription,
               }
-              yield* subagents.start(recovery)
+              if (existing !== undefined) yield* subagents.ensure(recovery, { hasNewWork: true })
+              else yield* subagents.start(recovery)
               return backgroundResult(child.id)
             }).pipe(
               Effect.map((output) => ({
