@@ -23,7 +23,7 @@ import { ToolOutput } from "@opencode/core/tool-output"
 import { Money } from "@opencode/schema/money"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { asc, eq } from "drizzle-orm"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
@@ -431,6 +431,112 @@ it.live("leaves an interrupted step as a crash would while the server hands its 
         { type: "tool", id: "call-cooperative", state: { status: "running" } },
         { type: "tool", id: "call-stuck", state: { status: "running" } },
       ],
+    })
+  }),
+)
+
+it.effect("aborts the stream early and settles with Outcome.RepetitionLoop on repetitive reasoning", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const llm = yield* TestLLM.Test
+    const sessionID = Session.ID.create()
+    const assistantMessageID = SessionMessage.ID.create()
+    const start = Snapshot.ID.make("before")
+    const end = Snapshot.ID.make("after")
+    let retryCalls = 0
+    const steps = yield* SessionStep.make.pipe(
+      Effect.provide(
+        Layer.mock(Snapshot.Service)({
+          capture: () => Effect.succeed(start === end ? start : start),
+          files: () => Effect.succeed([]),
+        }),
+      ),
+    )
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .run()
+    yield* db
+      .insert(SessionTable)
+      .values({ id: sessionID, project_id: Project.ID.global, slug: "step-loop", directory: "/project", version: "test" })
+      .run()
+    const model = SessionRunnerModel.resolved(
+      LanguageModel.make({ id: "test-model", provider: "test", route: OpenAIChat.route }),
+      {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        limit: { context: 100_000, output: 1_000 },
+        cost: [
+          {
+            input: Money.USDPerMillionTokens.make(1),
+            output: Money.USDPerMillionTokens.make(2),
+            cache: { read: Money.USDPerMillionTokens.make(0.1), write: Money.USDPerMillionTokens.make(0.5) },
+          },
+        ],
+      },
+    )
+    const cycle = [
+      'I think the word is "tuongo" -> "tuongo" ->',
+      'OK the correct Spanish: "tuongo" -> "tuongo" ->',
+      "NO. The correct Spanish is:",
+      '"tuongo sensacion de aburrimiento" ->',
+      "",
+    ].join("\n")
+    let emitted = 0
+    const chunks = Array.from({ length: 30 }, () => LLMEvent.reasoningDelta({ id: "reason-loop", text: cycle }))
+    yield* llm.push(
+      Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reason-loop" }),
+          ...chunks,
+        ]).pipe(
+          Stream.tap(() =>
+            Effect.sync(() => {
+              emitted++
+            }),
+          ),
+        ),
+        Stream.never,
+      ),
+    )
+
+    const result = yield* steps.attempt({
+      isLocationClosed: () => false,
+      sessionID,
+      assistantMessageID,
+      agent: Agent.defaultID,
+      model,
+      prepared: {
+        retry: () => Effect.void,
+        request: ai.request({ model: model.model, prompt: "Translate" }),
+        options: {},
+        executeTool: () => Effect.succeed({ content: [{ type: "text", text: "ok" }] }),
+      },
+      retry: () =>
+        Effect.sync(() => {
+          retryCalls++
+          return { retry: false as const }
+        }),
+      recoverContinuation: true,
+      recoverOverflow: Effect.succeed(false),
+    })
+
+    expect(result._tag).toBe("RepetitionLoop")
+    if (result._tag !== "RepetitionLoop") return
+    expect(result.detection.kind).toBe("reasoning")
+    expect(result.detection.reason).toBe("exact-cycle")
+    expect(result.error.type).toBe("provider.output-loop")
+    expect(retryCalls).toBe(0)
+    expect(emitted).toBeLessThan(32)
+
+    const message = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(eq(SessionMessageTable.id, assistantMessageID))
+      .get()
+    expect(message?.data).toMatchObject({
+      finish: "error",
+      error: { type: "provider.output-loop" },
     })
   }),
 )

@@ -7629,4 +7629,71 @@ describe("SessionRunnerLLM", () => {
     if (!(defect instanceof Error)) return
     expect(defect.message).toBe("Tool input delta before start: call-1")
   })
+
+  scenario("recovers once from a reasoning repetition loop via synthetic guidance", function* (s) {
+    const cycle = [
+      'I think the word is "tuongo" -> "tuongo" ->',
+      'OK the correct Spanish: "tuongo" -> "tuongo" ->',
+      "NO. The correct Spanish is:",
+      '"tuongo sensacion de aburrimiento" ->',
+      "",
+    ].join("\n")
+    const chunks = Array.from({ length: 16 }, () =>
+      LLMEvent.reasoningDelta({ id: "reason-loop", text: cycle }),
+    )
+    yield* s.llm.push(
+      Stream.concat(
+        Stream.fromIterable([LLMEvent.stepStart({ index: 0 }), LLMEvent.reasoningStart({ id: "reason-loop" }), ...chunks]),
+        Stream.never,
+      ),
+      TestLLM.text("Traduccion corregida sin bucles.", "recovered"),
+    )
+
+    yield* s.runPrompt("Translate paragraph")
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests[1]?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("Your previous reasoning step entered a repetitive loop around:"),
+        },
+      ],
+    })
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Translate paragraph"),
+      Expected.assistant({ finish: "error", error: { type: "provider.output-loop" } }, [
+        expect.objectContaining({ type: "reasoning" }),
+      ]),
+      { type: "synthetic", text: expect.stringContaining("repetitive loop") },
+      Expected.assistant({ finish: "stop" }, [Expected.text("Traduccion corregida sin bucles.")]),
+    ])
+    expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+  })
+
+  scenario("fails with provider.output-loop if repetition loop persists on recovery", function* (s) {
+    const cycle = [
+      'I think the word is "tuongo" -> "tuongo" ->',
+      'OK the correct Spanish: "tuongo" -> "tuongo" ->',
+      "NO. The correct Spanish is:",
+      '"tuongo sensacion de aburrimiento" ->',
+      "",
+    ].join("\n")
+    const loopingStream = (id: string) =>
+      Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id }),
+          ...Array.from({ length: 16 }, () => LLMEvent.reasoningDelta({ id, text: cycle })),
+        ]),
+        Stream.never,
+      )
+    yield* s.llm.push(loopingStream("loop-1"), loopingStream("loop-2"))
+
+    const failure = yield* s.runPrompt("Translate paragraph").pipe(Effect.flip)
+
+    expect(failure).toMatchObject({ error: { type: "provider.output-loop" } })
+    expect(s.requests).toHaveLength(2)
+  })
 })

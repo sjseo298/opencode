@@ -25,6 +25,7 @@ import { toSessionError } from "../to-session-error.js"
 import { SessionUsage } from "../usage.js"
 import { SessionRunnerModel } from "./model.js"
 import { createLLMEventPublisher } from "./publish-llm-event.js"
+import { RepetitionDetector } from "./repetition-detector.js"
 import { SessionRunnerRetry } from "./retry.js"
 
 export type Outcome = Data.TaggedEnum<{
@@ -37,6 +38,10 @@ export type Outcome = Data.TaggedEnum<{
   RecoverFull: {}
   Compacted: {}
   OutputLimit: { readonly needsContinuation: boolean }
+  RepetitionLoop: {
+    readonly detection: RepetitionDetector.Detection
+    readonly error: SessionError.Error
+  }
 }>
 export const Outcome = Data.taggedEnum<Outcome>()
 
@@ -128,12 +133,41 @@ export const make = Effect.gen(function* () {
       })
     }
 
+    let loopDetected: RepetitionDetector.Detection | undefined
+    let reasoningDetector = RepetitionDetector.create("reasoning")
+    let textDetector = RepetitionDetector.create("text")
+    const trackRepetition = (event: Parameters<typeof publisher.publish>[0]) => {
+      if (publisher.record().providerFailed) return false
+      if (event.type === "reasoning-start") {
+        reasoningDetector = RepetitionDetector.create("reasoning")
+        return false
+      }
+      if (event.type === "text-start") {
+        textDetector = RepetitionDetector.create("text")
+        return false
+      }
+      if (event.type === "reasoning-delta") {
+        const detected = reasoningDetector.feed(event.text)
+        if (!detected) return false
+        loopDetected = detected
+        return true
+      }
+      if (event.type === "text-delta") {
+        const detected = textDetector.feed(event.text)
+        if (!detected) return false
+        loopDetected = detected
+        return true
+      }
+      return false
+    }
+
     // Provider and tool fibers retain per-source order without a shared writer queue.
     // A local execution starts only after its Tool.Called publication completes.
     // Read to the end, not just the finish event, so the next request can reuse this response.
     // The span covers only the provider stream, so model time separates from tools, which run in this consumer.
     const providerStream = llm.stream(input.prepared.request, input.prepared.options).pipe(
       Stream.withSpan("LLM.stream", { attributes: modelAttributes }),
+      Stream.takeUntil(trackRepetition),
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           if (publisher.record().providerFailed) return
@@ -209,6 +243,22 @@ export const make = Effect.gen(function* () {
         }
 
         const recorded = publisher.record()
+        const loopError: SessionError.Error | undefined = loopDetected
+          ? {
+              type: "provider.output-loop",
+              message: `Detected repetitive ${loopDetected.kind} loop (${loopDetected.reason}) after ${loopDetected.totalChars} characters.`,
+            }
+          : undefined
+        if (loopDetected) {
+          yield* Effect.logWarning("detected repetitive model output; aborting stream", {
+            sessionID: input.sessionID,
+            model: input.model.ref,
+            kind: loopDetected.kind,
+            reason: loopDetected.reason,
+            period: loopDetected.period,
+            totalChars: loopDetected.totalChars,
+          })
+        }
         const unknownFinish =
           Exit.isSuccess(stream) && recorded.finish?.finish === "unknown"
             ? new AIError({
@@ -232,7 +282,11 @@ export const make = Effect.gen(function* () {
           ...(tokens?.cacheWriteInputTokens === undefined
             ? {}
             : { "gen_ai.usage.cache_creation.input_tokens": tokens.cacheWriteInputTokens }),
-          ...(llmFailure === undefined ? {} : { "error.type": llmFailure.reason._tag }),
+          ...(llmFailure !== undefined
+            ? { "error.type": llmFailure.reason._tag }
+            : loopError !== undefined
+              ? { "error.type": loopError.type }
+              : {}),
         })
         if (
           input.recoverContinuation &&
@@ -258,6 +312,7 @@ export const make = Effect.gen(function* () {
           return Outcome.Retry({ error: llmError, decision: retry })
         }
         if (llmError) yield* publisher.failAssistant(llmError)
+        if (loopError) yield* publisher.failAssistant(loopError)
 
         for (const decline of tools.declines)
           yield* publisher.failTool(decline.call.id, {
@@ -282,7 +337,7 @@ export const make = Effect.gen(function* () {
         // Parsers may leave unfinished calls without an execution event.
         if (llmError || (Exit.isSuccess(stream) && !recorded.providerFailed)) {
           const missing = yield* publisher.failUnsettledTools(RESULT_MISSING, "hosted")
-          if (missing && !llmError && !recorded.finish) yield* publisher.failAssistant(RESULT_MISSING)
+          if (missing && !llmError && !loopError && !recorded.finish) yield* publisher.failAssistant(RESULT_MISSING)
           yield* publisher.failIncompleteTools()
         }
 
@@ -314,7 +369,7 @@ export const make = Effect.gen(function* () {
             })
         }
 
-        if (llmError && retry?.retry && tools.declines.length === 0 && !tools.interrupted)
+        if (llmError && retry?.retry && !loopDetected && tools.declines.length === 0 && !tools.interrupted)
           return Outcome.Retry({ error: llmError, decision: retry, freshAssistant: true })
 
         if (Exit.isFailure(stream)) return yield* Effect.failCause(stream.cause)
@@ -324,6 +379,7 @@ export const make = Effect.gen(function* () {
         }
         if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
         if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
+        if (loopDetected && loopError) return Outcome.RepetitionLoop({ detection: loopDetected, error: loopError })
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
         if (record.finish?.finish === "length") return Outcome.OutputLimit({ needsContinuation })

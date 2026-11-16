@@ -38,6 +38,9 @@ import { MAX_STEPS_PROMPT } from "./max-steps.js"
 const CONTINUE_AFTER_OUTPUT_LIMIT =
   "Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."
 
+const continueAfterRepetitionLoop = (kind: "reasoning" | "text", sample: string) =>
+  `Your previous ${kind} step entered a repetitive loop around: ${JSON.stringify(sample)}. Do not repeat or over-analyze it. Make a direct decision and continue with your response or tool call.`
+
 type DrainInput = Parameters<Interface["drain"]>[0]
 
 const layer = Layer.effect(
@@ -245,6 +248,7 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      let recoverRepetition = true
       let retryAttempt: number | undefined
       while (true) {
         // Reuse boundary preparation once; retries refresh context without delivering more input.
@@ -380,6 +384,15 @@ const layer = Layer.effect(
           }),
           RecoverFull: Effect.fnUntraced(function* () {
             recoverContinuation = false
+          }),
+          RepetitionLoop: Effect.fn("SessionRunner.recoverRepetitionLoop")(function* (outcome) {
+            if (!recoverRepetition) return yield* new StepFailedError({ error: outcome.error })
+            recoverRepetition = false
+            yield* bus.publish(SessionEvent.Synthetic, {
+              sessionID,
+              text: continueAfterRepetitionLoop(outcome.detection.kind, outcome.detection.sample),
+            })
+            assistantMessageID = SessionMessage.ID.create()
           }),
         })
         if (completed !== undefined) return completed
