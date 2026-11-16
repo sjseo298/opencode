@@ -1,6 +1,7 @@
 import {
   BoxRenderable,
   RGBA,
+  TextAttributes,
   TextareaRenderable,
   MouseEvent,
   PasteEvent,
@@ -309,6 +310,31 @@ export function Prompt(props: PromptProps) {
             return
           }
           if (sourceProjectID) directoryRecents.touch(sourceProjectID, directory)
+        },
+      },
+      {
+        id: "session.permission.toggle",
+        title:
+          local.permission.mode === "autoaccept"
+            ? "Enable permission prompts"
+            : "Disable dangerous approval prompts (no-approval mode)",
+        description: "toggle no-approval mode (auto-accept dangerous permissions)",
+        group: "Session",
+        slash: {
+          name: "yolo",
+          aliases: ["autoapprove", "auto-approve", "no-approval", "noapproval", "permissions"],
+        },
+        run: () => {
+          const next = local.permission.toggle()
+          toast.show({
+            message:
+              next === "autoaccept"
+                ? "Modo sin aprobación activado (auto-approve)"
+                : "Modo sin aprobación desactivado (solicitar permisos)",
+            variant: next === "autoaccept" ? "warning" : "info",
+            duration: 3000,
+          })
+          dialog.clear()
         },
       },
     ],
@@ -1988,6 +2014,31 @@ export function Prompt(props: PromptProps) {
                 )}
               </Show>
             </Slot>
+            <Show when={local.permission.mode === "autoaccept"}>
+              <box
+                id="prompt.footer.autoapprove"
+                flexShrink={0}
+                onMouseUp={() => {
+                  const next = local.permission.toggle()
+                  toast.show({
+                    message:
+                      next === "autoaccept"
+                        ? "Modo sin aprobación activado (auto-approve)"
+                        : "Modo sin aprobación desactivado (solicitar permisos)",
+                    variant: next === "autoaccept" ? "warning" : "info",
+                    duration: 3000,
+                  })
+                }}
+              >
+                <text
+                  fg={theme.text.feedback.warning.base}
+                  attributes={TextAttributes.BOLD}
+                  wrapMode="none"
+                >
+                  ⚡ sin aprobación
+                </text>
+              </box>
+            </Show>
           </Slot>
         </box>
       </box>

@@ -3559,7 +3559,7 @@ export type SessionRevertClearInput = { readonly sessionID: string }
 
 export type SessionRevertClearOutput = void
 
-export type SessionRevertCommitInput = { readonly sessionID: string }
+export type SessionRevertCommitInput = { readonly sessionID: string; readonly resume?: boolean | undefined }
 
 export type SessionRevertCommitOutput = void
 

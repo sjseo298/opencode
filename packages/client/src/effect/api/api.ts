@@ -280,7 +280,7 @@ export type SessionRevertClearOperation<E = never> = (
   input: SessionRevertClearInput,
 ) => Effect.Effect<SessionRevertClearOutput, E>
 
-export type SessionRevertCommitInput = { readonly sessionID: Session.ID }
+export type SessionRevertCommitInput = { readonly sessionID: Session.ID; readonly resume?: boolean | undefined }
 export type SessionRevertCommitOutput = void
 export type SessionRevertCommitOperation<E = never> = (
   input: SessionRevertCommitInput,

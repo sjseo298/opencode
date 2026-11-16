@@ -499,9 +499,17 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
     .add(
       HttpApiEndpoint.post("session.revert.commit", "/api/session/:sessionID/revert/commit", {
         params: { sessionID: Session.ID },
+        query: { resume: BooleanFromString.pipe(Schema.optional) },
         success: HttpApiSchema.NoContent,
         error: [SessionNotFoundError, SessionBusyError],
-      }).annotateMerge(OpenApi.annotations({ identifier: "session.revert.commit", summary: "Commit staged revert" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.revert.commit",
+          summary: "Commit staged revert",
+          description:
+            "Permanently delete messages at or after the staged revert boundary and clear the revert state. When resume=true, immediately schedules execution so the agent repeats from the reverted boundary.",
+        }),
+      ),
     )
     .add(
       HttpApiEndpoint.get("session.context", "/api/session/:sessionID/context", {

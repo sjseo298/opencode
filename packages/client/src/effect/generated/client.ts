@@ -617,7 +617,10 @@ const EndpointSessionRevertClear = (raw: RawClient["server.session"]) => (input:
 
 const EndpointSessionRevertCommit = (raw: RawClient["server.session"]) => (input: SessionRevertCommitInput) =>
   preserveEffect<SessionRevertCommitOutput>()(
-    raw["session.revert.commit"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
+    raw["session.revert.commit"]({
+      params: { sessionID: input["sessionID"] },
+      query: { resume: input["resume"] },
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const EndpointSessionContext = (raw: RawClient["server.session"]) => (input: SessionContextInput) =>

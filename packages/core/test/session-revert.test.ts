@@ -113,6 +113,20 @@ describe("Session.revert files", () => {
             "Keep this later edit.\n",
           )
           expect((yield* session.get(created.id)).revert).toBeUndefined()
+
+          // Reverting directly to an assistant step restores its file changes while preserving the user prompt.
+          const stepReverted = yield* session.revert.stage({ sessionID: created.id, messageID: assistantMessageID })
+          expect({
+            original: yield* Effect.promise(() => Bun.file(original).exists()),
+            renamed: yield* Effect.promise(() => Bun.file(renamed).exists()),
+          }).toEqual({ original: true, renamed: false })
+          expect(stepReverted.files?.map((file) => [file.file, file.status])).toEqual([
+            ["new name.txt", "deleted"],
+            ["old name.txt", "added"],
+          ])
+          yield* session.revert.commit(created.id, { resume: true })
+          const remaining = yield* session.messages({ sessionID: created.id })
+          expect(remaining.map((m) => [m.id, m.type])).toEqual([[prompt.id, "user"]])
         }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
       }),
     // Real Location/plugin startup and Git snapshots can exceed five seconds under CI load.

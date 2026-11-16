@@ -853,6 +853,7 @@ export function make(options: ClientOptions) {
             {
               method: "POST",
               path: `/api/session/${encodeURIComponent(input.sessionID)}/revert/commit`,
+              query: { resume: input["resume"] },
               successStatus: 204,
               declaredStatuses: [400, 401, 404, 409],
               empty: true,

@@ -480,9 +480,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.commit",
         Effect.fn(function* (ctx) {
-          yield* Effect.log("session.revert.commit", { sessionID: ctx.params.sessionID })
+          yield* Effect.log("session.revert.commit", { sessionID: ctx.params.sessionID, resume: ctx.query.resume })
           yield* session.revert
-            .commit(ctx.params.sessionID)
+            .commit(ctx.params.sessionID, { resume: ctx.query.resume })
             .pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
               Effect.catchTag("Session.BusyError", busySession),

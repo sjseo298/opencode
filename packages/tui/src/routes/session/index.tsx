@@ -211,7 +211,7 @@ export function Session(props: {
     return data.session.family(route.sessionID).filter((id) => id !== route.sessionID)
   })
   const permissions = createMemo(() => {
-    if (session()?.parentID) return []
+    if (session()?.parentID && local.permission.mode !== "autoaccept") return []
     return [route.sessionID, ...descendantSessionIDs()].flatMap(
       (sessionID) => data.session.permission.list(sessionID) ?? [],
     )
@@ -1406,6 +1406,78 @@ export function Session(props: {
             })()
         void undo.catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
         dialog.clear()
+      },
+    },
+    {
+      title: "Undo last agent steps and repeat",
+      description: "undo last N LLM steps and repeat them",
+      id: "session.undo.steps",
+      group: "Session",
+      slash: {
+        name: "rewind",
+        aliases: ["undo-steps", "undosteps", "retry-steps"],
+        arguments: true as const,
+      },
+      run: (args?: string) => {
+        const executeRewind = (steps: number) => {
+          void (async () => {
+            await client.api.session.interrupt({ sessionID })
+            await client.api.experimental.session.wait({ sessionID })
+            await data.session.message.sync(sessionID).catch(() => undefined)
+            const current = messagesBeforeRevert()
+            const lastUserIndex = current.findLastIndex(
+              (message) => message.type === "user" && !!message.text.trim(),
+            )
+            const scopeMessages = lastUserIndex === -1 ? current : current.slice(lastUserIndex + 1)
+            const assistantSteps = scopeMessages.filter(
+              (message): message is SessionMessageAssistant => message.type === "assistant",
+            )
+            if (assistantSteps.length === 0) {
+              toast.show({ message: "No agent steps to undo", variant: "error", duration: 3000 })
+              return
+            }
+            const actualCount = Math.min(steps, assistantSteps.length)
+            const target = assistantSteps[assistantSteps.length - actualCount]!
+            await client.api.session.revert.stage({ sessionID, messageID: target.id })
+            await client.api.session.revert.commit({ sessionID, resume: true })
+            toast.show({
+              message: `Rewound ${actualCount} agent step${actualCount === 1 ? "" : "s"} — repeating…`,
+              variant: "info",
+              duration: 3000,
+            })
+          })().catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
+          dialog.clear()
+        }
+
+        if (args === undefined) {
+          dialog.replace(() => (
+            <DialogPrompt
+              title="Undo last N agent steps and repeat"
+              placeholder="Number of steps (default: 1)"
+              value="1"
+              onConfirm={(input) => {
+                const trimmed = input.trim()
+                const parsed = trimmed === "" ? 1 : Number.parseInt(trimmed, 10)
+                if (!Number.isFinite(parsed) || parsed < 1) {
+                  toast.show({ message: "Enter a positive number of steps", variant: "error", duration: 3000 })
+                  return
+                }
+                executeRewind(parsed)
+              }}
+              onCancel={() => dialog.clear()}
+            />
+          ))
+          return
+        }
+
+        const trimmed = args.trim()
+        const parsed = trimmed === "" ? 1 : Number.parseInt(trimmed, 10)
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          toast.show({ message: "Usage: /rewind [n] (n must be >= 1)", variant: "error", duration: 3000 })
+          dialog.clear()
+          return
+        }
+        executeRewind(parsed)
       },
     },
     {

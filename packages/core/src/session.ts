@@ -258,7 +258,10 @@ export interface Interface {
     readonly clear: (
       sessionID: SessionSchema.ID,
     ) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error | FileSystem.DirectoryNotFoundError>
-    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
+    readonly commit: (
+      sessionID: SessionSchema.ID,
+      options?: { readonly resume?: boolean },
+    ) => Effect.Effect<void, NotFoundError | BusyError>
   }
 }
 
@@ -545,7 +548,7 @@ const layer = Layer.effect(
       revert: {
         stage: (input) => sessions.forSession(input.sessionID).revert.stage(input),
         clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),
-        commit: (sessionID) => sessions.forSession(sessionID).revert.commit(),
+        commit: (sessionID, options) => sessions.forSession(sessionID).revert.commit(options),
       },
     })
 

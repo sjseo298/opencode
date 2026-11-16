@@ -350,10 +350,17 @@ export const make = Effect.fn("Session.make")(function* () {
     )
     return yield* execution.wake(sessionID)
   })
-  const commit = Effect.fn("Session.revert.commit")(function* (sessionID: SessionSchema.ID) {
+  const commit = Effect.fn("Session.revert.commit")(function* (
+    sessionID: SessionSchema.ID,
+    options?: { readonly resume?: boolean },
+  ) {
     const session = yield* get(sessionID)
     if (yield* execution.isActive(sessionID)) return yield* new BusyError({ sessionID })
-    return yield* SessionRevert.commit(bus, session)
+    yield* SessionRevert.commit(bus, session)
+    if (options?.resume)
+      yield* execution
+        .resume(sessionID)
+        .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
   })
   const revert = { stage, clear, commit }
   const operations = {
