@@ -9,6 +9,7 @@ import { SessionInbox } from "./inbox.js"
 import { SessionMessage } from "./message.js"
 import { SessionStore } from "./store.js"
 import { SubagentCompletion } from "./subagent-completion.js"
+import { LlamaCppKV } from "./llamacpp-kv.js"
 
 type Recovery = Extract<Job.Recovery, { kind: "subagent" }>
 
@@ -153,11 +154,13 @@ export function start(
     background: true,
     // Wait until the parent session finishes its active execution and goes idle before
     // starting the subagent, guaranteeing parent and child never run concurrently.
+    // Once the parent is idle, offload the parent's KV cache slot to disk (if applicable)
+    // so the subagent has the full KV context available, and restore it when the child finishes.
     run: execution.awaitIdle(recovery.parentSessionID).pipe(
       Effect.andThen(
         Effect.suspend(() => {
           started = true
-          return execution.resume(id)
+          return LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id))
         }),
       ),
       // Only an explicit caller cancel releases the child's claim. A server shutdown

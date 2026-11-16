@@ -26,6 +26,8 @@ import type { SessionMessage } from "./message.js"
 import type { SessionSchema } from "./schema.js"
 import { SessionTable } from "./sql.js"
 import { SessionHistory } from "./history.js"
+import { LlamaCppKV } from "./llamacpp-kv.js"
+import { getObjectivesConfig } from "../plugin/builtin/objectives-model.js"
 
 export type Settings = {
   unified_kv?: boolean
@@ -264,7 +266,8 @@ export const isSubagentCompleted = (
 
 /**
  * Calculates the total context tokens used by all OTHER sessions in the tree (parent + active sibling subagents),
- * excluding the currently executing session and any subagents that have already finished (freed from KV cache).
+ * excluding the currently executing session, any parent session whose KV cache has been offloaded to disk,
+ * and any subagents that have already finished (freed from KV cache).
  */
 export const resolveTreeOtherTokens = (
   db: Database.Interface["db"],
@@ -299,6 +302,19 @@ export const resolveTreeOtherTokens = (
     let totalOther = 0
     for (const sid of allIDs) {
       if (sid === currentSession.id) continue
+      // If a parent/ancestor session has its KV cache offloaded to disk (saved & erased from VRAM),
+      // or if this is a subagent running on a local provider where parent KV offloading is enabled,
+      // its tokens do NOT occupy the live KV buffer and must NOT reduce the subagent's ceiling.
+      if (LlamaCppKV.isSessionKvOffloaded(sid)) {
+        continue
+      }
+      if (sid === rootID && currentSession.id !== rootID) {
+        const provider = (currentSession.model?.providerID ?? "").toLowerCase()
+        const cfg = getObjectivesConfig(rootID)
+        if (cfg.llamacppKvOffload && LOCAL_PROVIDERS.has(provider)) {
+          continue
+        }
+      }
       // If sid is a child subagent and it already completed and delivered back to parent,
       // its KV cache slot has been freed by the local inference engine.
       if (sid !== rootID) {

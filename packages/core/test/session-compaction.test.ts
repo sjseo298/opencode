@@ -1643,6 +1643,42 @@ it.effect("resolveTreeOtherTokens detects completed subagents via SessionTable i
   }),
 )
 
+it.effect("resolveTreeOtherTokens excludes parent tokens when parent KV is offloaded to disk so subagents do not compact prematurely", () =>
+  Effect.gen(function* () {
+    const { LlamaCppKV } = yield* Effect.promise(() => import("../src/session/llamacpp-kv.js"))
+    const db = (yield* Database.Service).db
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) => editor.configure({ unified_kv: true }))
+
+    const parentID = Session.ID.make("ses_offloaded_parent")
+    const subID = Session.ID.make("ses_offloaded_sub")
+
+    yield* insertSession(parentID)
+    const subSession = yield* insertSession(subID, { parent_id: parentID })
+
+    // Parent has 160,000 tokens (almost filling the 170,000 base ceiling of a 200,000 window)
+    yield* storeMessages(parentID, [measured("Heavy parent conversation", 160_000)])
+    // Subagent only has 15,000 tokens
+    const subMessages = [measured("Initial subagent work", 15_000)]
+
+    // Mark parent KV as offloaded to disk while subagent runs
+    LlamaCppKV.markSessionKvOffloaded(parentID, true)
+    try {
+      const otherTokens = yield* SessionCompaction.resolveTreeOtherTokens(db, { id: subID, parentID })
+      expect(otherTokens).toBe(0)
+
+      // Subagent must NOT trigger auto-compaction because parent KV is on disk (ceiling remains 170,000)
+      const outcome = yield* compaction.compact({
+        reason: "auto",
+        context: loaded(subSession, subMessages),
+      })
+      expect(outcome.status).toBe("skipped")
+    } finally {
+      LlamaCppKV.markSessionKvOffloaded(parentID, false)
+    }
+  }),
+)
+
 it.effect("compact triggers on subagent when combined parent and sibling context exhausts unified KV", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service

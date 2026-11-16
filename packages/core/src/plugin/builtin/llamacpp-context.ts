@@ -265,6 +265,7 @@ export type DynamicContextData = {
   totalSlots?: number
   maxSubagents?: number
   kvUnified?: boolean
+  baseURL?: string
   timestamp: number
 }
 
@@ -274,12 +275,14 @@ export type DynamicContextStore = {
   latestTotalSlots?: number
   latestMaxSubagents?: number
   latestKvUnified?: boolean
+  latestBaseURL?: string
   get(key: string): DynamicContextData | undefined
   getLimit(key: string): number | undefined
   getUsed(key: string): number | undefined
   getTotalSlots(key?: string): number | undefined
   getMaxSubagents(key?: string): number | undefined
   getKvUnified(key?: string): boolean | undefined
+  getBaseURL(key?: string): string | undefined
   set(
     key: string,
     data: {
@@ -288,6 +291,7 @@ export type DynamicContextStore = {
       totalSlots?: number
       maxSubagents?: number
       kvUnified?: boolean
+      baseURL?: string
     },
   ): void
   subscribe(fn: () => void): () => void
@@ -302,6 +306,7 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
       latestTotalSlots: undefined as number | undefined,
       latestMaxSubagents: undefined as number | undefined,
       latestKvUnified: undefined as boolean | undefined,
+      latestBaseURL: undefined as string | undefined,
       get(key: string): DynamicContextData | undefined {
         return this.entries.get(key)
       },
@@ -383,6 +388,26 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         if (typeof g.__OPENCODE_KV_UNIFIED__ === "boolean") return g.__OPENCODE_KV_UNIFIED__
         return undefined
       },
+      getBaseURL(key?: string): string | undefined {
+        if (key) {
+          const direct = this.entries.get(key)?.baseURL
+          if (direct) return direct
+          const slash = key.indexOf("/")
+          if (slash !== -1) {
+            const modelID = key.slice(slash + 1)
+            for (const [k, v] of this.entries) {
+              if ((k === modelID || k.endsWith("/" + modelID) || modelID.endsWith(k)) && v.baseURL) {
+                return v.baseURL
+              }
+            }
+          }
+        }
+        if (this.latestBaseURL) return this.latestBaseURL
+        if (typeof g.__OPENCODE_LLAMACPP_BASE_URL__ === "string" && g.__OPENCODE_LLAMACPP_BASE_URL__) {
+          return g.__OPENCODE_LLAMACPP_BASE_URL__
+        }
+        return undefined
+      },
       set(
         key: string,
         data: {
@@ -391,6 +416,7 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
           totalSlots?: number
           maxSubagents?: number
           kvUnified?: boolean
+          baseURL?: string
         },
       ) {
         const existing = this.entries.get(key)
@@ -399,12 +425,14 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
           data.maxSubagents ??
           (resolvedSlots !== undefined ? Math.max(1, resolvedSlots - 1) : existing?.maxSubagents)
         const resolvedKvUnified = data.kvUnified ?? existing?.kvUnified
+        const resolvedBaseURL = data.baseURL ?? existing?.baseURL
         const updated: DynamicContextData = {
           limit: data.limit ?? existing?.limit,
           used: data.used ?? existing?.used,
           totalSlots: resolvedSlots,
           maxSubagents: resolvedMaxSub,
           kvUnified: resolvedKvUnified,
+          baseURL: resolvedBaseURL,
           timestamp: Date.now(),
         }
         if (resolvedSlots !== undefined) {
@@ -418,6 +446,10 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         if (resolvedKvUnified !== undefined) {
           this.latestKvUnified = resolvedKvUnified
           g.__OPENCODE_KV_UNIFIED__ = resolvedKvUnified
+        }
+        if (resolvedBaseURL !== undefined) {
+          this.latestBaseURL = resolvedBaseURL
+          g.__OPENCODE_LLAMACPP_BASE_URL__ = resolvedBaseURL
         }
         this.entries.set(key, updated)
         const slash = key.indexOf("/")
@@ -472,6 +504,10 @@ export const Plugin = OpenCodePlugin.define({
         const bUrl = pCfg?.settings?.baseURL ?? pCfg?.options?.baseURL
         if (typeof bUrl === "string" && bUrl) {
           providerBaseUrls.set(pId, bUrl)
+          if (targetProviders.has(pId)) {
+            dynamicStore.latestBaseURL = bUrl
+            ;(globalThis as any).__OPENCODE_LLAMACPP_BASE_URL__ = bUrl
+          }
         }
       }
     }
@@ -511,6 +547,8 @@ export const Plugin = OpenCodePlugin.define({
           (record as any)?.settings?.baseURL
         if (typeof baseURL === "string") {
           providerBaseUrls.set(providerID, baseURL)
+          dynamicStore.latestBaseURL = baseURL
+          ;(globalThis as any).__OPENCODE_LLAMACPP_BASE_URL__ = baseURL
         }
       }
 
@@ -601,7 +639,7 @@ export const Plugin = OpenCodePlugin.define({
         detected.maxSubagents !== undefined ||
         detected.kvUnified !== undefined
       ) {
-        dynamicStore.set(key, detected)
+        dynamicStore.set(key, { ...detected, baseURL })
       }
 
       if (detected.limit === undefined) {

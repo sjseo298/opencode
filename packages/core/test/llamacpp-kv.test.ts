@@ -36,5 +36,24 @@ describe("Objectives Config llama.cpp KV offload and subagent model", () => {
     expect(typeof LlamaCppKV.restoreSlot).toBe("function")
     expect(typeof LlamaCppKV.eraseSlot).toBe("function")
     expect(typeof LlamaCppKV.withOffloadedSlot).toBe("function")
+    expect(typeof LlamaCppKV.isSessionKvOffloaded).toBe("function")
+    expect(typeof LlamaCppKV.markSessionKvOffloaded).toBe("function")
+    expect(typeof LlamaCppKV.selectParentSlot).toBe("function")
+  })
+
+  it("tracks offloaded session IDs and selects parent slot with highest token count", () => {
+    const sid = "ses_test_offload_tracking"
+    expect(LlamaCppKV.isSessionKvOffloaded(sid)).toBe(false)
+    LlamaCppKV.markSessionKvOffloaded(sid, true)
+    expect(LlamaCppKV.isSessionKvOffloaded(sid)).toBe(true)
+    LlamaCppKV.markSessionKvOffloaded(sid, false)
+    expect(LlamaCppKV.isSessionKvOffloaded(sid)).toBe(false)
+
+    expect(
+      LlamaCppKV.selectParentSlot([
+        { id: 0, n_past: 100 },
+        { id: 1, n_past: 42_000 },
+      ]),
+    ).toBe(1)
   })
 })

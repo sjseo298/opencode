@@ -103,10 +103,22 @@ export const Plugin = {
 
               // Available headroom calculation
               // Buffer preserves 15% (minimum minSubagentBudget) of context window as safety margin
-              const minBudget = getObjectivesConfig(context.sessionID).minSubagentBudget
+              // When KV offload to disk is active on a local provider, the parent session's KV slot
+              // will be saved to disk and erased while the subagent runs, so the subagent has the full
+              // ceiling (minus active siblings) available instead of subtracting currentSessionTokens.
+              const objectivesCfg = getObjectivesConfig(context.sessionID)
+              const minBudget = objectivesCfg.minSubagentBudget
               const safetyReserveTokens = Math.max(minBudget, Math.floor(contextLimit * 0.15))
               const ceiling = UnifiedKV.calculateAdjustedCeiling(contextLimit - safetyReserveTokens, otherTreeTokens)
-              const availableHeadroom = Math.max(0, ceiling - currentSessionTokens)
+              const providerID = (session.model?.providerID ?? "").toLowerCase()
+              const isParentSession = !session.parentID
+              const parentKvWillOffload =
+                isParentSession &&
+                objectivesCfg.llamacppKvOffload &&
+                UnifiedKV.LOCAL_PROVIDERS.has(providerID)
+              const availableHeadroom = parentKvWillOffload
+                ? Math.max(0, ceiling)
+                : Math.max(0, ceiling - currentSessionTokens)
 
               // Slot capacity & concurrency
               const { totalSlots, maxSubagents } = getDetectedSubagentCapacity()
