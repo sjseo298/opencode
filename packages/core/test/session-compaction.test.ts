@@ -1679,6 +1679,53 @@ it.effect("resolveTreeOtherTokens excludes parent tokens when parent KV is offlo
   }),
 )
 
+it.effect("resolveTreeOtherTokens only discounts parent tokens on llamacpp when parent usage exceeds 65%", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const parentLowID = Session.ID.make("ses_llamacpp_low_parent")
+    const subLowID = Session.ID.make("ses_llamacpp_low_sub")
+    const parentHighID = Session.ID.make("ses_llamacpp_high_parent")
+    const subHighID = Session.ID.make("ses_llamacpp_high_sub")
+    const parentOtherProvID = Session.ID.make("ses_mlx_high_parent")
+    const subOtherProvID = Session.ID.make("ses_mlx_high_sub")
+
+    yield* insertSession(parentLowID)
+    yield* insertSession(subLowID, { parent_id: parentLowID })
+    yield* insertSession(parentHighID)
+    yield* insertSession(subHighID, { parent_id: parentHighID })
+    yield* insertSession(parentOtherProvID)
+    yield* insertSession(subOtherProvID, { parent_id: parentOtherProvID })
+
+    // Default context limit is 128,000 when model limit is not in dynamic store (65% = 83,200 tokens)
+    // 1. llamacpp with 50,000 tokens (~39% <= 65%): stays in RAM, so parent tokens (50,100) ARE counted
+    yield* storeMessages(parentLowID, [measured("Parent under 65%", 50_000)])
+    const otherLow = yield* SessionCompaction.resolveTreeOtherTokens(db, {
+      id: subLowID,
+      parentID: parentLowID,
+      model: { providerID: "llamacpp", id: "local-model" },
+    })
+    expect(otherLow).toBe(50_100)
+
+    // 2. llamacpp with 90,000 tokens (~70% > 65%): offloaded to disk, so parent tokens are NOT counted (0)
+    yield* storeMessages(parentHighID, [measured("Parent over 65%", 90_000)])
+    const otherHigh = yield* SessionCompaction.resolveTreeOtherTokens(db, {
+      id: subHighID,
+      parentID: parentHighID,
+      model: { providerID: "llamacpp", id: "local-model" },
+    })
+    expect(otherHigh).toBe(0)
+
+    // 3. Non-llamacpp provider (e.g. mlx) even with 90,000 tokens (> 65%): does NOT offload to disk, so tokens ARE counted
+    yield* storeMessages(parentOtherProvID, [measured("MLX parent over 65%", 90_000)])
+    const otherMlx = yield* SessionCompaction.resolveTreeOtherTokens(db, {
+      id: subOtherProvID,
+      parentID: parentOtherProvID,
+      model: { providerID: "mlx", id: "local-model" },
+    })
+    expect(otherMlx).toBe(90_100)
+  }),
+)
+
 it.effect("compact triggers on subagent when combined parent and sibling context exhausts unified KV", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service

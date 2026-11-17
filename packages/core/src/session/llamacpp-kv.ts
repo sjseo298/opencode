@@ -5,10 +5,13 @@
  *
  * Implements slot KV cache snapshotting, erasing and restoring to disk
  * via llama-server /slots endpoints (POST /slots/{id_slot}?action=save|restore|erase).
- * When running on llama.cpp, this saves and frees the parent session's KV cache
- * during subagent execution to prevent VRAM exhaustion, slot thrashing, and
- * premature subagent compaction, restoring the parent KV cache snapshot upon
- * subagent completion.
+ * Exclusively when running on llama.cpp ("llamacpp" / "llama.cpp") and only when
+ * the parent session's context consumption exceeds 65% of the context window,
+ * this saves and frees the parent session's KV cache during subagent execution
+ * to prevent VRAM exhaustion, slot thrashing, and premature subagent compaction,
+ * restoring the parent KV cache snapshot upon subagent completion.
+ * When context usage is <= 65% (or on non-llamacpp providers), the KV cache remains
+ * in RAM to avoid unnecessary disk I/O.
  * ============================================================================
  */
 
@@ -19,7 +22,7 @@ import * as fsSync from "node:fs"
 import * as os from "node:os"
 import { getObjectivesConfig } from "../plugin/builtin/objectives-model.js"
 
-const LOCAL_KV_PROVIDERS = new Set(["llamacpp", "llama.cpp", "esca", "splash", "local"])
+const LLAMACPP_PROVIDERS = new Set(["llamacpp", "llama.cpp"])
 
 function getOffloadedSet(): Set<string> {
   const g = globalThis as any
@@ -30,6 +33,13 @@ function getOffloadedSet(): Set<string> {
 }
 
 export namespace LlamaCppKV {
+  /**
+   * Minimum context usage ratio (> 65%) required before offloading the parent KV cache to disk.
+   * When context usage is at or below 65%, both parent and subagent fit in memory and keeping the
+   * KV cache in RAM avoids unnecessary disk I/O.
+   */
+  export const KV_OFFLOAD_THRESHOLD_RATIO = 0.65
+
   export type SlotInfo = {
     id: number
     id_task?: number
@@ -41,6 +51,32 @@ export namespace LlamaCppKV {
       used_tokens?: number
       total_tokens?: number
     }
+  }
+
+  /**
+   * Returns true only when the provider ID is explicitly llama.cpp ("llamacpp" or "llama.cpp").
+   */
+  export function isLlamaCppProvider(providerID?: string | null): boolean {
+    if (!providerID) return false
+    return LLAMACPP_PROVIDERS.has(providerID.trim().toLowerCase())
+  }
+
+  /**
+   * Returns true only when the used tokens strictly exceed 65% of the context limit.
+   */
+  export function isAboveOffloadThreshold(usedTokens: number, contextLimit: number): boolean {
+    if (contextLimit <= 0 || usedTokens <= 0) return false
+    return usedTokens / contextLimit > KV_OFFLOAD_THRESHOLD_RATIO
+  }
+
+  /**
+   * Returns true if the slot's current token usage exceeds 65% of its context window.
+   */
+  export function shouldOffloadSlot(slot?: SlotInfo, fallbackLimit?: number): boolean {
+    if (!slot) return false
+    const used = slot.n_past ?? slot.used_tokens ?? slot.context?.used_tokens ?? 0
+    const limit = slot.n_ctx ?? slot.context?.total_tokens ?? fallbackLimit ?? 0
+    return isAboveOffloadThreshold(used, limit)
   }
 
   /**
@@ -67,7 +103,7 @@ export namespace LlamaCppKV {
       if (!obj || typeof obj !== "object") return undefined
       const all = { ...(obj.providers ?? {}), ...(obj.provider ?? {}) }
       for (const [pId, pCfg] of Object.entries(all) as [string, any][]) {
-        if (!LOCAL_KV_PROVIDERS.has(pId.toLowerCase())) continue
+        if (!LLAMACPP_PROVIDERS.has(pId.toLowerCase())) continue
         const bUrl = pCfg?.settings?.baseURL ?? pCfg?.options?.baseURL
         if (typeof bUrl === "string" && bUrl.trim()) return bUrl.trim()
       }
@@ -274,16 +310,37 @@ export namespace LlamaCppKV {
     return Boolean(discoverBaseUrlFromConfig())
   }
 
+  export type OffloadOptions = {
+    providerID?: string
+    parentUsedTokens?: number
+    contextLimit?: number
+  }
+
   /**
    * Helper that executes an operation with the parent session's KV cache offloaded to disk
    * and restored guaranteed via Effect.ensuring.
+   * Only triggers when:
+   * 1. Provider is strictly llama.cpp ("llamacpp" / "llama.cpp")
+   * 2. Parent context usage exceeds 65% of the context window (KV_OFFLOAD_THRESHOLD_RATIO)
    */
   export function withOffloadedSlot<R, E, A>(
     sessionID: string,
     operation: Effect.Effect<A, E, R>,
+    options?: OffloadOptions,
   ): Effect.Effect<A, E, R> {
     const cfg = getObjectivesConfig(sessionID)
     if (!cfg.llamacppKvOffload || !hasConfiguredLlamaCppOrigin()) {
+      return operation
+    }
+    if (options?.providerID !== undefined && !isLlamaCppProvider(options.providerID)) {
+      return operation
+    }
+    if (
+      options?.parentUsedTokens !== undefined &&
+      options?.contextLimit !== undefined &&
+      options.contextLimit > 0 &&
+      !isAboveOffloadThreshold(options.parentUsedTokens, options.contextLimit)
+    ) {
       return operation
     }
 
@@ -295,6 +352,19 @@ export namespace LlamaCppKV {
       }
 
       const parentSlotID = selectParentSlot(slots)
+      const parentSlot = slots.find((s) => s.id === parentSlotID) ?? slots[0]
+
+      // Check 65% threshold on the live slot if caller did not already verify > 65%
+      const verifiedByCaller =
+        options?.parentUsedTokens !== undefined &&
+        options?.contextLimit !== undefined &&
+        options.contextLimit > 0 &&
+        isAboveOffloadThreshold(options.parentUsedTokens, options.contextLimit)
+
+      if (!verifiedByCaller && !shouldOffloadSlot(parentSlot, options?.contextLimit)) {
+        return yield* operation
+      }
+
       const snapshotFilename = `opencode_kv_slot${parentSlotID}_${sessionID.replace(/[^a-zA-Z0-9_-]/g, "_")}_${Date.now()}.bin`
 
       // 1. Guardar slot del hilo padre a disco

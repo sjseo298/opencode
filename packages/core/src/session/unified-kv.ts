@@ -28,6 +28,7 @@ import { SessionTable } from "./sql.js"
 import { SessionHistory } from "./history.js"
 import { LlamaCppKV } from "./llamacpp-kv.js"
 import { getObjectivesConfig } from "../plugin/builtin/objectives-model.js"
+import { getEffectiveContextLimit } from "../plugin/builtin/subagent-mandatory-instruction.js"
 
 export type Settings = {
   unified_kv?: boolean
@@ -302,17 +303,24 @@ export const resolveTreeOtherTokens = (
     let totalOther = 0
     for (const sid of allIDs) {
       if (sid === currentSession.id) continue
-      // If a parent/ancestor session has its KV cache offloaded to disk (saved & erased from VRAM),
-      // or if this is a subagent running on a local provider where parent KV offloading is enabled,
+      // 1. If a parent/ancestor session explicitly has its KV cache offloaded to disk (saved & erased from VRAM),
       // its tokens do NOT occupy the live KV buffer and must NOT reduce the subagent's ceiling.
       if (LlamaCppKV.isSessionKvOffloaded(sid)) {
         continue
       }
+      // 2. Fallback check: only when the provider is strictly llama.cpp ("llamacpp" / "llama.cpp"),
+      // llamacppKvOffload is enabled, AND the parent session's context usage exceeds 65% of the window,
+      // the parent KV is offloaded to disk during subagent execution. Below or equal to 65%, or on any
+      // other provider, the parent remains in memory and its tokens are counted normally.
       if (sid === rootID && currentSession.id !== rootID) {
-        const provider = (currentSession.model?.providerID ?? "").toLowerCase()
+        const provider = currentSession.model?.providerID
         const cfg = getObjectivesConfig(rootID)
-        if (cfg.llamacppKvOffload && LOCAL_PROVIDERS.has(provider)) {
-          continue
+        if (cfg.llamacppKvOffload && LlamaCppKV.isLlamaCppProvider(provider)) {
+          const parentTokens = estimateSessionTokens(parentMessages)
+          const contextLimit = getEffectiveContextLimit(currentSession.model)
+          if (LlamaCppKV.isAboveOffloadThreshold(parentTokens, contextLimit)) {
+            continue
+          }
         }
       }
       // If sid is a child subagent and it already completed and delivered back to parent,
@@ -332,7 +340,10 @@ export const resolveTreeOtherTokens = (
           continue
         }
       }
-      const messages = yield* SessionHistory.load(db, sid, "latest").pipe(Effect.orDie)
+      const messages =
+        sid === rootID
+          ? parentMessages
+          : yield* SessionHistory.load(db, sid, "latest").pipe(Effect.orDie)
       totalOther += estimateSessionTokens(messages)
     }
     return totalOther

@@ -10,6 +10,8 @@ import { SessionMessage } from "./message.js"
 import { SessionStore } from "./store.js"
 import { SubagentCompletion } from "./subagent-completion.js"
 import { LlamaCppKV } from "./llamacpp-kv.js"
+import { UnifiedKV } from "./unified-kv.js"
+import { getEffectiveContextLimit } from "../plugin/builtin/subagent-mandatory-instruction.js"
 
 type Recovery = Extract<Job.Recovery, { kind: "subagent" }>
 
@@ -141,6 +143,7 @@ export function start(
   recovery: Recovery,
   notificationID?: Job.Background["notificationID"],
   cancelPreStart?: (notificationID: SessionMessage.ID) => Effect.Effect<void>,
+  store?: SessionStore.Interface,
 ) {
   const id = recovery.childSessionID
   let started = false
@@ -154,13 +157,32 @@ export function start(
     background: true,
     // Wait until the parent session finishes its active execution and goes idle before
     // starting the subagent, guaranteeing parent and child never run concurrently.
-    // Once the parent is idle, offload the parent's KV cache slot to disk (if applicable)
-    // so the subagent has the full KV context available, and restore it when the child finishes.
+    // Once the parent is idle, offload the parent's KV cache slot to disk ONLY if the
+    // provider is llamacpp and parent context usage exceeds 65%; otherwise keep in RAM.
     run: execution.awaitIdle(recovery.parentSessionID).pipe(
       Effect.andThen(
         Effect.suspend(() => {
           started = true
-          return LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id))
+          if (!store || !LlamaCppKV.hasConfiguredLlamaCppOrigin()) {
+            return LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id))
+          }
+          return Effect.gen(function* () {
+            const parent = yield* store.get(recovery.parentSessionID).pipe(Effect.orElseSucceed(() => undefined))
+            const providerID = parent?.model?.providerID
+            if (!LlamaCppKV.isLlamaCppProvider(providerID)) {
+              return yield* execution.resume(id)
+            }
+            const parentMsgs = yield* store
+              .context(recovery.parentSessionID)
+              .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<SessionMessage.Info>))
+            const parentUsedTokens = UnifiedKV.estimateSessionTokens(parentMsgs)
+            const contextLimit = getEffectiveContextLimit(parent?.model)
+            return yield* LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id), {
+              providerID,
+              parentUsedTokens,
+              contextLimit,
+            })
+          })
         }),
       ),
       // Only an explicit caller cancel releases the child's claim. A server shutdown
@@ -301,12 +323,12 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const info = yield* start(jobs, execution, recovery, orphanedRunning?.notificationID, cancelPreStart(recovery))
+      const info = yield* start(jobs, execution, recovery, orphanedRunning?.notificationID, cancelPreStart(recovery), store)
       return { status: "running", state: "resumed", info } satisfies EnsureResult
     }).pipe(Effect.setContext(context))
 
   return Service.of({
-    start: (recovery) => start(jobs, execution, recovery, undefined, cancelPreStart(recovery)).pipe(Effect.setContext(context)),
+    start: (recovery) => start(jobs, execution, recovery, undefined, cancelPreStart(recovery), store).pipe(Effect.setContext(context)),
     ensure,
   })
 })

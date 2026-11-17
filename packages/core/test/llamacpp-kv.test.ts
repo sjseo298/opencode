@@ -56,4 +56,26 @@ describe("Objectives Config llama.cpp KV offload and subagent model", () => {
       ]),
     ).toBe(1)
   })
+
+  it("enforces exclusive llamacpp provider check and >65% context usage threshold", () => {
+    expect(LlamaCppKV.isLlamaCppProvider("llamacpp")).toBe(true)
+    expect(LlamaCppKV.isLlamaCppProvider("llama.cpp")).toBe(true)
+    expect(LlamaCppKV.isLlamaCppProvider("LLAMACPP")).toBe(true)
+    expect(LlamaCppKV.isLlamaCppProvider("mlx")).toBe(false)
+    expect(LlamaCppKV.isLlamaCppProvider("esca")).toBe(false)
+    expect(LlamaCppKV.isLlamaCppProvider("lmstudio")).toBe(false)
+    expect(LlamaCppKV.isLlamaCppProvider("openai")).toBe(false)
+    expect(LlamaCppKV.isLlamaCppProvider(undefined)).toBe(false)
+
+    // <= 65% does NOT trigger disk offload (fits in memory)
+    expect(LlamaCppKV.isAboveOffloadThreshold(50_000, 100_000)).toBe(false)
+    expect(LlamaCppKV.isAboveOffloadThreshold(65_000, 100_000)).toBe(false)
+    // > 65% triggers disk offload
+    expect(LlamaCppKV.isAboveOffloadThreshold(65_001, 100_000)).toBe(true)
+    expect(LlamaCppKV.isAboveOffloadThreshold(80_000, 100_000)).toBe(true)
+
+    expect(LlamaCppKV.shouldOffloadSlot({ id: 0, n_past: 60_000, n_ctx: 100_000 })).toBe(false)
+    expect(LlamaCppKV.shouldOffloadSlot({ id: 0, n_past: 65_000, n_ctx: 100_000 })).toBe(false)
+    expect(LlamaCppKV.shouldOffloadSlot({ id: 0, n_past: 66_000, n_ctx: 100_000 })).toBe(true)
+  })
 })

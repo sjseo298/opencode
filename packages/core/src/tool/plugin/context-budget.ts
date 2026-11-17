@@ -13,6 +13,7 @@ import { Database } from "../../database/database.js"
 import { Model } from "../../model.js"
 import { Session } from "../../session.js"
 import { SessionHistory } from "../../session/history.js"
+import { LlamaCppKV } from "../../session/llamacpp-kv.js"
 import { UnifiedKV } from "../../session/unified-kv.js"
 import { getDetectedSubagentCapacity } from "../../plugin/builtin/subagent-mandatory-instruction.js"
 import { getEffectiveContextLimit } from "../../plugin/builtin/subagent-mandatory-instruction.js"
@@ -103,19 +104,21 @@ export const Plugin = {
 
               // Available headroom calculation
               // Buffer preserves 15% (minimum minSubagentBudget) of context window as safety margin
-              // When KV offload to disk is active on a local provider, the parent session's KV slot
-              // will be saved to disk and erased while the subagent runs, so the subagent has the full
-              // ceiling (minus active siblings) available instead of subtracting currentSessionTokens.
+              // Exclusively when the provider is llama.cpp ("llamacpp" / "llama.cpp"), llamacppKvOffload is enabled,
+              // AND the parent session's context usage exceeds 65% of the window, the parent session's KV slot
+              // will be saved to disk and erased while the subagent runs. Otherwise (<= 65% or other providers),
+              // the parent stays in memory and currentSessionTokens is subtracted normally.
               const objectivesCfg = getObjectivesConfig(context.sessionID)
               const minBudget = objectivesCfg.minSubagentBudget
               const safetyReserveTokens = Math.max(minBudget, Math.floor(contextLimit * 0.15))
               const ceiling = UnifiedKV.calculateAdjustedCeiling(contextLimit - safetyReserveTokens, otherTreeTokens)
-              const providerID = (session.model?.providerID ?? "").toLowerCase()
+              const providerID = session.model?.providerID
               const isParentSession = !session.parentID
               const parentKvWillOffload =
                 isParentSession &&
                 objectivesCfg.llamacppKvOffload &&
-                UnifiedKV.LOCAL_PROVIDERS.has(providerID)
+                LlamaCppKV.isLlamaCppProvider(providerID) &&
+                LlamaCppKV.isAboveOffloadThreshold(currentSessionTokens, contextLimit)
               const availableHeadroom = parentKvWillOffload
                 ? Math.max(0, ceiling)
                 : Math.max(0, ceiling - currentSessionTokens)
