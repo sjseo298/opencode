@@ -1,0 +1,59 @@
+[data-composer-pill][data-slot="session-objectives-pill"] {
+  gap: 6px;
+  padding-inline-start: 8px;
+
+  &[data-status="presented_awaiting_confirmation"] {
+    border-color: var(--v2-state-fg-warning);
+    color: var(--v2-state-fg-warning);
+  }
+}
+
+[data-composer-pill-panel][data-slot="session-objectives-panel"] {
+  width: max-content;
+  min-width: max(var(--kb-popper-anchor-width, 0px), 320px);
+  max-width: min(460px, calc(100vw - 56px));
+}
+
+[data-slot="session-objective-glyph"] {
+  color: var(--v2-icon-icon-faint);
+
+  &[data-status="exploring"],
+  &[data-status="presented_awaiting_confirmation"] {
+    color: var(--v2-state-fg-warning);
+  }
+
+  &[data-status="investigating"] {
+    color: var(--v2-icon-icon-base);
+  }
+
+  &[data-status="blocked"] {
+    color: var(--v2-state-fg-danger);
+  }
+
+  &[data-status="resolved"] {
+    color: var(--v2-state-fg-success);
+  }
+}
+
+[data-slot="session-objective-row"] {
+  [data-slot="session-objective-text"] {
+    color: var(--v2-text-text-muted);
+  }
+
+  &[data-status="exploring"] [data-slot="session-objective-text"] {
+    color: var(--v2-text-text-base);
+  }
+
+  &[data-status="blocked"] [data-slot="session-objective-text"] {
+    color: var(--v2-state-fg-danger);
+  }
+
+  &:is([data-status="resolved"], [data-status="discarded"], [data-status="cancelled"])
+    [data-slot="session-objective-text"] {
+    color: var(--v2-text-text-faint);
+  }
+
+  &:is([data-status="discarded"], [data-status="cancelled"]) [data-slot="session-objective-text"] {
+    text-decoration: line-through;
+  }
+}

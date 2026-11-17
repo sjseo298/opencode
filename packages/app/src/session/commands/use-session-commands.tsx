@@ -41,7 +41,7 @@ const WINDOW_BLUR: CloseTabGuardEvent = { type: "window.blur" }
 
 type SessionCommandSource = {
   identity: SessionModel["identity"]
-  data: Pick<SessionModel["data"], "info">
+  data: Pick<SessionModel["data"], "info" | "objectives">
   history: Pick<SessionModel["history"], "visibleUserMessages">
   layout: SessionModel["layout"]
 }
@@ -86,6 +86,18 @@ async function loadDialog(kind: SessionDialogKind, context: SessionCommandContex
     const { DialogCommandPalette } = await import("@/shell/commands/dialog")
 
     return () => <DialogCommandPalette />
+  }
+
+  if (kind === "plan") {
+    const { DialogPlanApproval } = await import("@/session/objectives/plan-approval-dialog")
+
+    return () => (
+      <DialogPlanApproval
+        sessionID={context.session.identity.params.id ?? ""}
+        po={context.session.data.objectives()}
+        onRefine={context.focusInput}
+      />
+    )
   }
 
   const { DialogSelectMcp } = await import("@/providers/connect/mcp-dialog")
@@ -479,6 +491,54 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (actions.session.identity.params.id) openDialog("fork")
   }
 
+  const reviewPlan = () => {
+    const sessionID = actions.session.identity.params.id
+    const objectives = actions.session.data.objectives()
+
+    if (!sessionID || !objectives) {
+      showToast({
+        title: language.t("dialog.planApproval.toast.noPlan"),
+      })
+
+      return
+    }
+
+    openDialog("plan")
+  }
+
+  const unapprovePlan = () => {
+    const sessionID = actions.session.identity.params.id
+    const objectives = actions.session.data.objectives()
+
+    if (!sessionID || !objectives) {
+      showToast({
+        title: language.t("dialog.planApproval.toast.noPlan"),
+      })
+
+      return
+    }
+
+    void serverSDK.api.session
+      .prompt({
+        sessionID,
+        text: "invalidar aprobacion",
+        metadata: { planRevocation: true },
+      })
+      .then(
+        () => {
+          showToast({
+            title: language.t("dialog.planApproval.toast.revoked"),
+          })
+        },
+        (cause: unknown) => {
+          showToast({
+            variant: "error",
+            title: formatServerError(cause, language.t, language.t("common.requestFailed")),
+          })
+        },
+      )
+  }
+
   const sessionCmds = () => [
     sessionCommand({
       id: "session.new",
@@ -501,6 +561,25 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       slash: "redo",
       disabled: !actions.revert.canRedo(),
       onSelect: redo,
+    }),
+    sessionCommand({
+      id: "session.plan.review",
+      title: language.t("command.session.plan"),
+      description: language.t("command.session.plan.description"),
+      slash: "plan",
+      disabled: !actions.session.identity.params.id || !actions.session.data.objectives(),
+      onSelect: reviewPlan,
+    }),
+    sessionCommand({
+      id: "session.plan.unapprove",
+      title: language.t("command.session.unapprove"),
+      description: language.t("command.session.unapprove.description"),
+      slash: "unapprove",
+      disabled:
+        !actions.session.identity.params.id ||
+        (!actions.session.data.objectives()?.approvedByUser &&
+          actions.session.data.objectives()?.status !== "exploring"),
+      onSelect: unapprovePlan,
     }),
     sessionCommand({
       id: "session.compact",

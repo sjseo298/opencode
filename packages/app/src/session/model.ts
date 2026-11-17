@@ -8,6 +8,7 @@ import { containsDirectory } from "@opencode/util/path"
 import { isProjectDirectory, isWorkspaceDirectory } from "@/workspaces/paths"
 import { projectForSession } from "@/shell/layout/helpers"
 import { selectSessionUserMessages, selectVisibleSessionUserMessages } from "./session-domain"
+import { normalizePrimaryObjectiveView } from "./objectives/model"
 import { useSessionLayout } from "./session-layout"
 import { useTabs } from "@/shell/tabs/tabs"
 import { useServer } from "@/runtime/server/current"
@@ -104,6 +105,7 @@ export function useSessionModel() {
         return id ? data.session.status(id) === "running" : false
       }),
       revertMessageID,
+      objectives: createMemo(() => normalizePrimaryObjectiveView(info()?.metadata)),
     },
     history: {
       messages,

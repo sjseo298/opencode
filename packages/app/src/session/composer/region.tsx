@@ -41,8 +41,10 @@ import { SessionGoLimitTray } from "./go-limit-tray"
 import { SessionFreeLimitPanel, useFreeLimit } from "./free-limit-panel"
 import { SessionActivityChips, type SessionActivityItem } from "./activity-chips"
 import { SessionComposerLane, useComposerLaneAlignment } from "./composer-lane"
+import { SessionObjectivesPill } from "./objectives-pill"
 import { SessionTodoPill } from "./todo-pill"
 import { sessionTodos, todoFinished } from "./todos"
+import { usePluginAttachment } from "@/runtime/plugin/host-apis"
 import { useOpenSessionRoute } from "../session-identity-header"
 import { resolveSessionComposerSelection } from "./selection"
 import { composerModelLabelKey, composerModelLabels, composerProviderName } from "@/composer/model-label"
@@ -375,6 +377,43 @@ export function createActiveSessionRegion(input: {
     setCursorPosition(promptRef, prompt.cursor() ?? promptLength(prompt.current()))
   }
 
+  // One-shot Event Trigger: When the objective plan transitions to presented_awaiting_confirmation
+  // and the assistant finishes generating (session becomes idle), deploy DialogPlanApproval automatically.
+  const lastPlanStatusBySession = new Map<string, string>()
+
+  createEffect(() => {
+    const sessionID = input.session.identity.params.id
+    const objectives = input.session.data.objectives()
+    const currentStatus = objectives?.status
+    const isRunning = input.session.data.working()
+
+    if (!sessionID) return
+    const previousStatus = lastPlanStatusBySession.get(sessionID)
+
+    if (
+      !isRunning &&
+      currentStatus === "presented_awaiting_confirmation" &&
+      previousStatus !== "presented_awaiting_confirmation"
+    ) {
+      if (!dialog.active) {
+        lastPlanStatusBySession.set(sessionID, currentStatus)
+        void import("../objectives/plan-approval-dialog").then(({ DialogPlanApproval }) => {
+          if (dialog.active || input.session.identity.params.id !== sessionID) return
+          dialog.show(() => (
+            <DialogPlanApproval
+              sessionID={sessionID}
+              po={objectives}
+              onRefine={focusPrompt}
+            />
+          ))
+        })
+      }
+    } else if (currentStatus !== "presented_awaiting_confirmation") {
+      if (currentStatus) lastPlanStatusBySession.set(sessionID, currentStatus)
+      else lastPlanStatusBySession.delete(sessionID)
+    }
+  })
+
   return {
     active,
     focused: () => !!promptRef?.contains(document.activeElement),
@@ -428,6 +467,8 @@ export function ActiveSessionComposerRegion(props: {
   const server = useServerSDK()
   const language = useLanguage()
   const openRoute = useOpenSessionRoute()
+  const command = useCommand()
+  const attachment = usePluginAttachment()
 
   // Only the server's LocationNotFoundError for the session's own Location replaces the composer.
   // A refetched session info (on reconnect) must not remount the keyed view and close its open menu.
@@ -590,6 +631,15 @@ export function ActiveSessionComposerRegion(props: {
               onStop={stop}
               onEmpty={props.model.region.focusPrompt}
             />
+            <Show when={props.session.data.objectives()}>
+              {(objectives) => (
+                <SessionObjectivesPill
+                  objectives={objectives()}
+                  onReviewPlan={() => void command.trigger("session.plan.review")}
+                  onOpenPanel={() => attachment.openTab("objectives:main", props.view())}
+                />
+              )}
+            </Show>
             <Show when={todosVisible()}>
               <SessionTodoPill todos={todos()} />
             </Show>

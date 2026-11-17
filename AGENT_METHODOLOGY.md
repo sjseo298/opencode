@@ -292,10 +292,11 @@ Every finding entry must adhere to the 4-part schema:
 ## 11. OpenCode Plugin Architecture & Tool Specification
 
 The Protocolo de Objetivos is implemented as an integrated subsystem within OpenCode via native plugins, UI extensions, and core guidance:
-1. **Hierarchical Engine Plugin**: `.opencode/plugins/hierarchical-objectives.ts`
-2. **Continuous Reconciliation Plugin**: `.opencode/plugins/compaction-todo.ts`
+1. **Hierarchical Engine Plugin**: `.opencode/plugins/hierarchical-objectives.ts` (`packages/core/src/plugin/builtin/hierarchical-objectives.ts`)
+2. **Continuous Reconciliation Plugin**: `.opencode/plugins/compaction-todo.ts` (`packages/core/src/plugin/builtin/compaction-todo.ts`)
 3. **Core Tool Guidance**: `packages/core/src/session/system-prompt.ts`
-4. **TUI Sidebar Display**: `packages/tui/src/feature-plugins/sidebar/objectives.tsx`
+4. **TUI Sidebar Display & Plan Approval Dialog**: `packages/tui/src/feature-plugins/sidebar/objectives.tsx` & `packages/tui/src/routes/session/dialog-plan-approval.tsx`
+5. **Web / Desktop UI (Composer Pill, Side Panel Tab & Plan Approval Dialog)**: `packages/app/src/session/objectives/{model.ts,plan-approval-dialog.tsx,plan-approval-machine.ts}`, `packages/app/src/session/composer/objectives-pill.tsx`, `packages/gui-plugins/src/objectives/{index.ts,renderer.tsx,tab.tsx}` & `packages/app/src/session/commands/use-session-commands.tsx` (`/plan` and `/unapprove`)
 
 ### 11.1 Data Models
 
