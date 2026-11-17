@@ -1,8 +1,10 @@
 import { createMemo, lazy, onCleanup, Show, Suspense } from "solid-js"
 import { Option, Schema } from "effect"
 import { Icon } from "@opencode/ui/icon"
+import { IconButton } from "@opencode/ui/icon-button"
 import { Badge } from "@opencode/ui/badge"
-import { usePanel, type MountedSession, type Plugin } from "@opencode/plugin/gui"
+import { Tooltip } from "@opencode/ui/tooltip"
+import { Command, MenuItem, Slot, usePanel, type MountedSession, type Plugin } from "@opencode/plugin/gui"
 import { BuiltinPanel, onIdle, type BuiltinPanelTab } from "@opencode/plugin/gui/builtin"
 import type definition from "./index"
 
@@ -31,8 +33,25 @@ function objectiveProgress(session: MountedSession): { resolved: number; total: 
 }
 
 const setup: Plugin.Setup<typeof definition> = (ctx) => {
+  const key = `${ctx.id}:main`
   const SessionObjectivesTab = lazy(() => import("./tab"))
   onCleanup(onIdle(() => void SessionObjectivesTab.preload()))
+
+  const open = (session: MountedSession) => {
+    ctx.layout.open(key, session, ctx.layout.narrow() ? undefined : { tab: "select" })
+  }
+
+  const toggle = (session: MountedSession) => {
+    if (!ctx.layout.narrow() && ctx.layout.state(key, session) === "visible") {
+      ctx.layout.close(key, session)
+
+      return
+    }
+
+    open(session)
+  }
+
+  const mac = /(Mac|iPhone|iPad)/.test(navigator.platform)
 
   const tab: BuiltinPanelTab = {
     id: "main",
@@ -88,6 +107,68 @@ const setup: Plugin.Setup<typeof definition> = (ctx) => {
       },
     }),
   )
+
+  ctx.add(
+    Command,
+    (): Command => ({
+      id: "toggle",
+      title: ctx.t("command.toggle"),
+      description: ctx.t("command.toggle.description"),
+      group: ctx.t("command.category.view"),
+      bind: mac ? "ctrl+meta+o" : "ctrl+alt+o",
+      slash: { name: "objectives" },
+      editable: true,
+      enabled: !!ctx.sessions.current(),
+      run() {
+        const session = ctx.sessions.current()
+
+        if (session) toggle(session)
+      },
+    }),
+  )
+
+  ctx.add(MenuItem, (): MenuItem | undefined => {
+    const session = ctx.sessions.current()
+
+    if (!session || ctx.layout.narrow()) return undefined
+    const progress = objectiveProgress(session)
+
+    return {
+      menu: "session.panel",
+      id: "open",
+      title: ctx.t("tab.title"),
+      opened: ctx.layout.state(key, session) !== "closed",
+      description: progress && progress.total > 0 ? `${progress.resolved}/${progress.total}` : undefined,
+      icon: "checklist",
+      keybind: "objectives.toggle",
+      order: 40,
+      run: () => open(session),
+    }
+  })
+
+  ctx.add(Slot, {
+    at: "session.panel.end",
+    render: (input) => {
+      const progress = createMemo(() => objectiveProgress(input.session))
+      const visible = createMemo(() => ctx.layout.state(key, input.session) === "visible")
+
+      return (
+        <Show when={progress()}>
+          <Tooltip value={ctx.t("command.toggle")} placement="bottom">
+            <IconButton
+              type="button"
+              variant="ghost-muted"
+              size="large"
+              icon={<Icon name="checklist" />}
+              aria-label={ctx.t("command.toggle")}
+              aria-pressed={visible()}
+              onClick={() => toggle(input.session)}
+            />
+          </Tooltip>
+        </Show>
+      )
+    },
+  })
 }
 
 export default setup

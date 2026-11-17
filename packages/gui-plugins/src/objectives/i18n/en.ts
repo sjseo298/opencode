@@ -1,6 +1,9 @@
 export default {
   "tab.title": "Objectives",
   "mobile.title": "Objectives",
+  "command.category.view": "View",
+  "command.toggle": "Toggle objectives panel",
+  "command.toggle.description": "Open or close the objective plan tree in the side panel",
   "empty.title": "No active objective plan",
   "empty.description": "When an agent creates a hierarchical objective plan in this session, it appears here.",
   "action.reviewPlan": "Review plan",
