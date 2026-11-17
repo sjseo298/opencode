@@ -99,6 +99,7 @@ export type ComposerEditorProps = {
   queueFirstLabel?: string
   exitShellKeybind?: string[]
   suggestionBoundary?: () => HTMLElement | undefined
+  footer?: JSX.Element
 }
 
 export function ComposerEditor(props: ComposerEditorProps) {
@@ -551,6 +552,7 @@ export function ComposerEditor(props: ComposerEditorProps) {
             </div>
           </Show>
         </div>
+        {props.footer}
       </form>
       <Show when={touch()}>
         <Show when={dock()} fallback={<ComposerEditorTouchBar controller={props.controller} />}>

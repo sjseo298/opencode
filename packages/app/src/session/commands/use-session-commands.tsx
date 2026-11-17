@@ -10,7 +10,8 @@ import { useComposerState } from "@/composer/persistence"
 import { useServerSDK } from "@/runtime/server/client"
 import { useData, useServer } from "@/runtime/server/current"
 import { formatServerError } from "@/runtime/server/errors"
-import { projectSettingsKey, useSettings } from "@/settings/model"
+import { useSettings } from "@/settings/model"
+import { createAutoApproveControl } from "@/settings/auto-approve"
 import { showToast } from "@/shell/notifications/toast"
 import { useSessionExporter } from "@/session/commands/export-session"
 import { usePlatform } from "@/runtime/platform/platform"
@@ -499,40 +500,9 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const chooseMcp = () => openDialog("mcp")
 
-  const sessionProject = () => projectSettingsKey(serverSDK.scope, actions.session.data.info()?.projectID)
-
-  const autoAccepting = () => settings.permissions.autoApproves(sessionProject())
-
-  // From a session the toggle sets this project's choice, falling back to the default when they match.
-  const toggleAutoAccept = () => {
-    const project = sessionProject()
-    const active = !autoAccepting()
-
-    if (!project) settings.permissions.setAutoApproveDefault(active)
-    else
-      settings.permissions.setAutoApproveOverride(
-        project,
-        active === settings.permissions.autoApproveDefault() ? undefined : active,
-      )
-
-    if (!active) {
-      showToast({
-        title: language.t("toast.permissions.autoaccept.off.title"),
-        description: language.t("toast.permissions.autoaccept.off.description"),
-      })
-
-      return
-    }
-
-    showToast({
-      title: project
-        ? language.t("toast.permissions.autoaccept.project.title")
-        : language.t("toast.permissions.autoaccept.on.title"),
-      description: project
-        ? language.t("toast.permissions.autoaccept.project.description")
-        : language.t("toast.permissions.autoaccept.on.description"),
-    })
-  }
+  const autoApprove = createAutoApproveControl(() => actions.session.data.info()?.projectID)
+  const autoAccepting = autoApprove.active
+  const toggleAutoAccept = autoApprove.toggle
 
   const undo = actions.revert.undo
   const redo = actions.revert.redo
@@ -1102,7 +1072,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       id: "permissions.autoaccept",
       title: autoAccepting()
         ? language.t("command.permissions.autoaccept.disable")
-        : sessionProject()
+        : autoApprove.scoped()
           ? language.t("command.permissions.autoaccept.project")
           : language.t("command.permissions.autoaccept.enable"),
       keybind: "mod+shift+a",

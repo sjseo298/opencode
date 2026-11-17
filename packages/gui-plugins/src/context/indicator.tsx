@@ -60,6 +60,7 @@ export function SessionContextUsage(props: {
 
     return {
       total,
+      limit: model?.limit.context,
       usage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
     }
   })
@@ -152,6 +153,9 @@ export function SessionContextUsage(props: {
       <Menu.Portal>
         <Menu.Content class="w-[200px] max-w-[calc(100vw-16px)]" aria-label={ctx.t("usage.view")}>
           {menuRow(ctx.t("usage.tokens"), context()?.total.toLocaleString(i18n.locale()) ?? "0")}
+          <Show when={context()?.limit}>
+            {(limit) => menuRow(ctx.t("stats.limit"), limit().toLocaleString(i18n.locale()))}
+          </Show>
           <Show when={showCost()}>{menuRow(ctx.t("usage.cost"), cost())}</Show>
           {menuRow(ctx.t("usage.usage"), `${context()?.usage ?? 0}%`)}
           <Menu.Separator />

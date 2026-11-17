@@ -8,6 +8,7 @@ import { MenuScroll } from "@opencode/ui/menu-scroll"
 import { Select } from "@opencode/ui/select"
 import { TextInput } from "@opencode/ui/text-input"
 import type { ModelSelection } from "@/providers/models/selection"
+import { getDynamicModelContextLimit, setDynamicModelContextLimit } from "@/providers/models/context-limit"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useServerSDK } from "@/runtime/server/client"
 import { useData, useServer } from "@/runtime/server/current"
@@ -155,31 +156,7 @@ export function DialogRewindSteps(props: { sessionID: string }) {
   )
 }
 
-type DynamicContextEntry = {
-  limit?: number
-  timestamp: number
-}
-
-const dynamicContextLimits = new Map<string, DynamicContextEntry>()
-
-export function getDynamicModelContextLimit(key: string): number | undefined {
-  const direct = dynamicContextLimits.get(key)?.limit
-
-  if (direct) return direct
-  const slashIdx = key.indexOf("/")
-
-  if (slashIdx !== -1) {
-    const modelID = key.slice(slashIdx + 1)
-
-    for (const [k, v] of dynamicContextLimits) {
-      if ((k === modelID || k.endsWith(`/${modelID}`) || modelID.endsWith(k)) && v.limit) {
-        return v.limit
-      }
-    }
-  }
-
-  return undefined
-}
+export { getDynamicModelContextLimit }
 
 export async function applyModelContextLimit(input: {
   modelKey: string
@@ -187,13 +164,7 @@ export async function applyModelContextLimit(input: {
   sdk: ReturnType<typeof useServerSDK>
   language: ReturnType<typeof useLanguage>
 }) {
-  const entry: DynamicContextEntry = { limit: input.limit, timestamp: Date.now() }
-  dynamicContextLimits.set(input.modelKey, entry)
-  const slashIdx = input.modelKey.indexOf("/")
-
-  if (slashIdx !== -1) {
-    dynamicContextLimits.set(input.modelKey.slice(slashIdx + 1), entry)
-  }
+  setDynamicModelContextLimit(input.modelKey, input.limit)
 
   showToast({
     variant: "success",

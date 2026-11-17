@@ -1609,6 +1609,11 @@ export const dict = {
   "toast.copyLastMessage.copied": "Last assistant message copied to clipboard.",
   "toast.yolo.enabled": "Auto-approve permissions enabled (/yolo).",
   "toast.yolo.disabled": "Permission prompts re-enabled.",
+
+  "composer.footer.maxContext": "max {{limit}}",
+  "composer.footer.maxContext.tooltip": "Context window limit: {{limit}} tokens (click to adjust)",
+  "composer.footer.autoApprove": "Auto-approve",
+  "composer.footer.autoApprove.tooltip": "Auto-approve mode active — permission prompts are skipped (click to disable)",
 }
 
 export default dict

@@ -2,6 +2,7 @@ import { For, Show } from "solid-js"
 import { Icon } from "@opencode/ui/icon"
 import type { IconName } from "@opencode/ui/icons/catalog"
 import { useLanguage } from "@/runtime/i18n/language"
+import { resolveModelContextLimit } from "./context-limit"
 import type { ModelUsageLabel } from "@/usage/model"
 import type { ModelSelection } from "./selection"
 import { ProviderModelIcon } from "./provider-group"
@@ -67,7 +68,9 @@ export function ModelDetails(props: {
                 <dt class="min-w-0 flex-1 truncate font-[530] text-v2-text-text-faint">
                   {language.t("model.tooltip.context.label")}
                 </dt>
-                <dd class="shrink-0">{props.model.limit.context.toLocaleString(language.intl())}</dd>
+                <dd class="shrink-0">
+                  {(resolveModelContextLimit(props.model) ?? props.model.limit.context).toLocaleString(language.intl())}
+                </dd>
               </div>
             </dl>
             <Show when={props.usage}>

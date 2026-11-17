@@ -1,4 +1,5 @@
 import type { SessionUserActions } from "@opencode/session-ui/message"
+import { lastAssistantWithUsage } from "@opencode/client/solid"
 import type { ShellOutputInput } from "@opencode/client/promise"
 import { getFilename, sameDirectory } from "@opencode/util/path"
 import { useDialog } from "@opencode/ui/context/dialog"
@@ -7,6 +8,8 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { useNavigate } from "@solidjs/router"
 import { createEffect, createMemo, on, onCleanup, onMount, Show, type Accessor } from "solid-js"
 import { Composer } from "@/composer/composer"
+import { ComposerStatusBar } from "@/composer/status-footer"
+import { createAutoApproveControl } from "@/settings/auto-approve"
 import { VoiceComposer } from "@/voice/composer"
 import { useComposerState } from "@/composer/persistence"
 import { createComposerControls } from "@/composer/selection"
@@ -598,6 +601,21 @@ export function ActiveSessionComposerRegion(props: {
   }
 
   const freeLimit = useFreeLimit(() => props.model.composer.model.paid)
+  const autoApprove = createAutoApproveControl(() => props.session.data.info()?.projectID)
+
+  const contextTokens = createMemo(() => {
+    const message = lastAssistantWithUsage(props.session.history.messages(), props.session.data.revertMessageID())
+
+    if (!message) return undefined
+
+    return (
+      message.tokens.input +
+      message.tokens.output +
+      message.tokens.reasoning +
+      message.tokens.cache.read +
+      message.tokens.cache.write
+    )
+  })
 
   return (
     <SessionComposerRegion
@@ -675,6 +693,16 @@ export function ActiveSessionComposerRegion(props: {
                     borderUnderlay
                     readOnly={props.model.queue.undoing()}
                     suggestionBoundary={props.suggestionBoundary}
+                    footer={
+                      <ComposerStatusBar
+                        model={props.model.composer.model.selection}
+                        tokens={contextTokens()}
+                        autoApprove={{
+                          active: autoApprove.active(),
+                          onToggle: autoApprove.toggle,
+                        }}
+                      />
+                    }
                   />
                 </VoiceComposer>
               </Show>
