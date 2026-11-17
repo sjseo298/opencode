@@ -1922,15 +1922,15 @@ def action_sync_fork() -> None:
             text=True,
         )
         res_status = subprocess.run(
-            ["git", "-C", str(repo_dir), "status", "--porcelain"],
+            ["git", "-C", str(repo_dir), "status", "--porcelain", "--untracked-files=no"],
             capture_output=True,
             text=True,
         )
         behind_count = int(res_behind.stdout.strip() or "0")
         ahead_count = int(res_ahead.stdout.strip() or "0")
-        has_local_changes = bool(res_status.stdout.strip())
+        has_tracked_changes = bool(res_status.stdout.strip())
 
-        if behind_count == 0 and ahead_count == 0 and not has_local_changes:
+        if behind_count == 0 and ahead_count == 0 and not has_tracked_changes:
             console.print("[green]⚡ [Fast-Exit] El fork ya está al día con origin/dev y sin cambios locales.[/]")
             show_recent_commits(repo_dir, 5)
             return
