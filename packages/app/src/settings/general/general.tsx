@@ -1,7 +1,10 @@
 import { Component, Show, createMemo } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
+import { Button } from "@opencode/ui/button"
+import { useDialog } from "@opencode/ui/context/dialog"
 import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
+import { DEFAULT_ANTIGRAVITY_SETTINGS } from "@/providers/antigravity/account-rpc"
 import { TimelineDetailControl } from "@/settings/timeline-detail"
 import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
@@ -19,8 +22,11 @@ import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
 import {
   createOptimisticSetting,
+  createServerAntigravityController,
+  createServerCompactionModelController,
   createServerObjectivesController,
   DEFAULT_OBJECTIVES_UI_CONFIG,
+  type AntigravitySettingsController,
   type CompactionModelSettingsController,
   type ObjectivesSettingsController,
   type ShellSettingsController,
@@ -159,29 +165,68 @@ export const ObjectivesProtocolSection: Component<{
       label: `${v}${suffix}${v === defaultVal ? " (por defecto)" : ""}`,
     }))
 
-  const maxActionsOptions = numSelectOptions([5, 10, 15, 20, 25, 30, 50], DEFAULT_OBJECTIVES_UI_CONFIG.max_actions_without_sync, " acciones")
-  const repeatedOptions = numSelectOptions([1, 2, 3, 4, 5], DEFAULT_OBJECTIVES_UI_CONFIG.repeated_action_warning_threshold, " repeticiones")
+  const maxActionsOptions = numSelectOptions(
+    [5, 10, 15, 20, 25, 30, 50],
+    DEFAULT_OBJECTIVES_UI_CONFIG.max_actions_without_sync,
+    " acciones",
+  )
+
+  const repeatedOptions = numSelectOptions(
+    [1, 2, 3, 4, 5],
+    DEFAULT_OBJECTIVES_UI_CONFIG.repeated_action_warning_threshold,
+    " repeticiones",
+  )
+
   const attachThresholdOptions = [0.55, 0.6, 0.65, 0.68, 0.72, 0.75, 0.8, 0.85].map((v) => ({
     value: v,
     label: `${v.toFixed(2)}${v === DEFAULT_OBJECTIVES_UI_CONFIG.search_attach_threshold ? " (por defecto)" : ""}`,
   }))
+
   const novelThresholdOptions = [0.4, 0.45, 0.5, 0.55, 0.6, 0.65].map((v) => ({
     value: v,
     label: `${v.toFixed(2)}${v === DEFAULT_OBJECTIVES_UI_CONFIG.search_novel_threshold ? " (por defecto)" : ""}`,
   }))
-  const findingCharsOptions = numSelectOptions([5, 10, 15, 20, 30], DEFAULT_OBJECTIVES_UI_CONFIG.finding_min_chars, " caracteres")
-  const delegationCharsOptions = numSelectOptions([5, 10, 15, 20, 30], DEFAULT_OBJECTIVES_UI_CONFIG.delegation_justification_min_chars, " caracteres")
-  const freshPercentOptions = numSelectOptions([20, 25, 30, 35, 40, 50, 60], DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_percent_threshold, "%")
+
+  const findingCharsOptions = numSelectOptions(
+    [5, 10, 15, 20, 30],
+    DEFAULT_OBJECTIVES_UI_CONFIG.finding_min_chars,
+    " caracteres",
+  )
+
+  const delegationCharsOptions = numSelectOptions(
+    [5, 10, 15, 20, 30],
+    DEFAULT_OBJECTIVES_UI_CONFIG.delegation_justification_min_chars,
+    " caracteres",
+  )
+
+  const freshPercentOptions = numSelectOptions(
+    [20, 25, 30, 35, 40, 50, 60],
+    DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_percent_threshold,
+    "%",
+  )
+
   const freshTokensOptions = [15000, 20000, 30000, 45000, 60000, 100000].map((v) => ({
     value: v,
     label: `${v.toLocaleString()} tokens${v === DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_tokens_threshold ? " (por defecto)" : ""}`,
   }))
+
   const cooldownOptions = [0, 1000, 2000, 3000, 5000, 10000].map((v) => ({
     value: v,
     label: `${v} ms${v === DEFAULT_OBJECTIVES_UI_CONFIG.relevance_cooldown_ms ? " (por defecto)" : ""}`,
   }))
-  const primaryCompactionOptions = numSelectOptions([70, 75, 80, 85, 90, 95], DEFAULT_OBJECTIVES_UI_CONFIG.primary_pre_compaction_threshold, "%")
-  const subagentCompactionOptions = numSelectOptions([75, 80, 85, 90, 95], DEFAULT_OBJECTIVES_UI_CONFIG.subagent_pre_compaction_threshold, "%")
+
+  const primaryCompactionOptions = numSelectOptions(
+    [70, 75, 80, 85, 90, 95],
+    DEFAULT_OBJECTIVES_UI_CONFIG.primary_pre_compaction_threshold,
+    "%",
+  )
+
+  const subagentCompactionOptions = numSelectOptions(
+    [75, 80, 85, 90, 95],
+    DEFAULT_OBJECTIVES_UI_CONFIG.subagent_pre_compaction_threshold,
+    "%",
+  )
+
   const minSubagentBudgetOptions = [8000, 12000, 16000, 24000, 32000, 48000].map((v) => ({
     value: v,
     label: `${v.toLocaleString()} tokens${v === DEFAULT_OBJECTIVES_UI_CONFIG.min_subagent_budget ? " (por defecto)" : ""}`,
@@ -462,6 +507,152 @@ export const ObjectivesProtocolSection: Component<{
   )
 }
 
+export const AntigravitySettingsSection: Component<{
+  controller: AntigravitySettingsController
+}> = (props) => {
+  const language = useLanguage()
+  const dialog = useDialog()
+
+  const numSelectOptions = (values: number[], defaultVal: number, suffix = "") =>
+    values.map((v) => ({
+      value: v,
+      label: `${v}${suffix}${v === defaultVal ? " (default)" : ""}`,
+    }))
+
+  const connTimeoutOptions = numSelectOptions(
+    [15, 30, 60, 90, 120, 180, 240, 300],
+    DEFAULT_ANTIGRAVITY_SETTINGS.connection_timeout_seconds,
+    " s",
+  )
+
+  const streamIdleOptions = numSelectOptions(
+    [30, 60, 120, 180, 240, 300, 450, 600],
+    DEFAULT_ANTIGRAVITY_SETTINGS.stream_idle_timeout_seconds,
+    " s",
+  )
+
+  const retriesOptions = numSelectOptions(
+    [0, 1, 2, 3, 4, 5],
+    DEFAULT_ANTIGRAVITY_SETTINGS.max_capacity_retries,
+    "",
+  )
+
+  const delayOptions = numSelectOptions(
+    [5, 10, 15, 20, 30, 45, 60],
+    DEFAULT_ANTIGRAVITY_SETTINGS.max_capacity_delay_seconds,
+    " s",
+  )
+
+  const openAccountsDialog = async () => {
+    const { DialogAntigravity } = await import("@/providers/antigravity/dialog")
+    void dialog.show(() => <DialogAntigravity />)
+  }
+
+  return (
+    <section class="settings-section" aria-label={language.t("settings.antigravity.section.title")}>
+      <h3 class="settings-section-title">{language.t("settings.antigravity.section.title")}</h3>
+      <SettingsList>
+        <SettingsRow
+          title={language.t("settings.antigravity.row.accounts.title")}
+          description={language.t("settings.antigravity.row.accounts.description")}
+        >
+          <Button size="small" variant="outline" onClick={() => void openAccountsDialog()}>
+            {language.t("settings.antigravity.row.accounts.manage")}
+          </Button>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.antigravity.row.connectionTimeout.title")}
+          description={language.t("settings.antigravity.row.connectionTimeout.description")}
+        >
+          <Select
+            data-action="settings-antigravity-connection-timeout"
+            options={connTimeoutOptions}
+            current={
+              connTimeoutOptions.find((o) => o.value === props.controller.current().connection_timeout_seconds) ??
+              connTimeoutOptions[4]
+            }
+            placement="bottom-end"
+            gutter={6}
+            value={(o) => String(o.value)}
+            label={(o) => o.label}
+            onSelect={(o) => o && props.controller.update("connection_timeout_seconds", o.value)}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.antigravity.row.streamIdleTimeout.title")}
+          description={language.t("settings.antigravity.row.streamIdleTimeout.description")}
+        >
+          <Select
+            data-action="settings-antigravity-stream-idle-timeout"
+            options={streamIdleOptions}
+            current={
+              streamIdleOptions.find((o) => o.value === props.controller.current().stream_idle_timeout_seconds) ??
+              streamIdleOptions[3]
+            }
+            placement="bottom-end"
+            gutter={6}
+            value={(o) => String(o.value)}
+            label={(o) => o.label}
+            onSelect={(o) => o && props.controller.update("stream_idle_timeout_seconds", o.value)}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.antigravity.row.maxCapacityRetries.title")}
+          description={language.t("settings.antigravity.row.maxCapacityRetries.description")}
+        >
+          <Select
+            data-action="settings-antigravity-max-capacity-retries"
+            options={retriesOptions}
+            current={
+              retriesOptions.find((o) => o.value === props.controller.current().max_capacity_retries) ??
+              retriesOptions[4]
+            }
+            placement="bottom-end"
+            gutter={6}
+            value={(o) => String(o.value)}
+            label={(o) => o.label}
+            onSelect={(o) => o && props.controller.update("max_capacity_retries", o.value)}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.antigravity.row.maxCapacityDelay.title")}
+          description={language.t("settings.antigravity.row.maxCapacityDelay.description")}
+        >
+          <Select
+            data-action="settings-antigravity-max-capacity-delay"
+            options={delayOptions}
+            current={
+              delayOptions.find((o) => o.value === props.controller.current().max_capacity_delay_seconds) ??
+              delayOptions[4]
+            }
+            placement="bottom-end"
+            gutter={6}
+            value={(o) => String(o.value)}
+            label={(o) => o.label}
+            onSelect={(o) => o && props.controller.update("max_capacity_delay_seconds", o.value)}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.antigravity.row.splitSystemInstruction.title")}
+          description={language.t("settings.antigravity.row.splitSystemInstruction.description")}
+        >
+          <div data-action="settings-antigravity-split-system-instruction">
+            <Switch
+              checked={props.controller.current().split_system_instruction}
+              onChange={(checked) => props.controller.update("split_system_instruction", checked)}
+            />
+          </div>
+        </SettingsRow>
+      </SettingsList>
+    </section>
+  )
+}
+
 const FollowUpBehaviorSetting: Component = () => {
   const language = useLanguage()
   const settings = useSettings()
@@ -588,6 +779,8 @@ export const SettingsGeneral: Component = () => {
   const settings = useSettings()
   const surface = useSettingsSurface()
   const objectivesController = createServerObjectivesController(() => surface.server()?.connection)
+  const antigravityController = createServerAntigravityController(() => surface.server()?.connection)
+  const compactionModelController = createServerCompactionModelController(() => surface.server()?.connection)
   const mobile = createMediaQuery("(max-width: 767px)")
   const desktop = createMemo(() => platform.platform === "desktop")
 
@@ -630,6 +823,7 @@ export const SettingsGeneral: Component = () => {
         </SettingsRow>
 
         <FollowUpBehaviorSetting />
+        <CompactionModelSetting controller={compactionModelController} />
 
         <Show when={desktop()}>
           <SettingsRow
@@ -710,6 +904,7 @@ export const SettingsGeneral: Component = () => {
         </section>
 
         <ObjectivesProtocolSection controller={objectivesController} />
+        <AntigravitySettingsSection controller={antigravityController} />
 
         <PluginSettingsSections page="general" />
       </div>

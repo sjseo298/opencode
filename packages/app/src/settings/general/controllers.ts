@@ -1,7 +1,13 @@
 import { createEffect, createMemo, createSignal, onMount, untrack, type Accessor } from "solid-js"
+import { Option, Schema } from "effect"
 import type { ConfigShellOption } from "@opencode/client/promise"
 import type { ColorScheme } from "@opencode/ui/theme/context"
 import { useTheme } from "@opencode/ui/theme/context"
+import {
+  AntigravityAccountsRpc,
+  DEFAULT_ANTIGRAVITY_SETTINGS,
+  type AntigravitySettings,
+} from "@/providers/antigravity/account-rpc"
 import {
   monoDefault,
   monoFontFamily,
@@ -146,7 +152,19 @@ export function createServerShellController(server: Accessor<ServerConnection.An
 
 export type CompactionModelOption = { id: string; name: string }
 
-export function createServerCompactionModelController(server: Accessor<ServerConnection.Any>) {
+const CompactionModelStringSchema = Schema.String
+
+const decodeCompactionModelString = Schema.decodeUnknownOption(CompactionModelStringSchema)
+
+const CompactionModelObjectSchema = Schema.Struct({
+  providerID: Schema.String,
+  model: Schema.String,
+  variant: Schema.optional(Schema.String),
+})
+
+const decodeCompactionModelObject = Schema.decodeUnknownOption(CompactionModelObjectSchema)
+
+export function createServerCompactionModelController(server: Accessor<ServerConnection.Any | undefined>) {
   const language = useLanguage()
 
   const setting = createOptimisticSetting({
@@ -177,9 +195,18 @@ export function createServerCompactionModelController(server: Accessor<ServerCon
           .flatMap((entry) => {
             if (entry.type !== "document" || !entry.info.compaction?.model) return []
             const m = entry.info.compaction.model
-            return typeof m === "string"
-              ? [m]
-              : [`${m.providerID}/${m.model}${m.variant ? `#${m.variant}` : ""}`]
+            const strOpt = decodeCompactionModelString(m)
+
+            if (Option.isSome(strOpt)) return [strOpt.value]
+            const objOpt = decodeCompactionModelObject(m)
+
+            if (Option.isSome(objOpt)) {
+              const val = objOpt.value
+
+              return [`${val.providerID}/${val.model}${val.variant ? `#${val.variant}` : ""}`]
+            }
+
+            return []
           })
           .at(-1) ?? ""
 
@@ -377,15 +404,52 @@ export function createServerObjectivesController(server: Accessor<ServerConnecti
     load: async (context) => {
       const entries = await context.sdk.api.config.get().catch(() => [])
       const merged: ObjectivesConfigValues = { ...DEFAULT_OBJECTIVES_UI_CONFIG }
+
       for (const entry of entries) {
         if (entry.type !== "document" || !entry.info.objectives) continue
         const obj = entry.info.objectives
-        for (const [k, v] of Object.entries(obj)) {
-          if (v !== undefined && k in merged) {
-            ;(merged as Record<string, unknown>)[k] = v
-          }
-        }
+
+        if (obj.max_actions_without_sync !== undefined) merged.max_actions_without_sync = obj.max_actions_without_sync
+
+        if (obj.repeated_action_warning_threshold !== undefined)
+          merged.repeated_action_warning_threshold = obj.repeated_action_warning_threshold
+
+        if (obj.search_attach_threshold !== undefined) merged.search_attach_threshold = obj.search_attach_threshold
+
+        if (obj.search_novel_threshold !== undefined) merged.search_novel_threshold = obj.search_novel_threshold
+
+        if (obj.finding_min_chars !== undefined) merged.finding_min_chars = obj.finding_min_chars
+
+        if (obj.delegation_justification_min_chars !== undefined)
+          merged.delegation_justification_min_chars = obj.delegation_justification_min_chars
+
+        if (obj.fresh_session_percent_threshold !== undefined)
+          merged.fresh_session_percent_threshold = obj.fresh_session_percent_threshold
+
+        if (obj.fresh_session_tokens_threshold !== undefined)
+          merged.fresh_session_tokens_threshold = obj.fresh_session_tokens_threshold
+
+        if (obj.relevance_cooldown_ms !== undefined) merged.relevance_cooldown_ms = obj.relevance_cooldown_ms
+
+        if (obj.primary_pre_compaction_threshold !== undefined)
+          merged.primary_pre_compaction_threshold = obj.primary_pre_compaction_threshold
+
+        if (obj.subagent_pre_compaction_threshold !== undefined)
+          merged.subagent_pre_compaction_threshold = obj.subagent_pre_compaction_threshold
+
+        if (obj.min_subagent_budget !== undefined) merged.min_subagent_budget = obj.min_subagent_budget
+
+        if (obj.embeddings_enabled !== undefined) merged.embeddings_enabled = obj.embeddings_enabled
+
+        if (obj.unattended !== undefined) merged.unattended = obj.unattended
+
+        if (obj.llamacpp_kv_offload !== undefined) merged.llamacpp_kv_offload = obj.llamacpp_kv_offload
+
+        if (obj.llamacpp_slot_save_path !== undefined) merged.llamacpp_slot_save_path = obj.llamacpp_slot_save_path
+
+        if (obj.subagent_model !== undefined) merged.subagent_model = obj.subagent_model
       }
+
       return {
         meta: undefined,
         value: merged,
@@ -416,11 +480,56 @@ export function createServerObjectivesController(server: Accessor<ServerConnecti
   }
 }
 
+export function createServerAntigravityController(server: Accessor<ServerConnection.Any | undefined>) {
+  const language = useLanguage()
+
+  const setting = createOptimisticSetting({
+    source: useServerCtx(server),
+    initial: DEFAULT_ANTIGRAVITY_SETTINGS,
+    initialMeta: undefined,
+    load: async (context) => {
+      const cfg = await context.sdk.api
+        .rpc(AntigravityAccountsRpc)
+        .getConfig({})
+        .catch(() => DEFAULT_ANTIGRAVITY_SETTINGS)
+
+      return {
+        meta: undefined,
+        value: {
+          ...DEFAULT_ANTIGRAVITY_SETTINGS,
+          ...cfg,
+        },
+      }
+    },
+    write: async (value, context) => {
+      await context.sdk.api.rpc(AntigravityAccountsRpc).updateConfig(value)
+    },
+    onError: (failure) =>
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description:
+          failure.kind === "timeout"
+            ? language.t("home.sessions.load.timeout")
+            : failure.message || language.t("common.requestFailed"),
+      }),
+  })
+
+  return {
+    current: setting.value,
+    update: <K extends keyof AntigravitySettings>(key: K, value: AntigravitySettings[K]) => {
+      setting.select({ ...setting.value(), [key]: value })
+    },
+  }
+}
+
 export type ShellSettingsController = ReturnType<typeof createServerShellController>
 
 export type CompactionModelSettingsController = ReturnType<typeof createServerCompactionModelController>
 
 export type ObjectivesSettingsController = ReturnType<typeof createServerObjectivesController>
+
+export type AntigravitySettingsController = ReturnType<typeof createServerAntigravityController>
 
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 

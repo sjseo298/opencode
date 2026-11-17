@@ -100,6 +100,62 @@ async function loadDialog(kind: SessionDialogKind, context: SessionCommandContex
     )
   }
 
+  if (kind === "rewind") {
+    const { DialogRewindSteps } = await import("@/session/commands/session-control-dialogs")
+
+    return () => <DialogRewindSteps sessionID={context.session.identity.params.id ?? ""} />
+  }
+
+  if (kind === "context-limit") {
+    const { DialogSetContextLimit } = await import("@/session/commands/session-control-dialogs")
+    const currentModel = context.model()
+
+    return () => (
+      <DialogSetContextLimit
+        activeModelKey={currentModel ? `${currentModel.providerID}/${currentModel.id}` : undefined}
+      />
+    )
+  }
+
+  if (kind === "cd") {
+    const { DialogChangeDirectory } = await import("@/session/commands/session-control-dialogs")
+
+    return () => (
+      <DialogChangeDirectory
+        sessionID={context.session.identity.params.id ?? ""}
+        currentDirectory={context.session.data.info()?.location.directory ?? ""}
+      />
+    )
+  }
+
+  if (kind === "rename") {
+    const { DialogRenameSession } = await import("@/session/commands/session-control-dialogs")
+
+    return () => (
+      <DialogRenameSession
+        sessionID={context.session.identity.params.id ?? ""}
+        currentTitle={context.session.data.info()?.title}
+      />
+    )
+  }
+
+  if (kind === "delete") {
+    const { DialogDeleteSession } = await import("@/session/commands/session-control-dialogs")
+
+    return () => (
+      <DialogDeleteSession
+        sessionID={context.session.identity.params.id ?? ""}
+        title={context.session.data.info()?.title}
+      />
+    )
+  }
+
+  if (kind === "sessions") {
+    const { DialogSwitchSession } = await import("@/session/commands/session-control-dialogs")
+
+    return () => <DialogSwitchSession />
+  }
+
   const { DialogSelectMcp } = await import("@/providers/connect/mcp-dialog")
 
   return () => <DialogSelectMcp />
@@ -491,6 +547,192 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (actions.session.identity.params.id) openDialog("fork")
   }
 
+  const rewindSteps = async (input?: string) => {
+    const sessionID = actions.session.identity.params.id
+
+    if (!sessionID) return
+    const trimmed = input?.trim()
+
+    if (!trimmed) {
+      openDialog("rewind")
+
+      return
+    }
+
+    const parsed = Number.parseInt(trimmed, 10)
+
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      showToast({ variant: "error", title: language.t("dialog.rewind.toast.invalid") })
+
+      return
+    }
+
+    const { executeRewindSteps } = await import("@/session/commands/session-control-dialogs")
+    await executeRewindSteps({ sessionID, steps: parsed, sdk: serverSDK, data, language })
+  }
+
+  const setContextLimit = async (input?: string) => {
+    const trimmed = input?.trim()
+
+    if (!trimmed) {
+      openDialog("context-limit")
+
+      return
+    }
+
+    const { applyModelContextLimit, parseTokenCount } = await import("@/session/commands/session-control-dialogs")
+    const parts = trimmed.split(/\s+/)
+    const active = actions.model()
+    const activeKey = active ? `${active.providerID}/${active.id}` : undefined
+
+    if (parts.length === 1) {
+      const parsed = parseTokenCount(parts[0] ?? "")
+
+      if (!parsed) {
+        showToast({ variant: "error", title: language.t("dialog.contextLimit.toast.invalid") })
+
+        return
+      }
+
+      if (!activeKey) {
+        showToast({ variant: "error", title: language.t("dialog.contextLimit.toast.noModel") })
+
+        return
+      }
+
+      await applyModelContextLimit({ modelKey: activeKey, limit: parsed, sdk: serverSDK, language })
+
+      return
+    }
+
+    const targetModel = parts[0] ?? ""
+    const parsed = parseTokenCount(parts[1] ?? "")
+
+    if (!targetModel || !parsed) {
+      showToast({ variant: "error", title: language.t("dialog.contextLimit.toast.invalid") })
+
+      return
+    }
+
+    await applyModelContextLimit({ modelKey: targetModel, limit: parsed, sdk: serverSDK, language })
+  }
+
+  const copyLastMessage = async () => {
+    const sessionID = actions.session.identity.params.id
+
+    if (!sessionID) return
+    const allMessages = data.session.message.list(sessionID) ?? []
+    const revertID = data.session.get(sessionID)?.revert?.messageID
+
+    const messages = revertID
+      ? allMessages.slice(
+          0,
+          Math.max(
+            0,
+            allMessages.findIndex((m) => m.id === revertID),
+          ),
+        )
+      : allMessages
+
+    const lastAssistant = messages.findLast(
+      (msg) =>
+        msg.type === "assistant" ||
+        (msg.type === "compaction" && msg.status === "completed" && msg.summary.trim() !== ""),
+    )
+
+    if (!lastAssistant) {
+      showToast({ variant: "error", title: language.t("toast.copyLastMessage.empty") })
+
+      return
+    }
+
+    const text =
+      lastAssistant.type === "assistant"
+        ? lastAssistant.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+            .trim()
+        : lastAssistant.type === "compaction" && lastAssistant.status === "completed"
+          ? lastAssistant.summary.trim()
+          : ""
+
+    if (!text) {
+      showToast({ variant: "error", title: language.t("toast.copyLastMessage.empty") })
+
+      return
+    }
+
+    try {
+      await (platform.writeClipboardText?.(text) ?? navigator.clipboard.writeText(text))
+      showToast({ variant: "success", title: language.t("toast.copyLastMessage.copied") })
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
+  const changeDirectory = async (input?: string) => {
+    const sessionID = actions.session.identity.params.id
+
+    if (!sessionID) return
+    const trimmed = input?.trim()
+
+    if (!trimmed) {
+      openDialog("cd")
+
+      return
+    }
+
+    try {
+      await serverSDK.api.session.move({ sessionID, directory: trimmed })
+      showToast({
+        variant: "success",
+        title: language.t("dialog.cd.toast.moved", { directory: trimmed }),
+      })
+    } catch (cause: unknown) {
+      showToast({
+        variant: "error",
+        title: formatServerError(cause, language.t, language.t("common.requestFailed")),
+      })
+    }
+  }
+
+  const renameSession = async (input?: string) => {
+    const sessionID = actions.session.identity.params.id
+
+    if (!sessionID) return
+    const trimmed = input?.trim()
+
+    if (!trimmed) {
+      openDialog("rename")
+
+      return
+    }
+
+    try {
+      await serverSDK.api.session.update({ sessionID, title: trimmed })
+      showToast({
+        variant: "success",
+        title: language.t("dialog.renameSession.toast.updated"),
+      })
+    } catch (cause: unknown) {
+      showToast({
+        variant: "error",
+        title: formatServerError(cause, language.t, language.t("common.requestFailed")),
+      })
+    }
+  }
+
+  const deleteSession = () => {
+    if (actions.session.identity.params.id) openDialog("delete")
+  }
+
+  const switchSession = () => openDialog("sessions")
+
   const reviewPlan = () => {
     const sessionID = actions.session.identity.params.id
     const objectives = actions.session.data.objectives()
@@ -561,6 +803,73 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       slash: "redo",
       disabled: !actions.revert.canRedo(),
       onSelect: redo,
+    }),
+    sessionCommand({
+      id: "session.rewind",
+      title: language.t("command.session.rewind"),
+      description: language.t("command.session.rewind.description"),
+      slash: "rewind",
+      slashArguments: true,
+      disabled: !actions.session.identity.params.id || actions.session.history.visibleUserMessages().length === 0,
+      onSelect: (_source, input) => void rewindSteps(input),
+    }),
+    sessionCommand({
+      id: "session.context.limit",
+      title: language.t("command.session.setContextLimit"),
+      description: language.t("command.session.setContextLimit.description"),
+      slash: "setContextLimit",
+      slashArguments: true,
+      onSelect: (_source, input) => void setContextLimit(input),
+    }),
+    sessionCommand({
+      id: "session.context.limit.lower",
+      title: language.t("command.session.setContextLimit"),
+      description: language.t("command.session.setContextLimit.description"),
+      slash: "setcontextlimit",
+      slashArguments: true,
+      hidden: true,
+      onSelect: (_source, input) => void setContextLimit(input),
+    }),
+    sessionCommand({
+      id: "messages.copy",
+      title: language.t("command.session.copyLastMessage"),
+      description: language.t("command.session.copyLastMessage.description"),
+      slash: "copy",
+      disabled: !actions.session.identity.params.id,
+      onSelect: () => void copyLastMessage(),
+    }),
+    sessionCommand({
+      id: "session.cd",
+      title: language.t("command.session.cd"),
+      description: language.t("command.session.cd.description"),
+      slash: "cd",
+      slashArguments: true,
+      disabled: !actions.session.identity.params.id,
+      onSelect: (_source, input) => void changeDirectory(input),
+    }),
+    sessionCommand({
+      id: "session.rename",
+      title: language.t("command.session.rename"),
+      description: language.t("command.session.rename.description"),
+      slash: "rename",
+      slashArguments: true,
+      disabled: !actions.session.identity.params.id,
+      onSelect: (_source, input) => void renameSession(input),
+    }),
+    sessionCommand({
+      id: "session.delete",
+      title: language.t("command.session.delete"),
+      description: language.t("command.session.delete.description"),
+      slash: "delete",
+      disabled: !actions.session.identity.params.id,
+      onSelect: deleteSession,
+    }),
+    sessionCommand({
+      id: "session.switch",
+      title: language.t("command.session.switch"),
+      description: language.t("command.session.switch.description"),
+      slash: "sessions",
+      onSelect: switchSession,
     }),
     sessionCommand({
       id: "session.plan.review",
@@ -755,6 +1064,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("dialog.jump.title"),
       description: language.t("command.session.jumpToMessage.description"),
       keybind: "mod+alt+g",
+      slash: "timeline",
       disabled: !actions.session.identity.params.id,
       onSelect: () => openDialog("jump"),
     }),
@@ -796,6 +1106,18 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
           ? language.t("command.permissions.autoaccept.project")
           : language.t("command.permissions.autoaccept.enable"),
       keybind: "mod+shift+a",
+      slash: "yolo",
+      keywords: "yolo autoapprove auto-approve no-approval permissions",
+      disabled: false,
+      onSelect: toggleAutoAccept,
+    }),
+    permissionsCommand({
+      id: "permissions.autoaccept.alias",
+      title: autoAccepting()
+        ? language.t("command.permissions.autoaccept.disable")
+        : language.t("command.permissions.autoaccept.enable"),
+      slash: "autoapprove",
+      hidden: true,
       disabled: false,
       onSelect: toggleAutoAccept,
     }),

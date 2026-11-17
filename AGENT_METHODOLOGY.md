@@ -297,6 +297,7 @@ The Protocolo de Objetivos is implemented as an integrated subsystem within Open
 3. **Core Tool Guidance**: `packages/core/src/session/system-prompt.ts`
 4. **TUI Sidebar Display & Plan Approval Dialog**: `packages/tui/src/feature-plugins/sidebar/objectives.tsx` & `packages/tui/src/routes/session/dialog-plan-approval.tsx`
 5. **Web / Desktop UI (Composer Pill, Side Panel Tab & Plan Approval Dialog)**: `packages/app/src/session/objectives/{model.ts,plan-approval-dialog.tsx,plan-approval-machine.ts}`, `packages/app/src/session/composer/objectives-pill.tsx`, `packages/gui-plugins/src/objectives/{index.ts,renderer.tsx,tab.tsx}` & `packages/app/src/session/commands/use-session-commands.tsx` (`/plan` and `/unapprove`)
+6. **Web / Desktop Slash Commands & Antigravity / Compaction Settings**: `packages/app/src/providers/antigravity/{account-rpc.ts,dialog.tsx,machine.ts}` (`/ag`, `/antigravity`), `packages/app/src/settings/general/{controllers.ts,general.tsx}` (`AntigravitySettingsSection`, `CompactionModelSetting`, `ObjectivesProtocolSection`), `packages/app/src/session/commands/{session-control-dialogs.tsx,use-session-commands.tsx}` (`/yolo`, `/rewind`, `/setContextLimit`, `/copy`, `/cd`, `/rename`, `/delete`, `/sessions`, `/timeline`) & `packages/app/src/composer/commands.tsx` (`/variants`, `/thinking`, `/usage`)
 
 ### 11.1 Data Models
 

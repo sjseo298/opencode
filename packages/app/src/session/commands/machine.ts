@@ -4,7 +4,18 @@
 export const SESSION_DIALOG_LOAD_TIMEOUT_MS = 15_000
 
 /** The lazily loaded dialogs: the /fork picker, the /open file palette, the /mcp list and the /plan review dialog. */
-export type SessionDialogKind = "fork" | "jump" | "palette" | "mcp" | "plan"
+export type SessionDialogKind =
+  | "fork"
+  | "jump"
+  | "palette"
+  | "mcp"
+  | "plan"
+  | "rewind"
+  | "context-limit"
+  | "cd"
+  | "rename"
+  | "delete"
+  | "sessions"
 
 /**
  * The session commands stay mounted while tabs switch between sessions, so compactions are keyed by the session they

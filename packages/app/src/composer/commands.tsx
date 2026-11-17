@@ -42,6 +42,11 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
     void dialog.show(() => <DialogConnectProvider directory={workspace().directory} selection={model} />)
   }
 
+  const openAntigravity = async () => {
+    const { DialogAntigravity } = await import("@/providers/antigravity/dialog")
+    void dialog.show(() => <DialogAntigravity directory={workspace().directory} />)
+  }
+
   // Mirrors the TUI's `/reload`. The server rebuilds every loaded location and announces the changed agents,
   // commands, models and skills, so the data layer refreshes them without restarting the app.
   // The result still reports after this composer unmounts: toasts are app-wide.
@@ -87,6 +92,19 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
     void dialog.show(() => <DialogSelectModel model={model} />)
   }
 
+  const chooseVariant = async () => {
+    if (model.variant.list().length === 0) {
+      showToast({
+        title: language.t("dialog.variant.empty"),
+      })
+
+      return
+    }
+
+    const { DialogSelectVariant } = await import("@/session/commands/session-control-dialogs")
+    void dialog.show(() => <DialogSelectVariant model={model} />)
+  }
+
   const viewUsage = async () => {
     const { DialogUsage } = await import("@/usage/dialog")
     const current = model.current()
@@ -122,10 +140,27 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
       keybind: "shift+mod+d",
       onSelect: () => model.variant.cycle(),
     }),
+    modelCommand({
+      id: "model.variant.choose",
+      title: language.t("command.model.variant.choose"),
+      description: language.t("command.model.variant.choose.description"),
+      slash: "variants",
+      keywords: "variants thinking effort",
+      onSelect: () => void chooseVariant(),
+    }),
+    modelCommand({
+      id: "model.variant.thinking",
+      title: language.t("command.model.variant.choose"),
+      description: language.t("command.model.variant.choose.description"),
+      slash: "thinking",
+      hidden: true,
+      onSelect: () => void chooseVariant(),
+    }),
     viewCommand({
       id: "usage.view",
       title: language.t("command.usage.view"),
       description: language.t("command.usage.view.description"),
+      slash: "usage",
       onSelect: () => void viewUsage(),
     }),
     providerCommand({
@@ -134,6 +169,22 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
       description: language.t("command.provider.connect.description"),
       slash: "connect",
       onSelect: connectProvider,
+    }),
+    providerCommand({
+      id: "antigravity.accounts",
+      title: language.t("command.antigravity.accounts"),
+      description: language.t("command.antigravity.accounts.description"),
+      keywords: "ag antigravity google accounts quotas",
+      slash: "ag",
+      onSelect: () => void openAntigravity(),
+    }),
+    providerCommand({
+      id: "antigravity.accounts.full",
+      title: language.t("command.antigravity.accounts"),
+      description: language.t("command.antigravity.accounts.description"),
+      slash: "antigravity",
+      hidden: true,
+      onSelect: () => void openAntigravity(),
     }),
     serverCommand({
       id: "config.reload",

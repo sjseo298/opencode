@@ -15,13 +15,23 @@ export function useSettingsCommand() {
   const command = useCommand()
   const language = useLanguage()
   const show = useSettingsDialog()
+  const showThemes = useSettingsDialog("appearance")
 
   command.register("settings", () => [
     {
       ...settingsOpenCommand,
       title: language.t("command.settings.open"),
       category: language.t("command.category.settings"),
+      slash: "settings",
       onSelect: show,
+    },
+    {
+      id: "settings.themes",
+      title: language.t("command.theme.choose"),
+      description: language.t("command.theme.choose.description"),
+      category: language.t("command.category.settings"),
+      slash: "themes",
+      onSelect: showThemes,
     },
   ])
 
