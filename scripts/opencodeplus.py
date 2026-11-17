@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 """
-opencodeplus — Menú interactivo para gestionar modelos de LLM locales y de proveedores de OpenCode.
+opencodeplus — Menú interactivo y CLI para gestionar modelos de LLM locales, proveedores y servicio local de OpenCode.
 
 Consulta LlamaCPP, LM Studio y proveedores habilitados en OpenCode (GitHub Copilot, Google, etc.),
 genera la configuración de opencode, compara con la actual y actualiza si hay cambios.
+
+También integra modos de inicio y gestión del servicio local equivalentes a RemoteDevcontainers:
+  - opencodeplus web | open     : Asegura el servicio local, genera link pair y abre la Web UI en el navegador
+  - opencodeplus pair | link    : Asegura el servicio local y muestra el link de un solo uso sin abrir navegador
+  - opencodeplus tui [args...]  : Asegura el servicio local y conecta la TUI local (--server)
+  - opencodeplus start          : Inicia o asegura que el servicio local esté activo
+  - opencodeplus restart        : Reinicia el servicio local en segundo plano
+  - opencodeplus status         : Muestra el estado del servicio local y salud de /api/info
+  - opencodeplus stop | down    : Detiene el servicio local en segundo plano
+  - opencodeplus [menu]         : Abre el menú interactivo completo
 
 Requiere: pip install rich
 """
@@ -1280,8 +1290,8 @@ def extract_models_from_servers(server: str) -> dict:
     return {"llamacpp": llamacpp, "lmstudio": lmstudio}
 
 
-def action_launch_opencode() -> None:
-    """Launch the opencode binary."""
+def resolve_opencode_binary(require_compiled: bool = False) -> Optional[str]:
+    """Resolve the local opencode binary from packages/cli/dist, legacy dist, or PATH."""
     import platform as _platform
 
     cli_dist = SCRIPT_DIR.parent / "packages" / "cli" / "dist"
@@ -1300,50 +1310,211 @@ def action_launch_opencode() -> None:
         legacy_target = f"opencode-darwin-{arch}"
     else:
         console.print(f"[yellow]⚠ Unsupported platform: {sys.platform}[/]")
-        return
+        return None
 
     binary = cli_dist / cli_target / "bin" / "opencode"
-    if not binary.exists():
-        legacy_binary = legacy_dist / legacy_target / "bin" / "opencode"
-        if legacy_binary.exists():
-            binary = legacy_binary
+    if binary.exists():
+        return str(binary)
 
-    if not binary.exists():
-        dist_dir = cli_dist if cli_dist.exists() else legacy_dist
-        available = [d.name for d in dist_dir.iterdir() if d.is_dir()] if dist_dir.exists() else []
-        console.print(f"[red]✗ Binary not found: {binary}[/]")
-        if available:
-            console.print(f"  Available binaries: {', '.join(available)}")
-        return
-    console.print("[bold]Launching opencode...[/]")
-    env = os.environ.copy()
-    cmd = [str(binary)]
+    legacy_binary = legacy_dist / legacy_target / "bin" / "opencode"
+    if legacy_binary.exists():
+        return str(legacy_binary)
 
-    # Attach to existing background service if running to prevent accidental SIGTERM replacement via version-mismatch
+    if not require_compiled:
+        path_bin = shutil.which("opencode")
+        if path_bin:
+            return path_bin
+
+    dist_dir = cli_dist if cli_dist.exists() else legacy_dist
+    available = [d.name for d in dist_dir.iterdir() if d.is_dir()] if dist_dir.exists() else []
+    console.print(f"[red]✗ Binary not found: {binary}[/]")
+    if available:
+        console.print(f"  Available binaries: {', '.join(available)}")
+    return None
+
+
+def get_local_service_status(binary_cmd: Optional[str] = None) -> tuple[bool, str]:
+    """Return (is_running, url_or_message) for the local opencode background service."""
+    binary = binary_cmd or resolve_opencode_binary()
+    if not binary:
+        return (False, "Binario no encontrado")
     try:
-        status_proc = subprocess.run(
-            [str(binary), "service", "status"],
+        proc = subprocess.run(
+            [binary, "service", "status"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=5,
         )
-        if status_proc.returncode == 0:
-            url = status_proc.stdout.strip()
-            if url.startswith("http"):
-                pw_proc = subprocess.run(
-                    [str(binary), "service", "get", "password"],
-                    capture_output=True,
-                    text=True,
-                    timeout=3,
-                )
-                password = pw_proc.stdout.strip() if pw_proc.returncode == 0 else ""
-                cmd.extend(["--server", url])
-                if password:
-                    env["OPENCODE_PASSWORD"] = password
-                env["OPENCODE_TUI_CHANNEL"] = "dev"
-                console.print(f"[cyan]🔗 Servicio activo detectado ({url}). Conectando sin interrumpir sesiones...[/]")
+        out = (proc.stdout or proc.stderr or "").strip()
+        if proc.returncode == 0 and out.startswith("http"):
+            return (True, out.splitlines()[0].strip())
+        return (False, out or "Detenido")
+    except Exception as exc:
+        return (False, f"Error: {exc}")
+
+
+def get_local_service_password(binary_cmd: Optional[str] = None) -> str:
+    """Return the password of the local opencode background service."""
+    binary = binary_cmd or resolve_opencode_binary()
+    if not binary:
+        return ""
+    try:
+        proc = subprocess.run(
+            [binary, "service", "get", "password"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
     except Exception:
         pass
+    return ""
+
+
+def check_local_service_health(url: str) -> bool:
+    """Check if local opencode service responds on /api/info (200 or 401)."""
+    import urllib.request
+    from urllib.error import HTTPError, URLError
+
+    if not url or not url.startswith("http"):
+        return False
+    target = f"{url.rstrip('/')}/api/info"
+    try:
+        req = urllib.request.Request(target)
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status in (200, 401)
+    except HTTPError as exc:
+        return exc.code in (200, 401)
+    except (URLError, OSError):
+        return False
+
+
+def ensure_local_service(force_restart: bool = False) -> Optional[str]:
+    """Ensure the local opencode background service is running and healthy. Returns service URL."""
+    binary = resolve_opencode_binary()
+    if not binary:
+        return None
+
+    running, current_url = get_local_service_status(binary)
+    if not force_restart and running and check_local_service_health(current_url):
+        console.print(f"[green]✓ Servicio local activo:[/] [bold]{current_url}[/]")
+        return current_url
+
+    action_cmd = "restart" if (force_restart and running) else ("restart" if force_restart else "start")
+    action_label = "Reiniciando" if force_restart else "Iniciando"
+    console.print(f"[cyan]⏳ {action_label} servicio local de OpenCode (`opencode service {action_cmd}`)...[/]")
+    try:
+        proc = subprocess.run(
+            [binary, "service", action_cmd],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if proc.returncode != 0 and action_cmd == "restart":
+            proc = subprocess.run(
+                [binary, "service", "start"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+    except Exception as exc:
+        console.print(f"[red]✗ Error al ejecutar opencode service {action_cmd}: {exc}[/]")
+        return None
+
+    running, new_url = get_local_service_status(binary)
+    if running and check_local_service_health(new_url):
+        console.print(f"[green]✓ Servicio local listo:[/] [bold]{new_url}[/]")
+        return new_url
+
+    err_detail = (proc.stderr or proc.stdout or new_url or "").strip()
+    console.print(f"[red]✗ El servicio local no respondió en /api/info ({err_detail}).[/]")
+    return None
+
+
+def generate_local_pair_link(service_url: str, binary_cmd: Optional[str] = None) -> tuple[str, str]:
+    """Run `opencode pair --url <service_url>` locally and return (raw_output, extracted_pair_url)."""
+    import re
+
+    binary = binary_cmd or resolve_opencode_binary()
+    if not binary:
+        return ("", "")
+
+    cmd = [binary, "pair"]
+    if service_url and service_url.startswith("http"):
+        cmd.extend(["--url", service_url])
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        output = output.strip()
+    except Exception as exc:
+        return (f"Error ejecutando opencode pair: {exc}", "")
+
+    match = re.search(r"https?://[^\s]+/auth/connect/[A-Za-z0-9_-]+", output)
+    pair_url = match.group(0) if match else ""
+    return (output, pair_url)
+
+
+def action_launch_web(open_browser: bool = True) -> None:
+    """Ensure local service, generate one-time pairing link, and optionally open browser."""
+    binary = resolve_opencode_binary()
+    if not binary:
+        return
+
+    service_url = ensure_local_service(force_restart=False)
+    if not service_url:
+        return
+
+    output, pair_url = generate_local_pair_link(service_url, binary)
+    if output:
+        console.print(f"\n{output}\n")
+
+    if not pair_url:
+        console.print("[yellow]⚠ No se pudo extraer automáticamente el link de pairing.[/]")
+        return
+
+    if open_browser:
+        console.print(f"[cyan]🌐 Abriendo en navegador:[/] [bold]{pair_url}[/]")
+        open_cmd = "open" if sys.platform == "darwin" else "xdg-open"
+        if shutil.which(open_cmd):
+            subprocess.run([open_cmd, pair_url])
+        else:
+            import webbrowser
+            webbrowser.open(pair_url)
+
+
+def action_launch_pair() -> None:
+    """Ensure local service and print the one-time pairing link without opening browser."""
+    action_launch_web(open_browser=False)
+
+
+def action_launch_opencode(extra_args: Optional[list[str]] = None) -> None:
+    """Ensure local background service and launch the TUI connected to it."""
+    binary = resolve_opencode_binary(require_compiled=False)
+    if not binary:
+        return
+
+    service_url = ensure_local_service(force_restart=False)
+    console.print("[bold]Iniciando OpenCode TUI...[/]")
+    env = os.environ.copy()
+    cmd = [binary]
+
+    if service_url and service_url.startswith("http"):
+        password = get_local_service_password(binary)
+        cmd.extend(["--server", service_url])
+        if password:
+            env["OPENCODE_PASSWORD"] = password
+        env["OPENCODE_TUI_CHANNEL"] = "dev"
+        console.print(f"[cyan]🔗 Conectando TUI local al servicio ({service_url})...[/]")
+
+    if extra_args:
+        cmd.extend(extra_args)
 
     result = subprocess.run(cmd, env=env)
     if result.returncode != 0:
@@ -1352,38 +1523,91 @@ def action_launch_opencode() -> None:
         subprocess.run(["reset"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def action_manage_service() -> None:
-    """Check or stop the background service daemon."""
-    import platform as _platform
+def action_service_status() -> None:
+    """Show detailed status of the local opencode background service (like RemoteDevcontainers status)."""
+    binary = resolve_opencode_binary()
+    running, status_val = get_local_service_status(binary)
+    endpoint = status_val if running else "http://127.0.0.1:49374 (por defecto)"
+    healthy = check_local_service_health(status_val) if running else False
 
-    cli_dist = SCRIPT_DIR.parent / "packages" / "cli" / "dist"
-    legacy_dist = SCRIPT_DIR.parent / "packages" / "opencode" / "dist"
-    machine = _platform.machine().lower()
-    arch_map = {"arm64": "arm64", "x86_64": "x64"} if sys.platform == "darwin" else {"x86_64": "x64", "aarch64": "arm64", "armv7l": "arm"}
-    arch = arch_map.get(machine, machine)
-    cli_target = f"cli-{sys.platform}-{arch}"
-    binary = cli_dist / cli_target / "bin" / "opencode"
-    if not binary.exists():
-        binary_cmd = "opencode"
+    table = Table(
+        title="🖥️  Estado del Servicio Local de OpenCode",
+        border_style="cyan",
+        header_style="bold cyan",
+        box=box.ROUNDED,
+        show_header=False,
+    )
+    table.add_column("Campo", style="bold cyan", no_wrap=True)
+    table.add_column("Valor", style="white")
+
+    table.add_row("Perfil", "local (Mac)")
+    table.add_row("Directorio", str(Path.cwd()))
+    table.add_row("Binario", binary or "[red]No encontrado[/]")
+    table.add_row("Endpoint Local", endpoint)
+    if running and healthy:
+        table.add_row("Estado Servicio", f"[green]ACTIVO (respondiendo en {status_val}/api/info)[/]")
+    elif running:
+        table.add_row("Estado Servicio", f"[yellow]EN EJECUCIÓN ({status_val}, sin respuesta en /api/info)[/]")
     else:
-        binary_cmd = str(binary)
+        table.add_row("Estado Servicio", f"[yellow]INACTIVO ({status_val})[/]")
 
-    console.print("\n[bold cyan]── Estado del Servicio en Segundo Plano ──[/]")
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def action_service_restart() -> None:
+    """Restart the local opencode background service."""
+    ensure_local_service(force_restart=True)
+
+
+def action_service_stop() -> None:
+    """Stop the local opencode background service."""
+    binary = resolve_opencode_binary()
+    if not binary:
+        return
+    running, status_val = get_local_service_status(binary)
+    if not running:
+        console.print(f"[yellow]ℹ El servicio local ya está detenido ({status_val}).[/]")
+        return
     try:
-        proc = subprocess.run([binary_cmd, "service", "status"], capture_output=True, text=True, timeout=5)
-        status = proc.stdout.strip()
-        if status.startswith("http"):
-            console.print(f"  Estado: [green]En ejecución[/] en [bold]{status}[/]")
-            if Confirm.ask("\n  ¿Deseas detener el servicio en segundo plano limpiamente?"):
-                stop_proc = subprocess.run([binary_cmd, "service", "stop"], capture_output=True, text=True, timeout=10)
-                if stop_proc.returncode == 0:
-                    console.print("[green]✓ Servicio detenido correctamente.[/]")
-                else:
-                    console.print(f"[yellow]⚠ Error al detener: {stop_proc.stderr.strip()}[/]")
+        stop_proc = subprocess.run([binary, "service", "stop"], capture_output=True, text=True, timeout=10)
+        if stop_proc.returncode == 0:
+            console.print(f"[green]✓ Servicio local ({status_val}) detenido correctamente.[/]")
         else:
-            console.print(f"  Estado: [yellow]{status or 'Detenido'}[/]")
-    except Exception as e:
-        console.print(f"[red]Error al consultar el servicio: {e}[/]")
+            console.print(f"[yellow]⚠ Error al detener el servicio: {stop_proc.stderr.strip()}[/]")
+    except Exception as exc:
+        console.print(f"[red]✗ Error al detener el servicio: {exc}[/]")
+
+
+def action_manage_service() -> None:
+    """Interactive submenu for managing the local background service and launch modes."""
+    while True:
+        action_service_status()
+        console.print(Panel("Gestión de Servicio Local y Conexión (Estilo RemoteDevcontainers)", border_style="cyan"))
+        console.print("  [1] Abrir Web UI (web)      — Asegura servicio, genera link pair y abre el navegador")
+        console.print("  [2] Mostrar link Pair (pair)— Asegura servicio y muestra el link de un solo uso")
+        console.print("  [3] Conectar TUI (tui)      — Asegura servicio y conecta la TUI local (--server)")
+        console.print("  [4] Iniciar / Asegurar      — Levanta el servicio local si está detenido (start)")
+        console.print("  [5] Reiniciar servicio      — Reinicia el servicio local en segundo plano (restart)")
+        console.print("  [6] Detener servicio (stop) — Detiene el servicio local en segundo plano")
+        console.print("  [0] Volver al menú principal")
+
+        sub = Prompt.ask("\n  ¿Opción de servicio?", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
+        if sub == "0":
+            return
+        elif sub == "1":
+            action_launch_web(open_browser=True)
+        elif sub == "2":
+            action_launch_pair()
+        elif sub == "3":
+            action_launch_opencode()
+        elif sub == "4":
+            ensure_local_service(force_restart=False)
+        elif sub == "5":
+            action_service_restart()
+        elif sub == "6":
+            action_service_stop()
 
 
 def action_sync_models() -> None:
@@ -2274,22 +2498,74 @@ def summarize_with_llm(commit_log: str, model_info: dict) -> Optional[str]:
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    show_welcome()
+def print_cli_usage() -> None:
+    """Print command-line usage matching RemoteDevcontainers conventions for local execution."""
+    prog = Path(sys.argv[0]).name if sys.argv else "opencodeplus"
+    console.print(
+        Panel(
+            Text("opencodeplus — Comandos de Inicio y Servicio Local", style="bold cyan", justify="center"),
+            border_style="cyan",
+        )
+    )
+    console.print(f"Uso: [bold]{prog}[/] \\[comando]\n")
+    console.print("[bold cyan]Comandos de inicio y servicio local (estilo RemoteDevcontainers):[/]")
+    console.print("  [bold]menu[/]             (Default sin argumentos) Abre el menú interactivo completo")
+    console.print("  [bold]web | open[/]       Asegura el servicio local, genera link de pair y abre el navegador")
+    console.print("  [bold]pair | link[/]      Asegura el servicio local y muestra el link de un solo uso sin abrir navegador")
+    console.print("  [bold]tui \\[args...][/]    Asegura el servicio local y conecta la TUI local (--server)")
+    console.print("  [bold]start[/]            Inicia o asegura que el servicio local en segundo plano esté activo")
+    console.print("  [bold]restart[/]          Reinicia el servicio local en segundo plano")
+    console.print("  [bold]status[/]           Muestra el estado del servicio local, binario y salud de /api/info")
+    console.print("  [bold]stop | down[/]      Detiene el servicio local en segundo plano")
+    console.print("  [bold]help | --help[/]    Muestra esta ayuda\n")
 
-    menu_items = {
-        "1": ("Ejecutar opencode", action_launch_opencode),
-        "2": ("Sync de Modelos", action_sync_models),
-        "3": ("Sync de PATH", action_sync_path),
-        "4": ("Ver Config", lambda: (show_config_menu(),)),
-        "5": ("Seleccionar Modelo", action_select_model),
-        "6": ("Build Completo", action_run_build),
-        "7": ("Sync de Fork", action_sync_fork),
-        "8": ("Limpiar temporales", prompt_temp_cleanup_on_startup),
-        "9": ("Compilar proyecto", action_compile_project),
-        "s": ("Servicio de fondo", action_manage_service),
-        "0": ("Salir", lambda: None),
-    }
+
+def run_cli_command(args: list[str]) -> bool:
+    """Handle direct CLI subcommands if passed. Returns True if a command was handled."""
+    if not args:
+        return False
+
+    cmd = args[0].strip().lower()
+    rest = args[1:]
+
+    if cmd in ("menu", "interactive"):
+        return False
+    elif cmd in ("web", "open"):
+        action_launch_web(open_browser=True)
+        return True
+    elif cmd in ("pair", "link"):
+        action_launch_pair()
+        return True
+    elif cmd == "tui":
+        action_launch_opencode(extra_args=rest)
+        return True
+    elif cmd == "start":
+        ensure_local_service(force_restart=False)
+        return True
+    elif cmd in ("restart", "tunnel"):
+        action_service_restart()
+        return True
+    elif cmd == "status":
+        action_service_status()
+        return True
+    elif cmd in ("stop", "down"):
+        action_service_stop()
+        return True
+    elif cmd in ("help", "-h", "--help"):
+        print_cli_usage()
+        return True
+    else:
+        console.print(f"[red]✗ Comando desconocido: {args[0]}[/]\n")
+        print_cli_usage()
+        sys.exit(1)
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    if run_cli_command(args):
+        return
+
+    show_welcome()
 
     while True:
         console.print(Rule())
@@ -2299,25 +2575,35 @@ def main() -> None:
                 border_style="cyan",
             )
         )
-        console.print("  [1] Ejecutar opencode  — Lanza el TUI interactivo (se conecta a servicio vivo)")
-        console.print("  [2] Sync de Modelos    — Sincroniza modelos de LlamaCPP y LM Studio")
-        console.print("  [3] Sync de PATH       — Gestiona la entrada de PATH en el shell")
-        console.print("  [4] Ver Config         — Visualiza y compara configs de modelos")
-        console.print("  [5] Modelo por defecto — Selecciona el modelo por defecto")
-        console.print("  [6] Build Completo     — Sync fork + upstream + instalar deps + compilar")
-        console.print("  [7] Sync de Fork       — Sync fork (origin) + instalar deps + compilar")
-        console.print("  [8] Limpiar temporales — Escanea y limpia temporales según .gitignore")
-        console.print("  [9] Compilar proyecto  — Instalar deps + compilar (sin sincronizar git)")
-        console.print("  [s] Servicio daemon    — Consulta o detiene el servidor en segundo plano")
+        console.print("  [1] Ejecutar opencode (TUI) — Asegura el servicio local y conecta la TUI interactiva")
+        console.print("  [w] Iniciar OpenCode Web    — Asegura servicio, genera link pair y abre el navegador")
+        console.print("  [p] Generar link Pair       — Asegura servicio y muestra link de un solo uso (sin abrir navegador)")
+        console.print("  [2] Sync de Modelos         — Sincroniza modelos de LlamaCPP y LM Studio")
+        console.print("  [3] Sync de PATH            — Gestiona la entrada de PATH en el shell")
+        console.print("  [4] Ver Config              — Visualiza y compara configs de modelos")
+        console.print("  [5] Modelo por defecto      — Selecciona el modelo por defecto")
+        console.print("  [6] Build Completo          — Sync fork + upstream + instalar deps + compilar")
+        console.print("  [7] Sync de Fork            — Sync fork (origin) + instalar deps + compilar")
+        console.print("  [8] Limpiar temporales      — Escanea y limpia temporales según .gitignore")
+        console.print("  [9] Compilar proyecto       — Instalar deps + compilar (sin sincronizar git)")
+        console.print("  [s] Servicio local (daemon) — Estado detallado, start, restart, stop, web y pair")
         console.print("  [0] Salir")
 
-        choice = Prompt.ask("\n  ¿Opción?", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "s", "S"], default="0").lower()
+        choice = Prompt.ask(
+            "\n  ¿Opción?",
+            choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "w", "W", "p", "P", "s", "S"],
+            default="0",
+        ).lower()
 
         if choice == "0":
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
             break
         elif choice == "1":
             action_launch_opencode()
+        elif choice == "w":
+            action_launch_web(open_browser=True)
+        elif choice == "p":
+            action_launch_pair()
         elif choice == "2":
             action_sync_models()
         elif choice == "3":
