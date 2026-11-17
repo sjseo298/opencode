@@ -1679,8 +1679,9 @@ it.effect("resolveTreeOtherTokens excludes parent tokens when parent KV is offlo
   }),
 )
 
-it.effect("resolveTreeOtherTokens only discounts parent tokens on llamacpp when parent usage exceeds 65%", () =>
+it.effect("resolveTreeOtherTokens mechanically discounts parent tokens on llamacpp based on overflow probability, estimatedTaskTokens, and session telemetry", () =>
   Effect.gen(function* () {
+    const { LlamaCppKV } = yield* Effect.promise(() => import("../src/session/llamacpp-kv.js"))
     const db = (yield* Database.Service).db
     const parentLowID = Session.ID.make("ses_llamacpp_low_parent")
     const subLowID = Session.ID.make("ses_llamacpp_low_sub")
@@ -1696,18 +1697,34 @@ it.effect("resolveTreeOtherTokens only discounts parent tokens on llamacpp when 
     yield* insertSession(parentOtherProvID)
     yield* insertSession(subOtherProvID, { parent_id: parentOtherProvID })
 
-    // Default context limit is 128,000 when model limit is not in dynamic store (65% = 83,200 tokens)
-    // 1. llamacpp with 50,000 tokens (~39% <= 65%): stays in RAM, so parent tokens (50,100) ARE counted
-    yield* storeMessages(parentLowID, [measured("Parent under 65%", 50_000)])
+    // Default context limit is 128,000 when model limit is not in dynamic store (ceiling = 108,800)
+    // 1. llamacpp with 40,000 parent tokens (available = 68,800) and normal cold-start subagent (~25.6k + 6.4k = 32k):
+    // overflow probability < 0.5 -> stays in RAM -> parent tokens (40,100) ARE counted
+    yield* storeMessages(parentLowID, [measured("Parent fits in RAM with subagent", 40_000)])
     const otherLow = yield* SessionCompaction.resolveTreeOtherTokens(db, {
       id: subLowID,
       parentID: parentLowID,
       model: { providerID: "llamacpp", id: "local-model" },
     })
-    expect(otherLow).toBe(50_100)
+    expect(otherLow).toBe(40_100)
 
-    // 2. llamacpp with 90,000 tokens (~70% > 65%): offloaded to disk, so parent tokens are NOT counted (0)
-    yield* storeMessages(parentHighID, [measured("Parent over 65%", 90_000)])
+    // 1b. Same parentLowID (40,000 tokens), but subagent has an explicit estimatedTaskTokens of 65,000 tokens:
+    // Mechanical model predicts overflow (65k + 6.4k > 68,800) -> offloaded to disk -> parent tokens NOT counted (0)
+    LlamaCppKV.setPendingTaskEstimate(subLowID, 65_000)
+    try {
+      const otherWithLargeEstimate = yield* SessionCompaction.resolveTreeOtherTokens(db, {
+        id: subLowID,
+        parentID: parentLowID,
+        model: { providerID: "llamacpp", id: "local-model" },
+      })
+      expect(otherWithLargeEstimate).toBe(0)
+    } finally {
+      LlamaCppKV.setPendingTaskEstimate(subLowID, undefined)
+    }
+
+    // 2. llamacpp with 85,000 parent tokens (available = 23,800 < 32,000 cold-start demand):
+    // overflow probability >= 0.5 -> offloaded to disk -> parent tokens NOT counted (0)
+    yield* storeMessages(parentHighID, [measured("Parent would overflow with subagent", 85_000)])
     const otherHigh = yield* SessionCompaction.resolveTreeOtherTokens(db, {
       id: subHighID,
       parentID: parentHighID,
@@ -1715,8 +1732,8 @@ it.effect("resolveTreeOtherTokens only discounts parent tokens on llamacpp when 
     })
     expect(otherHigh).toBe(0)
 
-    // 3. Non-llamacpp provider (e.g. mlx) even with 90,000 tokens (> 65%): does NOT offload to disk, so tokens ARE counted
-    yield* storeMessages(parentOtherProvID, [measured("MLX parent over 65%", 90_000)])
+    // 3. Non-llamacpp provider (e.g. mlx) even with 90,000 tokens: does NOT offload to disk, so tokens ARE counted
+    yield* storeMessages(parentOtherProvID, [measured("MLX parent", 90_000)])
     const otherMlx = yield* SessionCompaction.resolveTreeOtherTokens(db, {
       id: subOtherProvID,
       parentID: parentOtherProvID,

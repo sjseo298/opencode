@@ -308,17 +308,28 @@ export const resolveTreeOtherTokens = (
       if (LlamaCppKV.isSessionKvOffloaded(sid)) {
         continue
       }
-      // 2. Fallback check: only when the provider is strictly llama.cpp ("llamacpp" / "llama.cpp"),
-      // llamacppKvOffload is enabled, AND the parent session's context usage exceeds 65% of the window,
-      // the parent KV is offloaded to disk during subagent execution. Below or equal to 65%, or on any
-      // other provider, the parent remains in memory and its tokens are counted normally.
+      // 2. Fallback mechanical check: when the provider is strictly llama.cpp ("llamacpp" / "llama.cpp"),
+      // kv_unified is true, and llamacppKvOffload is enabled, evaluate the mechanical overflow risk model
+      // (incorporating parent tokens, estimatedTaskTokens for this child, and historical subagent telemetry
+      // in this session). If computeOffloadDecision determines the parent KV is offloaded to disk, its tokens
+      // do not occupy the unified KV buffer.
       if (sid === rootID && currentSession.id !== rootID) {
         const provider = currentSession.model?.providerID
         const cfg = getObjectivesConfig(rootID)
         if (cfg.llamacppKvOffload && LlamaCppKV.isLlamaCppProvider(provider)) {
           const parentTokens = estimateSessionTokens(parentMessages)
           const contextLimit = getEffectiveContextLimit(currentSession.model)
-          if (LlamaCppKV.isAboveOffloadThreshold(parentTokens, contextLimit)) {
+          const estimatedTaskTokens = LlamaCppKV.getPendingTaskEstimate(currentSession.id)
+          const decision = LlamaCppKV.computeOffloadDecision({
+            sessionID: rootID,
+            providerID: provider,
+            kvUnified: true,
+            contextLimit,
+            parentUsedTokens: parentTokens,
+            estimatedTaskTokens,
+            minSubagentBudget: cfg.minSubagentBudget,
+          })
+          if (decision.shouldOffload) {
             continue
           }
         }

@@ -103,22 +103,27 @@ export const Plugin = {
               const unifiedKvTreeTokens = isUnified ? currentSessionTokens + otherTreeTokens : currentSessionTokens
 
               // Available headroom calculation
-              // Buffer preserves 15% (minimum minSubagentBudget) of context window as safety margin
-              // Exclusively when the provider is llama.cpp ("llamacpp" / "llama.cpp"), llamacppKvOffload is enabled,
-              // AND the parent session's context usage exceeds 65% of the window, the parent session's KV slot
-              // will be saved to disk and erased while the subagent runs. Otherwise (<= 65% or other providers),
-              // the parent stays in memory and currentSessionTokens is subtracted normally.
+              // Buffer preserves 15% (minimum minSubagentBudget) of context window as safety margin.
+              // Mechanically evaluate whether delegating a subagent will trigger KV disk offload on llama.cpp
+              // (when kv_unified is true and overflow probability >= 50% based on parent tokens and session subagent telemetry).
               const objectivesCfg = getObjectivesConfig(context.sessionID)
               const minBudget = objectivesCfg.minSubagentBudget
               const safetyReserveTokens = Math.max(minBudget, Math.floor(contextLimit * 0.15))
               const ceiling = UnifiedKV.calculateAdjustedCeiling(contextLimit - safetyReserveTokens, otherTreeTokens)
               const providerID = session.model?.providerID
               const isParentSession = !session.parentID
-              const parentKvWillOffload =
-                isParentSession &&
-                objectivesCfg.llamacppKvOffload &&
-                LlamaCppKV.isLlamaCppProvider(providerID) &&
-                LlamaCppKV.isAboveOffloadThreshold(currentSessionTokens, contextLimit)
+              const offloadDecision = isParentSession
+                ? LlamaCppKV.computeOffloadDecision({
+                    sessionID: context.sessionID,
+                    providerID,
+                    kvUnified: isUnified,
+                    contextLimit,
+                    parentUsedTokens: currentSessionTokens,
+                    otherActiveTokens: otherTreeTokens,
+                    minSubagentBudget: minBudget,
+                  })
+                : undefined
+              const parentKvWillOffload = Boolean(offloadDecision?.shouldOffload)
               const availableHeadroom = parentKvWillOffload
                 ? Math.max(0, ceiling)
                 : Math.max(0, ceiling - currentSessionTokens)

@@ -57,7 +57,7 @@ describe("Objectives Config llama.cpp KV offload and subagent model", () => {
     ).toBe(1)
   })
 
-  it("enforces exclusive llamacpp provider check and >65% context usage threshold", () => {
+  it("enforces exclusive llamacpp provider check and mechanical overflow probability calculation", () => {
     expect(LlamaCppKV.isLlamaCppProvider("llamacpp")).toBe(true)
     expect(LlamaCppKV.isLlamaCppProvider("llama.cpp")).toBe(true)
     expect(LlamaCppKV.isLlamaCppProvider("LLAMACPP")).toBe(true)
@@ -67,15 +67,86 @@ describe("Objectives Config llama.cpp KV offload and subagent model", () => {
     expect(LlamaCppKV.isLlamaCppProvider("openai")).toBe(false)
     expect(LlamaCppKV.isLlamaCppProvider(undefined)).toBe(false)
 
-    // <= 65% does NOT trigger disk offload (fits in memory)
-    expect(LlamaCppKV.isAboveOffloadThreshold(50_000, 100_000)).toBe(false)
-    expect(LlamaCppKV.isAboveOffloadThreshold(65_000, 100_000)).toBe(false)
-    // > 65% triggers disk offload
-    expect(LlamaCppKV.isAboveOffloadThreshold(65_001, 100_000)).toBe(true)
-    expect(LlamaCppKV.isAboveOffloadThreshold(80_000, 100_000)).toBe(true)
+    const sessionID = "ses_mech_test"
+    LlamaCppKV.clearSubagentTelemetry(sessionID)
 
-    expect(LlamaCppKV.shouldOffloadSlot({ id: 0, n_past: 60_000, n_ctx: 100_000 })).toBe(false)
-    expect(LlamaCppKV.shouldOffloadSlot({ id: 0, n_past: 65_000, n_ctx: 100_000 })).toBe(false)
-    expect(LlamaCppKV.shouldOffloadSlot({ id: 0, n_past: 66_000, n_ctx: 100_000 })).toBe(true)
+    // 1. Non-llamacpp provider or kvUnified=false never offloads
+    expect(
+      LlamaCppKV.computeOffloadDecision({
+        sessionID,
+        providerID: "mlx",
+        kvUnified: true,
+        contextLimit: 100_000,
+        parentUsedTokens: 80_000,
+      }).shouldOffload,
+    ).toBe(false)
+
+    expect(
+      LlamaCppKV.computeOffloadDecision({
+        sessionID,
+        providerID: "llamacpp",
+        kvUnified: false,
+        contextLimit: 100_000,
+        parentUsedTokens: 80_000,
+      }).shouldOffload,
+    ).toBe(false)
+
+    // 2. Low parent usage + small estimated task -> low overflow probability -> stays in RAM
+    const lowDecision = LlamaCppKV.computeOffloadDecision({
+      sessionID,
+      providerID: "llamacpp",
+      kvUnified: true,
+      contextLimit: 100_000, // ceiling = 84,000
+      parentUsedTokens: 30_000, // availableWithoutOffload = 54,000
+      estimatedTaskTokens: 20_000,
+    })
+    expect(lowDecision.shouldOffload).toBe(false)
+    expect(lowDecision.overflowProbability).toBeLessThan(0.5)
+
+    // 3. Same 30,000 parent tokens (only 30% of window!), but subagent task is estimated at 50,000 tokens
+    // A fixed 65% rule would fail to offload, whereas the mechanical calculator detects overflow risk!
+    const heavyTaskDecision = LlamaCppKV.computeOffloadDecision({
+      sessionID,
+      providerID: "llamacpp",
+      kvUnified: true,
+      contextLimit: 100_000, // ceiling = 84,000
+      parentUsedTokens: 30_000, // availableWithoutOffload = 54,000
+      estimatedTaskTokens: 50_000, // projected demand > 54,000
+    })
+    expect(heavyTaskDecision.shouldOffload).toBe(true)
+    expect(heavyTaskDecision.overflowProbability).toBeGreaterThanOrEqual(0.5)
+
+    // 4. Historical telemetry adaptation: if recent subagents in this session consumed 45k tokens and compacted,
+    // even without an explicit estimatedTaskTokens, the mechanical model learns from session history and offloads!
+    LlamaCppKV.recordSubagentTelemetry(sessionID, {
+      childSessionID: "sub_hist_1",
+      tokensUsed: 42_000,
+      estimatedTokens: 20_000,
+      hadCompaction: true,
+      hadOverflow: false,
+      timestamp: Date.now() - 2000,
+    })
+    LlamaCppKV.recordSubagentTelemetry(sessionID, {
+      childSessionID: "sub_hist_2",
+      tokensUsed: 46_000,
+      estimatedTokens: 25_000,
+      hadCompaction: true,
+      hadOverflow: false,
+      timestamp: Date.now() - 1000,
+    })
+
+    const learnedDecision = LlamaCppKV.computeOffloadDecision({
+      sessionID,
+      providerID: "llamacpp",
+      kvUnified: true,
+      contextLimit: 100_000, // ceiling = 84,000
+      parentUsedTokens: 35_000, // availableWithoutOffload = 49,000
+    })
+    expect(learnedDecision.historicalSampleCount).toBe(2)
+    expect(learnedDecision.historicalCompactionRate).toBe(1)
+    expect(learnedDecision.shouldOffload).toBe(true)
+    expect(learnedDecision.overflowProbability).toBeGreaterThanOrEqual(0.5)
+
+    LlamaCppKV.clearSubagentTelemetry(sessionID)
   })
 })

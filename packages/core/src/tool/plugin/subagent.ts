@@ -11,6 +11,7 @@ import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentJob } from "../../session/subagent-job.js"
+import { LlamaCppKV } from "../../session/llamacpp-kv.js"
 import { getObjectivesConfig } from "../../plugin/builtin/objectives-model.js"
 
 export const name = "subagent"
@@ -410,6 +411,7 @@ export const Plugin = {
                 agent: agent.name,
                 description: taskDescription,
               }
+              LlamaCppKV.setPendingTaskEstimate(child.id, input.contextBudget.estimatedTaskTokens)
               if (existing !== undefined) yield* subagents.ensure(recovery, { hasNewWork: true })
               else yield* subagents.start(recovery)
               return backgroundResult(child.id)

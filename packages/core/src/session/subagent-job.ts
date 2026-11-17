@@ -157,21 +157,48 @@ export function start(
     background: true,
     // Wait until the parent session finishes its active execution and goes idle before
     // starting the subagent, guaranteeing parent and child never run concurrently.
-    // Once the parent is idle, offload the parent's KV cache slot to disk ONLY if the
-    // provider is llamacpp and parent context usage exceeds 65%; otherwise keep in RAM.
+    // Once the parent is idle, mechanically evaluate the unified KV overflow probability
+    // (based on llamacpp provider, kv_unified, parent tokens, estimatedTaskTokens, and
+    // recent subagent telemetry in this session) to decide whether to offload the parent KV slot to disk.
     run: execution.awaitIdle(recovery.parentSessionID).pipe(
       Effect.andThen(
         Effect.suspend(() => {
           started = true
+          const estimatedTaskTokens = LlamaCppKV.getPendingTaskEstimate(id)
+          const recordChildTelemetry = store
+            ? Effect.gen(function* () {
+                const childMsgs = yield* store
+                  .context(id)
+                  .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<SessionMessage.Info>))
+                if (childMsgs.length === 0) return
+                const tokensUsed = UnifiedKV.estimateSessionTokens(childMsgs)
+                const hadCompaction = childMsgs.some((m) => m.type === "compaction")
+                const hadOverflow = childMsgs.some(
+                  (m) => m.type === "compaction" && (m as any).reason === "overflow",
+                )
+                LlamaCppKV.recordSubagentTelemetry(recovery.parentSessionID, {
+                  childSessionID: id,
+                  tokensUsed,
+                  estimatedTokens: estimatedTaskTokens,
+                  hadCompaction,
+                  hadOverflow,
+                  timestamp: Date.now(),
+                })
+              })
+            : Effect.void
+
           if (!store || !LlamaCppKV.hasConfiguredLlamaCppOrigin()) {
-            return LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id))
+            return LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id), {
+              estimatedTaskTokens,
+            }).pipe(Effect.ensuring(recordChildTelemetry))
           }
           return Effect.gen(function* () {
             const parent = yield* store.get(recovery.parentSessionID).pipe(Effect.orElseSucceed(() => undefined))
             const providerID = parent?.model?.providerID
             if (!LlamaCppKV.isLlamaCppProvider(providerID)) {
-              return yield* execution.resume(id)
+              return yield* execution.resume(id).pipe(Effect.ensuring(recordChildTelemetry))
             }
+            const kvUnified = UnifiedKV.isUnifiedKv(undefined, parent?.model)
             const parentMsgs = yield* store
               .context(recovery.parentSessionID)
               .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<SessionMessage.Info>))
@@ -179,9 +206,11 @@ export function start(
             const contextLimit = getEffectiveContextLimit(parent?.model)
             return yield* LlamaCppKV.withOffloadedSlot(recovery.parentSessionID, execution.resume(id), {
               providerID,
+              kvUnified,
               parentUsedTokens,
               contextLimit,
-            })
+              estimatedTaskTokens,
+            }).pipe(Effect.ensuring(recordChildTelemetry))
           })
         }),
       ),
