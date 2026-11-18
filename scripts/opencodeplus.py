@@ -1390,11 +1390,55 @@ def check_local_service_health(url: str) -> bool:
         return False
 
 
+def is_local_service_disabled(binary_cmd: Optional[str] = None) -> bool:
+    """Return True if the local opencode background service has `disabled=true` in config."""
+    binary = binary_cmd or resolve_opencode_binary()
+    if not binary:
+        return False
+    try:
+        proc = subprocess.run(
+            [binary, "service", "get", "disabled"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip().lower() == "true"
+    except Exception:
+        pass
+    return False
+
+
+def ensure_local_service_enabled(binary_cmd: Optional[str] = None, silent: bool = False) -> bool:
+    """Ensure `disabled` is unset in local service config so `opencode pair` and background daemon work."""
+    binary = binary_cmd or resolve_opencode_binary()
+    if not binary:
+        return False
+    if not is_local_service_disabled(binary):
+        return True
+    if not silent:
+        console.print("[cyan]🔓 Habilitando servicio en segundo plano (`opencode service unset disabled`)...[/]")
+    try:
+        proc = subprocess.run(
+            [binary, "service", "unset", "disabled"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return proc.returncode == 0
+    except Exception as exc:
+        if not silent:
+            console.print(f"[yellow]⚠ No se pudo ejecutar `opencode service unset disabled`: {exc}[/]")
+        return False
+
+
 def ensure_local_service(force_restart: bool = False) -> Optional[str]:
     """Ensure the local opencode background service is running and healthy. Returns service URL."""
     binary = resolve_opencode_binary()
     if not binary:
         return None
+
+    ensure_local_service_enabled(binary)
 
     running, current_url = get_local_service_status(binary)
     if not force_restart and running and check_local_service_health(current_url):
@@ -1440,6 +1484,8 @@ def generate_local_pair_link(service_url: str, binary_cmd: Optional[str] = None)
     if not binary:
         return ("", "")
 
+    ensure_local_service_enabled(binary, silent=True)
+
     cmd = [binary, "pair"]
     if service_url and service_url.startswith("http"):
         cmd.extend(["--url", service_url])
@@ -1453,6 +1499,10 @@ def generate_local_pair_link(service_url: str, binary_cmd: Optional[str] = None)
         )
         output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         output = output.strip()
+        if "service unset disabled" in output:
+            subprocess.run([binary, "service", "unset", "disabled"], capture_output=True, text=True, timeout=5)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            output = ((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")).strip()
     except Exception as exc:
         return (f"Error ejecutando opencode pair: {exc}", "")
 
@@ -1527,6 +1577,7 @@ def action_service_status() -> None:
     """Show detailed status of the local opencode background service (like RemoteDevcontainers status)."""
     binary = resolve_opencode_binary()
     running, status_val = get_local_service_status(binary)
+    disabled = is_local_service_disabled(binary)
     endpoint = status_val if running else "http://127.0.0.1:49374 (por defecto)"
     healthy = check_local_service_health(status_val) if running else False
 
@@ -1544,6 +1595,12 @@ def action_service_status() -> None:
     table.add_row("Directorio", str(Path.cwd()))
     table.add_row("Binario", binary or "[red]No encontrado[/]")
     table.add_row("Endpoint Local", endpoint)
+    table.add_row(
+        "Config Daemon",
+        "[yellow]DESHABILITADO (disabled=true — se habilitará al iniciar/pair)[/]"
+        if disabled
+        else "[green]HABILITADO[/]",
+    )
     if running and healthy:
         table.add_row("Estado Servicio", f"[green]ACTIVO (respondiendo en {status_val}/api/info)[/]")
     elif running:
