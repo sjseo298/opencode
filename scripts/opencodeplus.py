@@ -13,7 +13,7 @@ También integra modos de inicio y gestión del servicio local equivalentes a Re
   - opencodeplus restart        : Reinicia el servicio local en segundo plano
   - opencodeplus status         : Muestra el estado del servicio local y salud de /api/info
   - opencodeplus stop | down    : Detiene el servicio local en segundo plano
-  - opencodeplus [menu]         : Abre el menú interactivo completo
+  - opencodeplus [menu]         : Abre el menú interactivo completo (opciones 1-12 y atajos t/w/p/s)
 
 Requiere: pip install rich
 """
@@ -1148,27 +1148,27 @@ def show_welcome() -> None:
 def show_models_menu() -> None:
     """Show the sync models submenu."""
     console.print(Panel("Sync de Modelos", border_style="green"))
-    console.print("  [1] Sync desde LlamaCPP    — Consulta LlamaCPP y actualiza la config")
-    console.print("  [2] Sync desde LM Studio   — Consulta LM Studio y actualiza la config")
-    console.print("  [3] Sync desde ambos       — Consulta ambos servidores a la vez")
-    console.print("  [0] Volver al menú principal")
+    console.print("  [bold green]\\[1][/] Sync desde LlamaCPP    — Consulta LlamaCPP y actualiza la config")
+    console.print("  [bold green]\\[2][/] Sync desde LM Studio   — Consulta LM Studio y actualiza la config")
+    console.print("  [bold green]\\[3][/] Sync desde ambos       — Consulta ambos servidores a la vez")
+    console.print("  [bold dim]\\[0][/] Volver al menú principal")
 
 
 def show_path_menu() -> None:
     """Show the sync path submenu."""
     console.print(Panel("Sync de PATH", border_style="blue"))
-    console.print("  [1] Agregar opencodeplus al PATH — Agrega scripts/ al PATH del shell")
-    console.print("  [2] Remover opencodeplus del PATH — Remueve la entrada del PATH")
-    console.print("  [0] Volver al menú principal")
+    console.print("  [bold blue]\\[1][/] Agregar opencodeplus al PATH — Agrega scripts/ al PATH del shell")
+    console.print("  [bold blue]\\[2][/] Remover opencodeplus del PATH — Remueve la entrada del PATH")
+    console.print("  [bold dim]\\[0][/] Volver al menú principal")
 
 
 def show_config_menu() -> None:
     """Show the view config submenu."""
     console.print(Panel("Configuración", border_style="yellow"))
-    console.print("  [1] Ver config generada    — Muestra la config de scripts/config/")
-    console.print("  [2] Ver config actual      — Muestra la config de ~/.config/opencode/")
-    console.print("  [3] Comparar configs       — Compara ambas configs lado a lado")
-    console.print("  [0] Volver al menú principal")
+    console.print("  [bold yellow]\\[1][/] Ver config generada    — Muestra la config de scripts/config/")
+    console.print("  [bold yellow]\\[2][/] Ver config actual      — Muestra la config de ~/.config/opencode/")
+    console.print("  [bold yellow]\\[3][/] Comparar configs       — Compara ambas configs lado a lado")
+    console.print("  [bold dim]\\[0][/] Volver al menú principal")
 
 
 def display_model_table(models: dict, server: str) -> None:
@@ -1585,23 +1585,28 @@ def action_manage_service() -> None:
     while True:
         action_service_status()
         console.print(Panel("Gestión de Servicio Local y Conexión (Estilo RemoteDevcontainers)", border_style="cyan"))
-        console.print("  [1] Abrir Web UI (web)      — Asegura servicio, genera link pair y abre el navegador")
-        console.print("  [2] Mostrar link Pair (pair)— Asegura servicio y muestra el link de un solo uso")
-        console.print("  [3] Conectar TUI (tui)      — Asegura servicio y conecta la TUI local (--server)")
-        console.print("  [4] Iniciar / Asegurar      — Levanta el servicio local si está detenido (start)")
-        console.print("  [5] Reiniciar servicio      — Reinicia el servicio local en segundo plano (restart)")
-        console.print("  [6] Detener servicio (stop) — Detiene el servicio local en segundo plano")
-        console.print("  [0] Volver al menú principal")
+        console.print("  [bold cyan]\\[1][/] [dim](\\[t])[/] Conectar Terminal (TUI)   — Asegura servicio y conecta la TUI local (--server)")
+        console.print("  [bold cyan]\\[2][/] [dim](\\[w])[/] Abrir Web UI (Navegador)  — Asegura servicio, genera link pair y abre el navegador")
+        console.print("  [bold cyan]\\[3][/] [dim](\\[p])[/] Mostrar link Pair         — Asegura servicio y muestra el link de un solo uso")
+        console.print("  [bold cyan]\\[4][/]       Iniciar / Asegurar        — Levanta el servicio local si está detenido (start)")
+        console.print("  [bold cyan]\\[5][/]       Reiniciar servicio        — Reinicia el servicio local en segundo plano (restart)")
+        console.print("  [bold cyan]\\[6][/]       Detener servicio (stop)   — Detiene el servicio local en segundo plano")
+        console.print("  [bold dim]\\[0][/]       Volver al menú principal")
 
-        sub = Prompt.ask("\n  ¿Opción de servicio?", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
+        sub = Prompt.ask(
+            "\n  ¿Opción de servicio? [dim](0-6 o t/w/p)[/]",
+            choices=["0", "1", "2", "3", "4", "5", "6", "t", "T", "w", "W", "p", "P"],
+            default="0",
+            show_choices=False,
+        ).lower()
         if sub == "0":
             return
-        elif sub == "1":
-            action_launch_web(open_browser=True)
-        elif sub == "2":
-            action_launch_pair()
-        elif sub == "3":
+        elif sub in ("1", "t"):
             action_launch_opencode()
+        elif sub in ("2", "w"):
+            action_launch_web(open_browser=True)
+        elif sub in ("3", "p"):
+            action_launch_pair()
         elif sub == "4":
             ensure_local_service(force_restart=False)
         elif sub == "5":
@@ -1615,9 +1620,11 @@ def action_sync_models() -> None:
     show_models_menu()
     choice = Prompt.ask(
         "  ¿Desde qué servidor?",
-        choices=["1", "2", "3"],
+        choices=["1", "2", "3", "0"],
         default="1",
     )
+    if choice == "0":
+        return
 
     server_map = {"1": ("llamacpp", LLAMACPP_URL, extract_llamacpp_models),
                   "2": ("lmstudio", LM_STUDIO_URL, extract_lmstudio_models),
@@ -2155,7 +2162,7 @@ def action_sync_fork() -> None:
         has_tracked_changes = bool(res_status.stdout.strip())
 
         if behind_count == 0 and ahead_count == 0 and not has_tracked_changes:
-            console.print("[green]⚡ [Fast-Exit] El fork ya está al día con origin/dev y sin cambios locales.[/]")
+            console.print("[green]⚡ \\[Fast-Exit] El fork ya está al día con origin/dev y sin cambios locales.[/]")
             show_recent_commits(repo_dir, 5)
             return
     except Exception:
@@ -2182,7 +2189,7 @@ def action_compile_project() -> None:
         console.print("[green]✓ Compilación completada[/]")
 
 
-def action_view_config() -> None:
+def action_view_generated_config() -> None:
     """View the generated config."""
     if GENERATED_CONFIG.exists():
         with open(GENERATED_CONFIG) as f:
@@ -2190,6 +2197,24 @@ def action_view_config() -> None:
         console.print(Markdown(content))
     else:
         console.print("[yellow]No hay config generada aún.[/]")
+
+
+def action_view_config() -> None:
+    """Show the config submenu to view or compare configs."""
+    show_config_menu()
+    choice = Prompt.ask(
+        "  ¿Qué deseas ver?",
+        choices=["1", "2", "3", "0"],
+        default="3",
+    )
+    if choice == "0":
+        return
+    elif choice == "1":
+        action_view_generated_config()
+    elif choice == "2":
+        action_view_user_config()
+    elif choice == "3":
+        action_compare_configs()
 
 
 def action_view_user_config() -> None:
@@ -2509,7 +2534,7 @@ def print_cli_usage() -> None:
     )
     console.print(f"Uso: [bold]{prog}[/] \\[comando]\n")
     console.print("[bold cyan]Comandos de inicio y servicio local (estilo RemoteDevcontainers):[/]")
-    console.print("  [bold]menu[/]             (Default sin argumentos) Abre el menú interactivo completo")
+    console.print("  [bold]menu[/]             (Default sin argumentos) Abre el menú interactivo completo (1-12 o atajos t/w/p/s)")
     console.print("  [bold]web | open[/]       Asegura el servicio local, genera link de pair y abre el navegador")
     console.print("  [bold]pair | link[/]      Asegura el servicio local y muestra el link de un solo uso sin abrir navegador")
     console.print("  [bold]tui \\[args...][/]    Asegura el servicio local y conecta la TUI local (--server)")
@@ -2560,6 +2585,38 @@ def run_cli_command(args: list[str]) -> bool:
         sys.exit(1)
 
 
+def show_main_menu() -> None:
+    """Render the categorized main menu with explicit keys for Terminal (TUI), Web, Pair, and Service."""
+    console.print(Rule())
+    console.print(
+        Panel(
+            Text("Menú Principal", style="bold cyan", justify="center"),
+            border_style="cyan",
+            subtitle="Selecciona un número (1-12) o un atajo rápido (t, w, p, s)",
+        )
+    )
+
+    console.print("  [bold cyan]🚀 Iniciar / Conectar OpenCode[/]")
+    console.print("    [bold green]\\[1][/] [dim](\\[t])[/] [bold]Iniciar en Terminal (TUI)[/]   — Asegura el servicio local y conecta la TUI interactiva")
+    console.print("    [bold green]\\[2][/] [dim](\\[w])[/] [bold]Iniciar OpenCode Web[/]        — Asegura el servicio, genera link pair y abre el navegador")
+    console.print("    [bold green]\\[3][/] [dim](\\[p])[/] [bold]Generar Link Pair[/]           — Asegura el servicio y muestra el link (sin abrir navegador)")
+    console.print("    [bold green]\\[4][/] [dim](\\[s])[/] [bold]Servicio Local (Daemon)[/]     — Estado detallado, start, restart, stop, web y pair")
+
+    console.print("\n  [bold cyan]🤖 Modelos y Configuración[/]")
+    console.print("    [bold cyan]\\[5][/]       Sync de Modelos             — Sincroniza modelos de LlamaCPP y LM Studio")
+    console.print("    [bold cyan]\\[6][/]       Modelo por Defecto          — Selecciona el modelo activo por defecto")
+    console.print("    [bold cyan]\\[7][/]       Ver / Comparar Config       — Visualiza y compara configs de modelos")
+    console.print("    [bold cyan]\\[8][/]       Sync de PATH                — Gestiona la entrada de PATH en el shell")
+
+    console.print("\n  [bold cyan]🔨 Build y Mantenimiento[/]")
+    console.print("    [bold yellow]\\[9][/]       Build Completo (Upstream)   — Sync fork + upstream + instalar deps + compilar")
+    console.print("    [bold yellow]\\[10][/]      Sync de Fork (Origin)       — Sync fork (origin) + instalar deps + compilar")
+    console.print("    [bold yellow]\\[11][/]      Compilar Proyecto           — Instalar deps + compilar (sin sincronizar git)")
+    console.print("    [bold yellow]\\[12][/]      Limpiar Temporales          — Escanea y limpia temporales según .gitignore")
+
+    console.print("\n    [bold dim]\\[0][/] [dim](\\[q])[/] Salir")
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     if run_cli_command(args):
@@ -2567,61 +2624,52 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     show_welcome()
 
+    valid_choices = [
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
+        "t", "T", "tui", "TUI",
+        "w", "W", "web", "WEB", "open", "OPEN",
+        "p", "P", "pair", "PAIR", "link", "LINK",
+        "s", "S", "service", "SERVICE", "daemon", "DAEMON",
+        "q", "Q", "quit", "QUIT", "exit", "EXIT",
+    ]
+
     while True:
-        console.print(Rule())
-        console.print(
-            Panel(
-                Text("Menú Principal", style="bold cyan", justify="center"),
-                border_style="cyan",
-            )
-        )
-        console.print("  [1] Ejecutar opencode (TUI) — Asegura el servicio local y conecta la TUI interactiva")
-        console.print("  [w] Iniciar OpenCode Web    — Asegura servicio, genera link pair y abre el navegador")
-        console.print("  [p] Generar link Pair       — Asegura servicio y muestra link de un solo uso (sin abrir navegador)")
-        console.print("  [2] Sync de Modelos         — Sincroniza modelos de LlamaCPP y LM Studio")
-        console.print("  [3] Sync de PATH            — Gestiona la entrada de PATH en el shell")
-        console.print("  [4] Ver Config              — Visualiza y compara configs de modelos")
-        console.print("  [5] Modelo por defecto      — Selecciona el modelo por defecto")
-        console.print("  [6] Build Completo          — Sync fork + upstream + instalar deps + compilar")
-        console.print("  [7] Sync de Fork            — Sync fork (origin) + instalar deps + compilar")
-        console.print("  [8] Limpiar temporales      — Escanea y limpia temporales según .gitignore")
-        console.print("  [9] Compilar proyecto       — Instalar deps + compilar (sin sincronizar git)")
-        console.print("  [s] Servicio local (daemon) — Estado detallado, start, restart, stop, web y pair")
-        console.print("  [0] Salir")
+        show_main_menu()
 
         choice = Prompt.ask(
-            "\n  ¿Opción?",
-            choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "w", "W", "p", "P", "s", "S"],
+            "\n  ¿Opción? [dim](1-12, t=Terminal, w=Web, p=Pair, s=Servicio, 0=Salir)[/]",
+            choices=valid_choices,
             default="0",
-        ).lower()
+            show_choices=False,
+        ).strip().lower()
 
-        if choice == "0":
+        if choice in ("0", "q", "quit", "exit"):
             console.print("\n[bold cyan]¡Hasta luego![/]\n")
             break
-        elif choice == "1":
+        elif choice in ("1", "t", "tui"):
             action_launch_opencode()
-        elif choice == "w":
+        elif choice in ("2", "w", "web", "open"):
             action_launch_web(open_browser=True)
-        elif choice == "p":
+        elif choice in ("3", "p", "pair", "link"):
             action_launch_pair()
-        elif choice == "2":
-            action_sync_models()
-        elif choice == "3":
-            action_sync_path()
-        elif choice == "4":
-            action_view_config()
-        elif choice == "5":
-            action_select_model()
-        elif choice == "6":
-            action_run_build()
-        elif choice == "7":
-            action_sync_fork()
-        elif choice == "8":
-            prompt_temp_cleanup_on_startup()
-        elif choice == "9":
-            action_compile_project()
-        elif choice == "s":
+        elif choice in ("4", "s", "service", "daemon"):
             action_manage_service()
+        elif choice == "5":
+            action_sync_models()
+        elif choice == "6":
+            action_select_model()
+        elif choice == "7":
+            action_view_config()
+        elif choice == "8":
+            action_sync_path()
+        elif choice == "9":
+            action_run_build()
+        elif choice == "10":
+            action_sync_fork()
+        elif choice == "11":
+            action_compile_project()
+        elif choice == "12":
+            prompt_temp_cleanup_on_startup()
 
 
 if __name__ == "__main__":
