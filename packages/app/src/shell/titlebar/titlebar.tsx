@@ -234,7 +234,9 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
 
               if (!conn) return undefined
               const key = ServerConnection.key(conn)
-              const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
+              const projectWorktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree) ?? []
+              const draftDir = tab?.type === "draft" ? tab.worktree || tab.directory : undefined
+              const worktrees = draftDir ? [draftDir, ...projectWorktrees] : projectWorktrees
 
               return servers.machineBadge(conn, worktrees)
             })

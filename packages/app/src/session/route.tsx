@@ -1,5 +1,4 @@
-import { ErrorBoundary, createEffect, createMemo, Match, on, Show, Switch, type ParentProps } from "solid-js"
-import { Title } from "@solidjs/meta"
+import { ErrorBoundary, createEffect, createMemo, Match, on, Switch, type ParentProps } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -16,9 +15,10 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { useNotification } from "@/shell/notifications/notification"
 import { ComposerPersistenceProvider } from "@/composer/persistence"
 import { useData, useServer } from "@/runtime/server/current"
-import { formatBrowserDocumentTitle, useServers } from "@/runtime/server/registry"
+import { useServers } from "@/runtime/server/registry"
 import { usePlatform } from "@/runtime/platform/platform"
 import { ServerConnection } from "@/runtime/server/registry"
+import { useDocumentTitle } from "@/shell/document-title"
 import { useSettingsCommand } from "@/settings/command"
 import { useSettings } from "@/settings/model"
 import { SessionUIProvider } from "@/shell/routes/session-ui-provider"
@@ -301,20 +301,7 @@ function MarkSessionViewed(props: { sessionID: () => string | undefined }) {
 
 // Browser tabs and desktop windows are otherwise indistinguishable, so name them after the open session.
 function SessionDocumentTitle(props: { title: () => string | undefined; machine?: () => string | undefined }) {
-  const documentTitle = createMemo(() => {
-    const sessionTitle = props.title()
-    const machine = props.machine?.()
+  useDocumentTitle({ title: props.title, machine: props.machine })
 
-    if (!sessionTitle && !machine) return undefined
-
-    return formatBrowserDocumentTitle({ sessionTitle, machine })
-  })
-
-  // Keyed on the full formatted string: @solidjs/meta's <Title> only updates the DOM <title> tag when mounted,
-  // so any change in either `title()` or `machine()` remounts <Title> with the updated `[Host] Session · OpenCode`.
-  return (
-    <Show when={documentTitle()} keyed>
-      {(value) => <Title>{value}</Title>}
-    </Show>
-  )
+  return null
 }

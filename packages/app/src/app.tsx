@@ -8,15 +8,15 @@ import { ThemeProvider } from "@opencode/ui/theme/context"
 import { MetaProvider, Title } from "@solidjs/meta"
 import { type BaseRouterProps, Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
-import { type Component, createMemo, createRenderEffect, ErrorBoundary, type JSX, type ParentProps, Show } from "solid-js"
+import { type Component, createRenderEffect, ErrorBoundary, type JSX, type ParentProps } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/shell/commands/command"
 import { DesktopCommands } from "@/shell/commands/desktop"
+import { DocumentTitleProvider } from "@/shell/document-title"
 import { ProjectIconsProvider } from "@/shell/layout/project-icons"
-import { GlobalProvider, useGlobal } from "@/runtime/server/runtime"
+import { GlobalProvider } from "@/runtime/server/runtime"
 import { LanguageProvider, UiI18nBridge, type Locale } from "@/runtime/i18n/language"
-import { formatBrowserDocumentTitle, ServerConnection, ServersProvider, useServers } from "@/runtime/server/registry"
-import { usePlatform } from "@/runtime/platform/platform"
+import { ServerConnection, ServersProvider } from "@/runtime/server/registry"
 import { SettingsProvider } from "@/settings/model"
 import { TabsProvider } from "@/shell/tabs/tabs"
 import { ErrorPage } from "@/shell/errors/error"
@@ -85,30 +85,6 @@ export function AppBaseProviders(
   )
 }
 
-function DefaultMachineTitle() {
-  const platform = usePlatform()
-  const servers = useServers()
-  const global = useGlobal()
-
-  const text = createMemo(() => {
-    if (platform.platform !== "web") return "OpenCode"
-    const conn = servers.list.find(servers.current) ?? servers.list[0]
-
-    if (!conn) return "OpenCode"
-    const key = ServerConnection.key(conn)
-    const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
-    const machine = servers.machineBadge(conn, worktrees)
-
-    return formatBrowserDocumentTitle({ machine })
-  })
-
-  return (
-    <Show when={text()} keyed>
-      {(value) => <Title>{value}</Title>}
-    </Show>
-  )
-}
-
 export function AppInterface(props: {
   children?: JSX.Element
   canonicalLocalServer?: ServerConnection.Key
@@ -122,16 +98,17 @@ export function AppInterface(props: {
     <TabsProvider>
       <GlobalProvider>
         <ProjectIconsProvider>
-          <DefaultMachineTitle />
-          <BodyTypography />
-          <CommandProvider>
-            <DesktopCommands />
-            <VoiceProvider>
-              {props.children}
-              {rootProps.children}
-              <VoiceOverlay />
-            </VoiceProvider>
-          </CommandProvider>
+          <DocumentTitleProvider>
+            <BodyTypography />
+            <CommandProvider>
+              <DesktopCommands />
+              <VoiceProvider>
+                {props.children}
+                {rootProps.children}
+                <VoiceOverlay />
+              </VoiceProvider>
+            </CommandProvider>
+          </DocumentTitleProvider>
         </ProjectIconsProvider>
       </GlobalProvider>
     </TabsProvider>

@@ -7,8 +7,10 @@ import { LocationProvider } from "@/workspaces/location"
 import { ModelsProvider } from "@/providers/models/models"
 import { ComposerPersistenceProvider } from "@/composer/persistence"
 import { ServerProvider, useServer } from "@/runtime/server/current"
-import { ServerConnection } from "@/runtime/server/registry"
+import { ServerConnection, useServers } from "@/runtime/server/registry"
+import { usePlatform } from "@/runtime/platform/platform"
 import { isServerIncompatible } from "@/runtime/server/health-machine"
+import { useDocumentTitle } from "@/shell/document-title"
 import { useTabs, type DraftTab } from "@/shell/tabs/tabs"
 import { SessionUIProvider } from "@/shell/routes/session-ui-provider"
 import NewSession from "@/new-session/screen"
@@ -59,7 +61,20 @@ function ResolvedDraftRoute(props: { draft: DraftTab }) {
 
 function ResolvedDraftContent(props: { draft: DraftTab }) {
   const server = useServer()
+  const servers = useServers()
+  const platform = usePlatform()
   const tabs = useTabs()
+
+  const machine = createMemo(() => {
+    if (platform.platform !== "web") return undefined
+    const dir = props.draft.worktree || props.draft.directory
+    const projectWorktrees = server.ctx.projects.list().map((p) => p.worktree)
+    const worktrees = dir ? [dir, ...projectWorktrees] : projectWorktrees
+
+    return servers.machineBadge(server.conn, worktrees)
+  })
+
+  useDocumentTitle({ machine })
 
   return (
     <Show
