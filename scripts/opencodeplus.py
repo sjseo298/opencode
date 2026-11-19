@@ -6,7 +6,7 @@ Consulta LlamaCPP, LM Studio y proveedores habilitados en OpenCode (GitHub Copil
 genera la configuración de opencode, compara con la actual y actualiza si hay cambios.
 
 También integra modos de inicio y gestión del servicio local equivalentes a RemoteDevcontainers:
-  - opencodeplus web | open     : Asegura el servicio local, genera link pair y abre la Web UI en el navegador
+  - opencodeplus web | open     : Asegura el servicio local y relay browse, genera link pair y abre la Web UI en el navegador
   - opencodeplus pair | link    : Asegura el servicio local y muestra el link de un solo uso sin abrir navegador
   - opencodeplus tui [args...]  : Asegura el servicio local y conecta la TUI local (--server)
   - opencodeplus start          : Inicia o asegura que el servicio local esté activo
@@ -1476,6 +1476,116 @@ def ensure_local_service(force_restart: bool = False) -> Optional[str]:
     return None
 
 
+def resolve_browse_binary() -> Optional[str]:
+    """Resolve the local `browse` CLI binary from PATH or ~/.local/bin/browse."""
+    path_bin = shutil.which("browse")
+    if path_bin:
+        return path_bin
+    fallback = Path.home() / ".local" / "bin" / "browse"
+    if fallback.exists() and os.access(fallback, os.X_OK):
+        return str(fallback)
+    return None
+
+
+def get_browse_relay_status(browse_bin: Optional[str] = None) -> dict:
+    """Inspect local `browse` relay state via `browse status --json` (read-only)."""
+    binary = browse_bin or resolve_browse_binary()
+    if not binary:
+        return {
+            "installed": False,
+            "binary": None,
+            "running": False,
+            "endpoint": "",
+            "pid": None,
+            "connected": False,
+            "pairing_state": "",
+            "browsers": [],
+            "error": "",
+        }
+    try:
+        proc = subprocess.run(
+            [binary, "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        raw = (proc.stdout or "").strip()
+        data = json.loads(raw) if raw else {}
+    except Exception as exc:
+        return {
+            "installed": True,
+            "binary": binary,
+            "running": False,
+            "endpoint": "",
+            "pid": None,
+            "connected": False,
+            "pairing_state": "",
+            "browsers": [],
+            "error": str(exc),
+        }
+
+    relay = data.get("relay") if isinstance(data.get("relay"), dict) else {}
+    ext = data.get("extension") if isinstance(data.get("extension"), dict) else {}
+    browsers = [
+        str(b.get("name") or b.get("id"))
+        for b in (ext.get("browsers") or [])
+        if isinstance(b, dict) and b.get("connected")
+    ]
+    running = relay.get("running") is not False and bool(relay.get("pid"))
+    return {
+        "installed": True,
+        "binary": binary,
+        "running": running,
+        "endpoint": str(relay.get("endpoint") or ""),
+        "pid": relay.get("pid"),
+        "connected": bool(data.get("connected") or ext.get("connected")),
+        "pairing_state": str(data.get("pairingState") or ext.get("pairingState") or ""),
+        "browsers": browsers,
+        "error": "",
+    }
+
+
+def ensure_browse_relay(force_restart: bool = False) -> bool:
+    """Ensure the local `browse` relay is running. Non-blocking if `browse` is not installed."""
+    binary = resolve_browse_binary()
+    if not binary:
+        return False
+
+    status = get_browse_relay_status(binary)
+    if not force_restart and status["running"]:
+        endpoint = status["endpoint"] or "http://127.0.0.1:19988"
+        if status["connected"]:
+            browser_note = f" · {', '.join(status['browsers'])}" if status["browsers"] else ""
+            console.print(f"[green]✓ Relay browse activo:[/] [bold]{endpoint}[/] [dim](extensión conectada{browser_note})[/]")
+        else:
+            console.print(f"[green]✓ Relay browse activo:[/] [bold]{endpoint}[/] [dim](esperando reconexión de extensión)[/]")
+        return True
+
+    action_label = "Reiniciando" if force_restart else "Iniciando"
+    console.print(f"[cyan]⏳ {action_label} relay local de browse (`browse restart`)...[/]")
+    try:
+        proc = subprocess.run(
+            [binary, "restart"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as exc:
+        console.print(f"[yellow]⚠ No se pudo iniciar el relay local de browse: {exc}[/]")
+        return False
+
+    new_status = get_browse_relay_status(binary)
+    if new_status["running"]:
+        endpoint = new_status["endpoint"] or "http://127.0.0.1:19988"
+        ext_state = "extensión conectada" if new_status["connected"] else "extensión reconectando"
+        console.print(f"[green]✓ Relay browse listo:[/] [bold]{endpoint}[/] [dim]({ext_state})[/]")
+        return True
+
+    detail = (proc.stderr or proc.stdout or new_status.get("error") or "sin respuesta").strip()
+    console.print(f"[yellow]⚠ El relay local de browse no quedó activo ({detail}).[/]")
+    return False
+
+
 def generate_local_pair_link(service_url: str, binary_cmd: Optional[str] = None) -> tuple[str, str]:
     """Run `opencode pair --url <service_url>` locally and return (raw_output, extracted_pair_url)."""
     import re
@@ -1512,7 +1622,7 @@ def generate_local_pair_link(service_url: str, binary_cmd: Optional[str] = None)
 
 
 def action_launch_web(open_browser: bool = True) -> None:
-    """Ensure local service, generate one-time pairing link, and optionally open browser."""
+    """Ensure local service, ensure browse relay (for web mode), generate one-time pairing link, and optionally open browser."""
     binary = resolve_opencode_binary()
     if not binary:
         return
@@ -1520,6 +1630,9 @@ def action_launch_web(open_browser: bool = True) -> None:
     service_url = ensure_local_service(force_restart=False)
     if not service_url:
         return
+
+    if open_browser:
+        ensure_browse_relay(force_restart=False)
 
     output, pair_url = generate_local_pair_link(service_url, binary)
     if output:
@@ -1608,6 +1721,20 @@ def action_service_status() -> None:
     else:
         table.add_row("Estado Servicio", f"[yellow]INACTIVO ({status_val})[/]")
 
+    browse_status = get_browse_relay_status()
+    if not browse_status["installed"]:
+        table.add_row("Relay Browse", "[dim]No instalado[/]")
+    elif browse_status["running"]:
+        b_endpoint = browse_status["endpoint"] or "http://127.0.0.1:19988"
+        if browse_status["connected"]:
+            browser_note = f" · {', '.join(browse_status['browsers'])}" if browse_status["browsers"] else ""
+            table.add_row("Relay Browse", f"[green]ACTIVO ({b_endpoint} · extensión conectada{browser_note})[/]")
+        else:
+            table.add_row("Relay Browse", f"[green]ACTIVO ({b_endpoint} · esperando extensión)[/]")
+    else:
+        b_endpoint = browse_status["endpoint"] or "http://127.0.0.1:19988"
+        table.add_row("Relay Browse", f"[yellow]INACTIVO ({b_endpoint} · se inicia con modo Web \\[w])[/]")
+
     console.print()
     console.print(table)
     console.print()
@@ -1643,7 +1770,7 @@ def action_manage_service() -> None:
         action_service_status()
         console.print(Panel("Gestión de Servicio Local y Conexión (Estilo RemoteDevcontainers)", border_style="cyan"))
         console.print("  [bold cyan]\\[1][/] [dim](\\[t])[/] Conectar Terminal (TUI)   — Asegura servicio y conecta la TUI local (--server)")
-        console.print("  [bold cyan]\\[2][/] [dim](\\[w])[/] Abrir Web UI (Navegador)  — Asegura servicio, genera link pair y abre el navegador")
+        console.print("  [bold cyan]\\[2][/] [dim](\\[w])[/] Abrir Web UI (Navegador)  — Asegura servicio y relay browse, genera link pair y abre navegador")
         console.print("  [bold cyan]\\[3][/] [dim](\\[p])[/] Mostrar link Pair         — Asegura servicio y muestra el link de un solo uso")
         console.print("  [bold cyan]\\[4][/]       Iniciar / Asegurar        — Levanta el servicio local si está detenido (start)")
         console.print("  [bold cyan]\\[5][/]       Reiniciar servicio        — Reinicia el servicio local en segundo plano (restart)")
@@ -2592,7 +2719,7 @@ def print_cli_usage() -> None:
     console.print(f"Uso: [bold]{prog}[/] \\[comando]\n")
     console.print("[bold cyan]Comandos de inicio y servicio local (estilo RemoteDevcontainers):[/]")
     console.print("  [bold]menu[/]             (Default sin argumentos) Abre el menú interactivo completo (1-12 o atajos t/w/p/s)")
-    console.print("  [bold]web | open[/]       Asegura el servicio local, genera link de pair y abre el navegador")
+    console.print("  [bold]web | open[/]       Asegura servicio local y relay browse, genera link pair y abre el navegador")
     console.print("  [bold]pair | link[/]      Asegura el servicio local y muestra el link de un solo uso sin abrir navegador")
     console.print("  [bold]tui \\[args...][/]    Asegura el servicio local y conecta la TUI local (--server)")
     console.print("  [bold]start[/]            Inicia o asegura que el servicio local en segundo plano esté activo")
@@ -2655,7 +2782,7 @@ def show_main_menu() -> None:
 
     console.print("  [bold cyan]🚀 Iniciar / Conectar OpenCode[/]")
     console.print("    [bold green]\\[1][/] [dim](\\[t])[/] [bold]Iniciar en Terminal (TUI)[/]   — Asegura el servicio local y conecta la TUI interactiva")
-    console.print("    [bold green]\\[2][/] [dim](\\[w])[/] [bold]Iniciar OpenCode Web[/]        — Asegura el servicio, genera link pair y abre el navegador")
+    console.print("    [bold green]\\[2][/] [dim](\\[w])[/] [bold]Iniciar OpenCode Web[/]        — Asegura servicio y relay browse, genera link pair y abre navegador")
     console.print("    [bold green]\\[3][/] [dim](\\[p])[/] [bold]Generar Link Pair[/]           — Asegura el servicio y muestra el link (sin abrir navegador)")
     console.print("    [bold green]\\[4][/] [dim](\\[s])[/] [bold]Servicio Local (Daemon)[/]     — Estado detallado, start, restart, stop, web y pair")
 
