@@ -54,6 +54,7 @@ function formatObjectivesSnapshot(po: any) {
       lines.push(`  - [${so.id}] [${so.status?.toUpperCase() ?? "PENDING"}] ${so.title}`)
       if (so.rationale) lines.push(`    Rationale: ${so.rationale}`)
       if (so.blocker) lines.push(`    Blocker: ${so.blocker}`)
+      if (so.lastProgressNote && so.status === "exploring") lines.push(`    Progress: ${so.lastProgressNote}`)
       if (so.validationProof) lines.push(`    Proof: ${so.validationProof}`)
     }
   }

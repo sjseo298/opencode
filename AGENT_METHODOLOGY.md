@@ -370,9 +370,14 @@ export interface PrimaryObjective {
    * Tracks modifying/action tools (`write`, `edit`, `bash`, `apply_diff`, etc.). When modifying tools execute without updating objectives, the session is marked dirty.
    * Prompts the agent before concluding: *"⚠️ Objective Reconciliation Required: You have performed code modifications or tool executions. Call `objective_manage` to keep your objective tree synchronized with your latest progress, attach validation proof for completed work, or register newly discovered blockers before finishing your turn."*
    * Calling `objective_manage` clears the dirty state.
-4. **Unified Objective Sync & Anti-Loop Protocol (`ctx.tool.hook("execute.before")` / `ctx.session.hook("prompt")`)**:
-   * Detects `max_actions_without_sync` (default: `15`) consecutive tool operations (reads, searches, commands, or edits) without calling `objective_manage`, throwing `⚠️ [Objective Sync Warning]` (or `⚠️ [Objective Sync / Anti-Loop Warning]`) so the agent continuously synchronizes progress and findings.
-   * **User Chat Intervention Reset**: Whenever the user intervenes or speaks in the chat, the consecutive unsynced action counter (`actionsWithoutObjectiveSync` and `consecutiveReadCounts`) is automatically reset to 0 upon processing the incoming user prompt, ensuring every new user instruction starts with a clean slate.
+4. **Mode-Aware 2-Tier Objective Sync & Stagnation Protocol (`ctx.tool.hook("execute.before")` / `execute.after` / `ctx.session.hook("prompt")`)**:
+   * **Hydration & Code Mode Single-Unit Counting**: `execute.before` hydrates `sessionObjectives` when not yet in memory (preventing false `!po` warnings after restarts/reloads). Code Mode (`execute`) calls count as a single top-level unit; inner `tools.*` calls sharing the same `context.id` never double-count or abort mid-script.
+   * **Weighted Tool Costs**: Pure read-only tools (`READONLY_TOOLS`) carry weight **`0.5`**, while effectful tools (`shell`, `execute`, `edit`, `write`, `subagent`, etc.) carry weight **`1.0`**. `question`, `session_compact`, and `context_budget` are exempt.
+   * **Mode-Aware 2-Tier Escalation**:
+     - Without an approved plan / active `exploring` SO: enforces hard gates in `execute.before` (plan presentation, `approvedByUser` before file edits, and weighted threshold `max_actions_without_sync`, default `15`) with state-specific messages naming the PO or next pending SO.
+     - With an approved plan (`approvedByUser: true`) and an active `exploring` SO/TO: **Tier 1** (`>= max_actions_without_sync`) never discards the tool result — it appends a non-blocking `💡 [Objective Sync Advisory]` naming the active SO/TO in `execute.after` (supporting `string`, `Tool.Content[]`, and `Tool.Error`). **Tier 2** (`>= 2 × max_actions_without_sync` ignored without sync) escalates to a top-level gate in `execute.before`.
+   * **Extended Stagnation Detection (F-9)**: Tracks repeated normalized signatures across `READONLY_TOOLS` (range-aware `read` offset/limit), `shell` (`command` + `workdir`), and `execute` (SHA-256 of normalized code), plus consecutive tool failures, emitting immediate tail-only `⚠️ [Stagnation Warning]` nudges in `execute.after` without mutating `event.system`.
+   * **User Chat Intervention Reset**: Whenever the user intervenes or speaks in the chat, the unsynced weighted counter, pending advisories, and consecutive failure counter automatically reset to 0, ensuring every new user instruction starts with a clean slate.
 5. **Right Sidebar TUI Component (`SidebarObjectives`)**:
    * Registered in `packages/tui/src/plugin/builtins.ts`.
    * Displays the Primary Objective and Definition of Done at the top of the right sidebar.
@@ -597,6 +602,20 @@ Re-opening an SO whose title matches a known resolved/discarded fingerprint requ
 - `handoff_plan`: Prepares clean session handoff payload containing the validated tree, lineage metadata (`originSessionID`), and a standardized `<plan-handoff>` prompt to launch execution in a fresh session with 100% token headroom.
 - `checkpoint`: Derives a phase progress report strictly from the tree, pauses execution, and requests confirmation before advancing to the next phase.
 
+#### Action 11b: `note_progress` (Lightweight Progress Checkpointing)
+Records a concise factual progress note on the currently active `exploring` SO (or active TO) without polluting the epistemic `findings` layer or paying full-tree rendering overhead:
+```json
+{
+  "action": "note_progress",
+  "note": "Scanned 20/40 Outlook pages; 12 matching threads collected."
+}
+```
+Safeguards:
+- Requires an approved plan and an active `exploring` SO/TO (optional `id` targets a specific exploring SO/TO).
+- Rejects placeholder or trivial notes (`< finding_min_chars`, `TODO`, `"still working"`, etc.).
+- Persists `lastProgressNote` / `lastProgressAt` on the objective (rendered in tree projections and preserved in compaction snapshots), resets the sync counter, and returns an ultra-compact 1–2 line acknowledgment.
+- Capped at **3 consecutive `note_progress` calls** (`MAX_CONSECUTIVE_PROGRESS_NOTES = 3`) without structural progress (`update_secondary`, `add_tertiary`, `update_tertiary`, or `add_finding`), prompting resolution with `validationProof` or tertiary decomposition.
+
 #### Action 12: `sync` / `export_tree` / `import_tree` (Cross-Session Persistence, F-1)
 The tree is automatically persisted to plugin storage (`objectives/v1/<sessionID>`).
 - `sync`: Rehydrates from disk after compaction or restart; storage wins over stale memory.
@@ -700,8 +719,8 @@ None of the numeric thresholds or toggles of the **Protocolo de Objetivos** are 
 
 | Parameter (`opencode.jsonc` / Session `.json`) | Default | CLI Flag | Environment Variable | Description |
 |---|---|---|---|---|
-| `max_actions_without_sync` | **`15`** | `--objectives-max-actions-without-sync <int>` | `OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC` | Maximum consecutive tool operations (reads, searches, commands, or edits) allowed without calling `objective_manage` before throwing `⚠️ [Objective Sync Warning]`. Automatically resets to 0 whenever the user intervenes in chat. |
-| `repeated_action_warning_threshold` | **`2`** | `--objectives-repeated-action-threshold <int>` | `OPENCODE_OBJECTIVES_REPEATED_ACTION_THRESHOLD` | Number of identical normalized read actions on the same active Secondary Objective before queueing a repeated-action warning. |
+| `max_actions_without_sync` | **`15`** | `--objectives-max-actions-without-sync <int>` | `OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC` | Weighted tool-action budget (`READONLY_TOOLS = 0.5`, effectful tools `= 1.0`, Code Mode `execute` = 1 top-level unit) without calling `objective_manage`. Emits a non-blocking Tier-1 advisory in `execute.after` during approved SO execution and escalates at `2×` in `execute.before`. Agent overrides via `action: "configure"` are clamped to ceiling `50` (user config/CLI/env retain full authority). Resets to 0 on user chat intervention. |
+| `repeated_action_warning_threshold` | **`2`** | `--objectives-repeated-action-threshold <int>` | `OPENCODE_OBJECTIVES_REPEATED_ACTION_THRESHOLD` | Number of identical normalized tool actions (`READONLY_TOOLS`, `shell`, `execute`) or consecutive tool failures on the active Secondary Objective before emitting a tail-only `⚠️ [Stagnation Warning]` in `execute.after`. |
 | `search_attach_threshold` | **`0.68`** | `--objectives-search-attach-threshold <0..1>` | `OPENCODE_OBJECTIVES_SEARCH_ATTACH_THRESHOLD` | Similarity score (`0.0–1.0`) at or above which `add_finding` rejects a duplicate finding and requires `update_finding`. |
 | `search_novel_threshold` | **`0.55`** | `--objectives-search-novel-threshold <0..1>` | `OPENCODE_OBJECTIVES_SEARCH_NOVEL_THRESHOLD` | Similarity score (`0.0–1.0`) at or above which `add_finding` emits a similarity warning and automatically links `seeAlso`. |
 | `finding_min_chars` | **`15`** | `--objectives-finding-min-chars <int>` | `OPENCODE_OBJECTIVES_FINDING_MIN_CHARS` | Minimum character length required for finding `title`, `result`, and `nextAction` (anti-placeholder validation). |

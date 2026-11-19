@@ -114,6 +114,12 @@ export interface Precondition {
 export const SEARCH_ATTACH_THRESHOLD = 0.68
 export const SEARCH_NOVEL_THRESHOLD = 0.55
 
+/** Safe upper bound for agent-supplied maxActionsWithoutSync overrides via objective_manage(action: "configure"). */
+export const AGENT_CONFIG_MAX_ACTIONS_CEILING = 50
+/** Weighted sync-gate cost for pure read-only tools (vs 1.0 for effectful tools). */
+export const READONLY_ACTION_WEIGHT = 0.5
+export const EFFECTFUL_ACTION_WEIGHT = 1
+
 // ---------- Configurable Protocolo de Objetivos Parameters ----------
 
 export interface ObjectivesProtocolConfig {

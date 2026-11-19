@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
+import { Tool } from "@opencode/schema/tool"
 import {
   HierarchicalObjectivesPlugin,
   setPrimaryObjective,
@@ -12,6 +13,10 @@ import {
   getObjectives,
   clearSessionObjectives,
   actionsWithoutObjectiveSync,
+  activeCodeModeCalls,
+  consecutiveFailureCounts,
+  AGENT_CONFIG_MAX_ACTIONS_CEILING,
+  MAX_CONSECUTIVE_PROGRESS_NOTES,
   MAX_CONSECUTIVE_READS,
   MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC,
   DEFAULT_OBJECTIVES_CONFIG,
@@ -425,12 +430,13 @@ describe("hierarchical-objectives plugin", () => {
       const hook = toolHooks["execute.before"]?.[0]
       expect(hook).toBeDefined()
 
-      // Execute MAX_CONSECUTIVE_READS - 1 calls (should pass)
-      for (let i = 0; i < MAX_CONSECUTIVE_READS - 1; i++) {
+      // Pure read-only tools carry weight 0.5, so 2 * MAX_CONSECUTIVE_READS - 1 reads stay under threshold
+      const readsToThreshold = MAX_CONSECUTIVE_READS * 2
+      for (let i = 0; i < readsToThreshold - 1; i++) {
         await hook({ sessionID: sid, tool: "read" })
       }
 
-      // The MAX_CONSECUTIVE_READS-th call must reject to prevent loop without mutating event.system
+      // The threshold-reaching read call must reject to prevent loop without mutating event.system
       expect(() => hook({ sessionID: sid, tool: "read" })).toThrow("Objective Sync Warning")
     })
 
@@ -476,11 +482,11 @@ describe("hierarchical-objectives plugin", () => {
       expect(hook).toBeDefined()
       expect(promptHook).toBeDefined()
 
-      // 1. Without active PO (e.g. reconnaissance phase): actions accumulate
+      // 1. Without active PO (e.g. reconnaissance phase): weighted actions accumulate (read = 0.5)
       for (let i = 0; i < 5; i++) {
         await hook!({ sessionID: sid, tool: "read" })
       }
-      expect(actionsWithoutObjectiveSync.get(sid)).toBe(5)
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(2.5)
 
       // User intervenes in chat
       await promptHook!({ sessionID: sid, text: "Intervención de usuario previa a PO" })
@@ -530,10 +536,11 @@ describe("hierarchical-objectives plugin", () => {
         })
         expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(4)
 
-        // Unified counter counts both read and shell operations toward maxActionsWithoutSync (4)
+        // Weighted counter: read = 0.5, shell = 1.0 -> 0.5 + 1 + 0.5 + 1 + 1 = 4.0 triggers threshold (4)
         await hook!({ sessionID: sid, tool: "read" })
         await hook!({ sessionID: sid, tool: "shell" })
         await hook!({ sessionID: sid, tool: "read" })
+        await hook!({ sessionID: sid, tool: "shell" })
         expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow("Objective Sync Warning")
 
         // 3. CLI / SessionEnvironment override takes highest precedence
@@ -4090,12 +4097,13 @@ describe("hierarchical-objectives plugin", () => {
       const beforeHook = toolHooks["execute.before"]?.[0]
       expect(beforeHook).toBeDefined()
 
+      // 14 effectful actions stay under default threshold 15; 15th triggers warning
       for (let i = 0; i < 14; i++) {
-        await beforeHook!({ sessionID: mainSid, tool: "read" })
+        await beforeHook!({ sessionID: mainSid, tool: "shell" })
       }
 
       await expect(async () => {
-        await beforeHook!({ sessionID: mainSid, tool: "read" })
+        await beforeHook!({ sessionID: mainSid, tool: "shell" })
       }).toThrow("Objective Sync / Anti-Loop Warning")
     })
 
@@ -4566,6 +4574,460 @@ describe("hierarchical-objectives plugin", () => {
       expect(revokeRes.output.success).toBe(true)
       expect(getObjectives(sid)!.approvedByUser).toBe(false)
       expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+    })
+  })
+
+  describe("Sync Gate Improvements (Mode-Aware 2-Tier, Code Mode, note_progress, Stagnation, Configure Cap)", () => {
+    test("hydrates sessionObjectives in execute.before from session metadata so approved trees never fall into !po branch", async () => {
+      const { toolHooks, sessionStore, getRegisteredTool } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("hydrate-in-before")
+      const tool = getRegisteredTool()
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(beforeHook).toBeDefined()
+      expect(afterHook).toBeDefined()
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Hydration Recovery Task",
+          definitionOfDone: "Verified",
+          plannedSecondaryCount: 1,
+          config: { max_actions_without_sync: 3 },
+        },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        {
+          action: "add_secondary",
+          title: "Scan Outlook DOM pages",
+          rationale: "Collect matching items",
+          delegation: { mode: "main", justification: "Direct browser workflow in main session." },
+        },
+        { sessionID: sid },
+      )
+      const po = getObjectives(sid)!
+      po.approvedByUser = true
+      po.status = "exploring"
+      await tool.execute(
+        {
+          action: "update_secondary",
+          id: "SO-1",
+          status: "exploring",
+          delegation: { mode: "main", justification: "Direct browser workflow in main session." },
+        },
+        { sessionID: sid },
+      )
+      // Persist to mock session metadata, then simulate in-memory loss (restart/reload)
+      expect(sessionStore[sid]?.metadata?.objectives).toBeDefined()
+      clearSessionObjectives(sid)
+      expect(getObjectives(sid)).toBeUndefined()
+
+      // Run 3 effectful actions; execute.before must hydrate PO and emit Tier-1 advisory (NOT !po error)
+      for (let i = 0; i < 3; i++) {
+        await expect(beforeHook!({ sessionID: sid, tool: "shell", input: { command: `step ${i}` } })).resolves.toBeUndefined()
+      }
+      expect(getObjectives(sid)?.title).toBe("Hydration Recovery Task")
+      const afterEvent: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "step 2" },
+        status: "completed",
+        result: { content: "ok" },
+      }
+      await afterHook!(afterEvent)
+      expect(afterEvent.result.content).toContain("[Objective Sync Advisory")
+      expect(afterEvent.result.content).toContain("SO-1")
+      expect(afterEvent.result.content).not.toContain("ONLY during a brief initial reconnaissance phase")
+    })
+
+    test("Code Mode execute counts as 1 unit and inner tool calls sharing context.id never double-count or abort mid-script", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("codemode-single-unit")
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(beforeHook).toBeDefined()
+      expect(afterHook).toBeDefined()
+
+      const po = setPrimaryObjective(sid, "Browser Triage", "Done", undefined, {
+        approvedByUser: true,
+        config: { maxActionsWithoutSync: 4 },
+      })
+      addSecondaryObjective(sid, "Scrape Outlook threads", "Collect subjects", undefined, {
+        delegation: { mode: "main", justification: "Uses live browser tab." },
+      })
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "exploring",
+        delegation: { mode: "main", justification: "Uses live browser tab." },
+      })
+      expect(po.approvedByUser).toBe(true)
+
+      const callId = "call_codemode_1"
+      await beforeHook!({ sessionID: sid, tool: "execute", id: callId, input: { code: "await tools.browse.eval(...)" } })
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(1)
+      expect(activeCodeModeCalls.get(sid)?.has(callId)).toBe(true)
+
+      // 20 inner tool calls sharing the same callId must NOT increment or throw mid-script
+      for (let i = 0; i < 20; i++) {
+        await expect(
+          beforeHook!({ sessionID: sid, tool: "browse_eval", id: callId, input: { tab: 1 } }),
+        ).resolves.toBeUndefined()
+      }
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(1)
+
+      // Completing outer execute cleans up activeCodeModeCalls
+      await afterHook!({
+        sessionID: sid,
+        tool: "execute",
+        id: callId,
+        input: { code: "await tools.browse.eval(...)" },
+        status: "completed",
+        result: { content: [{ type: "text", text: "done" }] },
+      })
+      expect(activeCodeModeCalls.get(sid)).toBeUndefined()
+    })
+
+    test("execute.after appends guidance to Tool.Content[] arrays (Code Mode) and Tool.Error failure events", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("after-array-and-error")
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(afterHook).toBeDefined()
+
+      const po = setPrimaryObjective(sid, "Fix Script", "Done", undefined, { approvedByUser: true })
+      po.status = "exploring"
+      addSecondaryObjective(sid, "Run browser script", "Inspect DOM", undefined, {
+        delegation: { mode: "main", justification: "Direct inspection." },
+      })
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "exploring",
+        delegation: { mode: "main", justification: "Direct inspection." },
+      })
+
+      // 1. Code Mode execute returning Tool.Content[] with output.error = true
+      const arrayEvent: any = {
+        sessionID: sid,
+        tool: "execute",
+        id: "call_arr_1",
+        input: { code: "throw new Error('boom')" },
+        status: "completed",
+        result: {
+          output: { output: "Error: boom", toolCalls: [], files: [], error: true },
+          content: [{ type: "text", text: "Error: boom" }],
+        },
+      }
+      await afterHook!(arrayEvent)
+      expect(Array.isArray(arrayEvent.result.content)).toBe(true)
+      expect(arrayEvent.result.content.length).toBe(2)
+      expect(arrayEvent.result.content[1].text).toContain("[Protocol Guidance]")
+
+      // Reset consecutive failures with a clean call so next error tests Tool.Error path cleanly
+      await afterHook!({
+        sessionID: sid,
+        tool: "read",
+        input: { path: "foo.ts" },
+        status: "completed",
+        result: { content: "ok" },
+      })
+
+      // 2. Tool.Error failure channel (status === "error", no result field)
+      const errEvent: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "bad-cmd" },
+        status: "error",
+        error: new Tool.Error({ message: "Command failed" }),
+      }
+      await afterHook!(errEvent)
+      expect(errEvent.error).toBeInstanceOf(Tool.Error)
+      expect(errEvent.error.message).toContain("Command failed")
+      expect(errEvent.error.message).toContain("[Protocol Guidance]")
+    })
+
+    test("mode-aware 2-tier sync gate emits non-blocking Tier-1 advisory in execute.after and escalates to Tier-2 at 2x threshold", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("mode-aware-2tier")
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(beforeHook).toBeDefined()
+      expect(afterHook).toBeDefined()
+
+      setPrimaryObjective(sid, "Outlook Bulk Triage", "Done", undefined, {
+        approvedByUser: true,
+        config: { maxActionsWithoutSync: 3 },
+      })
+      addSecondaryObjective(sid, "Process inbox pages", "Triage unread messages", undefined, {
+        delegation: { mode: "main", justification: "Single browser session." },
+      })
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "exploring",
+        delegation: { mode: "main", justification: "Single browser session." },
+      })
+
+      // Calls 1..3: Tier 1 reached at 3 -> must NOT throw in execute.before!
+      for (let i = 1; i <= 3; i++) {
+        await expect(beforeHook!({ sessionID: sid, tool: "shell", input: { command: `cmd-${i}` } })).resolves.toBeUndefined()
+      }
+      const tier1After: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "cmd-3" },
+        status: "completed",
+        result: { content: "page 3 output" },
+      }
+      await afterHook!(tier1After)
+      expect(tier1After.result.content).toContain("page 3 output")
+      expect(tier1After.result.content).toContain('[Objective Sync Advisory — SO-1 ("Process inbox pages")]')
+      expect(tier1After.result.content).toContain("note_progress")
+
+      // Calls 4..5 still pass; Call 6 (2x threshold = 6) triggers Tier-2 hard escalation in execute.before
+      await beforeHook!({ sessionID: sid, tool: "shell", input: { command: "cmd-4" } })
+      await beforeHook!({ sessionID: sid, tool: "shell", input: { command: "cmd-5" } })
+      await expect(beforeHook!({ sessionID: sid, tool: "shell", input: { command: "cmd-6" } })).rejects.toThrow(
+        '[Objective Sync Warning — SO-1 ("Process inbox pages")]',
+      )
+      expect(actionsWithoutObjectiveSync.get(sid)).toBeUndefined()
+    })
+
+    test("approved plan with no exploring SO prompts transitioning next pending SO to exploring", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("approved-no-exploring-so")
+      const beforeHook = toolHooks["execute.before"]?.[0]
+
+      setPrimaryObjective(sid, "Refactor Module", "Done", undefined, {
+        approvedByUser: true,
+        config: { maxActionsWithoutSync: 2 },
+      })
+      addSecondaryObjective(sid, "Update parser", "Fix edge cases", undefined, {
+        delegation: { mode: "main", justification: "Small localized edit." },
+      })
+
+      await beforeHook!({ sessionID: sid, tool: "shell", input: { command: "echo 1" } })
+      await expect(beforeHook!({ sessionID: sid, tool: "shell", input: { command: "echo 2" } })).rejects.toThrow(
+        'Transition SO-1 ("Update parser") to \'exploring\'',
+      )
+    })
+
+    test("note_progress validates factual notes, persists to SO/TO and compaction snapshot, resets sync counter, and caps at 3 consecutive notes", async () => {
+      const { toolHooks, getRegisteredTool } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("note-progress-lifecycle")
+      const tool = getRegisteredTool()
+      const beforeHook = toolHooks["execute.before"]?.[0]
+
+      setPrimaryObjective(sid, "Long Extraction", "All pages processed", undefined, {
+        approvedByUser: true,
+        config: { maxActionsWithoutSync: 5 },
+      })
+      addSecondaryObjective(sid, "Extract 40 pages", "Gather report entries", undefined, {
+        delegation: { mode: "main", justification: "Sequential browser pagination." },
+      })
+
+      // Fails when no SO is exploring
+      const noExploring = await tool.execute(
+        { action: "note_progress", note: "Scanned 10/40 pages with 4 matching items." },
+        { sessionID: sid },
+      )
+      expect(noExploring.output.success).toBe(false)
+      expect(noExploring.content).toContain("No active objective in 'exploring' status")
+
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "exploring",
+        delegation: { mode: "main", justification: "Sequential browser pagination." },
+      })
+
+      // Rejects trivial / placeholder notes
+      const trivial = await tool.execute({ action: "note_progress", note: "still working" }, { sessionID: sid })
+      expect(trivial.output.success).toBe(false)
+      const placeholder = await tool.execute(
+        { action: "note_progress", note: "TODO finish remaining pages later" },
+        { sessionID: sid },
+      )
+      expect(placeholder.output.success).toBe(false)
+
+      // Accumulate unsynced actions, then call note_progress via execute.before + tool.execute
+      await beforeHook!({ sessionID: sid, tool: "shell", input: { command: "step1" } })
+      await beforeHook!({ sessionID: sid, tool: "shell", input: { command: "step2" } })
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(2)
+
+      await beforeHook!({ sessionID: sid, tool: "objective_manage", input: { action: "note_progress" } })
+      expect(actionsWithoutObjectiveSync.get(sid)).toBeUndefined()
+
+      const p1 = await tool.execute(
+        { action: "note_progress", note: "Scanned 15/40 pages; 6 matching threads collected." },
+        { sessionID: sid },
+      )
+      expect(p1.output.success).toBe(true)
+      expect(p1.output.tree).toBe("")
+      expect(p1.content).toContain("Progress noted on SO-1 (1/3)")
+
+      const po = getObjectives(sid)!
+      expect(po.secondaries[0].lastProgressNote).toBe("Scanned 15/40 pages; 6 matching threads collected.")
+      expect(renderObjectiveTree(po)).toContain("📝 *Progress:* Scanned 15/40 pages; 6 matching threads collected.")
+      expect(formatCompactionObjectivesInput(po)).toContain(
+        "[Progress: Scanned 15/40 pages; 6 matching threads collected.]",
+      )
+
+      // 2nd and 3rd consecutive notes succeed; 4th is rejected by consecutive cap
+      const p2 = await tool.execute(
+        { action: "note_progress", note: "Scanned 25/40 pages; 9 matching threads collected." },
+        { sessionID: sid },
+      )
+      expect(p2.output.success).toBe(true)
+      const p3 = await tool.execute(
+        { action: "note_progress", note: "Scanned 35/40 pages; 11 matching threads collected." },
+        { sessionID: sid },
+      )
+      expect(p3.output.success).toBe(true)
+      expect(p3.content).toContain(`final consecutive checkpoint ${MAX_CONSECUTIVE_PROGRESS_NOTES}/${MAX_CONSECUTIVE_PROGRESS_NOTES}`)
+
+      const p4 = await tool.execute(
+        { action: "note_progress", note: "Scanned 38/40 pages; 12 matching threads collected." },
+        { sessionID: sid },
+      )
+      expect(p4.output.success).toBe(false)
+      expect(p4.content).toContain("Progress checkpoint cap reached")
+
+      // Adding a tertiary resets the consecutive cap on the parent SO
+      addTertiaryObjective(sid, "SO-1", "Process final 5 pages", "Split remaining batch", undefined, {
+        delegation: { mode: "main", justification: "Short final batch." },
+      })
+      const pAfterSplit = await tool.execute(
+        { action: "note_progress", id: "SO-1", note: "Split final batch into SO-1-T1; 35/40 pages already stored." },
+        { sessionID: sid },
+      )
+      expect(pAfterSplit.output.success).toBe(true)
+      expect(pAfterSplit.content).toContain("(1/3)")
+    })
+
+    test("F-9 stagnation detects repeated shell/execute signatures and consecutive failures via execute.after without false positives on distinct read slices", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("stagnation-detection")
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(afterHook).toBeDefined()
+
+      setPrimaryObjective(sid, "Debug Pipeline", "Done", undefined, { approvedByUser: true })
+      addSecondaryObjective(sid, "Inspect logs and test", "Locate failure", undefined, {
+        delegation: { mode: "main", justification: "Direct debugging." },
+      })
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "exploring",
+        delegation: { mode: "main", justification: "Direct debugging." },
+      })
+
+      // 1. Distinct read slices of the same file must NOT trigger stagnation warning
+      const r1: any = {
+        sessionID: sid,
+        tool: "read",
+        input: { path: "big.ts", offset: 1, limit: 100 },
+        status: "completed",
+        result: { content: "slice 1" },
+      }
+      const r2: any = {
+        sessionID: sid,
+        tool: "read",
+        input: { path: "big.ts", offset: 101, limit: 100 },
+        status: "completed",
+        result: { content: "slice 2" },
+      }
+      await afterHook!(r1)
+      await afterHook!(r2)
+      expect(r2.result.content).not.toContain("[Stagnation Warning]")
+
+      // 2. Repeated identical shell command triggers immediate tail-only Stagnation Warning
+      const sh1: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "bun test auth.test.ts" },
+        status: "completed",
+        result: { content: "ok", output: { exitCode: 0 } },
+      }
+      const sh2: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "bun  test   auth.test.ts" },
+        status: "completed",
+        result: { content: "ok", output: { exitCode: 0 } },
+      }
+      await afterHook!(sh1)
+      await afterHook!(sh2)
+      expect(sh2.result.content).toContain("⚠️ [Stagnation Warning]")
+      expect(sh2.result.content).toContain("shell:bun test auth.test.ts")
+
+      // 3. Repeated identical Code Mode execute triggers immediate Stagnation Warning on Tool.Content[]
+      const ex1: any = {
+        sessionID: sid,
+        tool: "execute",
+        id: "call_e1",
+        input: { code: "return await tools.browse.snapshot({ tab: 1 })" },
+        status: "completed",
+        result: { content: [{ type: "text", text: "tree" }], output: { output: "tree", toolCalls: [], files: [] } },
+      }
+      const ex2: any = {
+        sessionID: sid,
+        tool: "execute",
+        id: "call_e2",
+        input: { code: "return await tools.browse.snapshot({ tab: 1 })" },
+        status: "completed",
+        result: { content: [{ type: "text", text: "tree" }], output: { output: "tree", toolCalls: [], files: [] } },
+      }
+      await afterHook!(ex1)
+      await afterHook!(ex2)
+      expect(ex2.result.content.some((p: any) => p.text?.includes("[Stagnation Warning]"))).toBe(true)
+
+      // 4. Two consecutive failures trigger consecutive-failure Stagnation Warning, and clean success resets streak
+      const f1: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "cmd-a" },
+        status: "completed",
+        result: { content: "error: failed A", output: { exitCode: 1 } },
+      }
+      const f2: any = {
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "cmd-b" },
+        status: "completed",
+        result: { content: "error: failed B", output: { exitCode: 1 } },
+      }
+      await afterHook!(f1)
+      expect(consecutiveFailureCounts.get(sid)).toBe(1)
+      expect(f1.result.content).toContain("[Protocol Guidance]")
+      await afterHook!(f2)
+      expect(consecutiveFailureCounts.get(sid)).toBe(2)
+      expect(f2.result.content).toContain("⚠️ [Stagnation Warning]: 2 consecutive tool failures")
+
+      await afterHook!({
+        sessionID: sid,
+        tool: "shell",
+        input: { command: "cmd-c" },
+        status: "completed",
+        result: { content: "all good", output: { exitCode: 0 } },
+      })
+      expect(consecutiveFailureCounts.get(sid)).toBeUndefined()
+    })
+
+    test("configure action clamps agent-supplied maxActionsWithoutSync to safe ceiling while preserving CLI/env override authority", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("configure-cap")
+      const tool = getRegisteredTool()
+
+      try {
+        const res = await tool.execute(
+          { action: "configure", config: { max_actions_without_sync: 9999 } },
+          { sessionID: sid },
+        )
+        expect(res.output.success).toBe(true)
+        expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(AGENT_CONFIG_MAX_ACTIONS_CEILING)
+        expect(res.content).toContain(`clamped maxActionsWithoutSync from 9999 to safe agent ceiling ${AGENT_CONFIG_MAX_ACTIONS_CEILING}`)
+
+        // User CLI/env override still takes precedence above the agent ceiling
+        setSessionObjectivesEnv(sid, {
+          OPENCODE_OBJECTIVES_CLI_OVERRIDES: JSON.stringify({ max_actions_without_sync: 80 }),
+        })
+        expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(80)
+      } finally {
+        setSessionObjectivesConfig(sid, undefined)
+        setSessionObjectivesEnv(sid, undefined)
+      }
     })
   })
 

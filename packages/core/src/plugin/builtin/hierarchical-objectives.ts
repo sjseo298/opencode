@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto"
 import { Plugin as OpenCodePlugin } from "@opencode/plugin"
+import { Tool } from "@opencode/schema/tool"
 import { Schema } from "effect"
 import {
   type ActionEntry,
@@ -13,6 +15,9 @@ import {
   type Precondition,
   FINDING_EVIDENCE_TYPES,
   type FindingStatus,
+  AGENT_CONFIG_MAX_ACTIONS_CEILING,
+  READONLY_ACTION_WEIGHT,
+  EFFECTFUL_ACTION_WEIGHT,
   DEFAULT_OBJECTIVES_CONFIG,
   type ObjectivesProtocolConfig,
   getObjectivesConfig,
@@ -39,6 +44,9 @@ import { autoConfigureEmbeddingsScorer, warmUpFindingsEmbeddings } from "./objec
 // F-7: public swap point — an embeddings backend replaces the default dependency-free lexical scorer.
 export {
   setFindingScorer,
+  AGENT_CONFIG_MAX_ACTIONS_CEILING,
+  READONLY_ACTION_WEIGHT,
+  EFFECTFUL_ACTION_WEIGHT,
   DEFAULT_OBJECTIVES_CONFIG,
   getObjectivesConfig,
   setGlobalObjectivesConfig,
@@ -82,6 +90,9 @@ export interface TertiaryObjective {
   delegation?: DelegationAssessment // Assessment of whether this sub-objective is delegated or executed in the main thread
   blocker?: string // Concrete symptom, obstacle, or root cause if blocked
   validationProof?: string // Verifiable test output, exit code, or command evidence
+  lastProgressNote?: string // Latest factual progress checkpoint note (persisted for compaction & sidebar)
+  lastProgressAt?: number // Timestamp of last progress checkpoint
+  consecutiveProgressNotes?: number // Consecutive note_progress calls without structural updates (capped)
   createdAt: number
   updatedAt: number
 }
@@ -94,6 +105,9 @@ export interface SecondaryObjective {
   delegation?: DelegationAssessment // Assessment of whether this SO is delegated to a subagent or executed in the main thread
   blocker?: string // Concrete symptom, obstacle, or root cause if blocked
   validationProof?: string // Verifiable test output, exit code, or command evidence
+  lastProgressNote?: string // Latest factual progress checkpoint note (persisted for compaction & sidebar)
+  lastProgressAt?: number // Timestamp of last progress checkpoint
+  consecutiveProgressNotes?: number // Consecutive note_progress calls without structural updates (capped)
   children?: TertiaryObjective[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
   affectedResources?: AffectedResources // Blast radius: files/envs/schemas/services this SO may touch
   preconditions?: Precondition[] // Declarative gates: actionClass -> required tokens/scripts before it counts toward proof
@@ -170,6 +184,149 @@ export const antiLoopWarnings = new Map<string, string>()
 // Action tracking for objective tree continuous sync enforcement
 export const actionsWithoutObjectiveSync = new Map<string, number>()
 export const MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC = DEFAULT_OBJECTIVES_CONFIG.maxActionsWithoutSync
+
+// Pending Tier-1 non-blocking sync advisories queued in execute.before and appended in execute.after
+export const pendingSyncAdvisories = new Map<string, string>()
+
+// Consecutive tool failure counts per session for stagnation detection (F-9)
+export const consecutiveFailureCounts = new Map<string, number>()
+
+function getSyncActionWeight(tool: string): number {
+  return READONLY_TOOLS.has(tool) ? READONLY_ACTION_WEIGHT : EFFECTFUL_ACTION_WEIGHT
+}
+
+function addWeightedActionCount(prev: number, weight: number): number {
+  return Math.round((prev + weight) * 100) / 100
+}
+
+function findActiveExecutionTarget(po: PrimaryObjective): {
+  activeSO?: SecondaryObjective
+  activeTO?: TertiaryObjective
+  nextPendingSO?: SecondaryObjective
+} {
+  const activeSO = po.secondaries.find((s) => s.status === "exploring")
+  const activeTO = activeSO?.children?.find((t) => t.status === "exploring")
+  const nextPendingSO = po.secondaries.find((s) => s.status === "pending")
+  return { activeSO, activeTO, nextPendingSO }
+}
+
+function formatTargetLabel(activeSO: SecondaryObjective, activeTO?: TertiaryObjective): { id: string; label: string } {
+  if (activeTO) {
+    return {
+      id: activeTO.id,
+      label: `${activeTO.id} ("${activeTO.title}") under ${activeSO.id}`,
+    }
+  }
+  return {
+    id: activeSO.id,
+    label: `${activeSO.id} ("${activeSO.title}")`,
+  }
+}
+
+function buildTier1SyncAdvisory(
+  activeSO: SecondaryObjective,
+  activeTO: TertiaryObjective | undefined,
+  unsyncedScore: number,
+): string {
+  const target = formatTargetLabel(activeSO, activeTO)
+  return (
+    `💡 [Objective Sync Advisory — ${target.label}]: You have accumulated ${unsyncedScore} weighted actions without checkpointing progress. ` +
+    `Do NOT re-plan and do NOT invent filler findings. Choose the matching update for ${target.id}: ` +
+    `(1) call objective_manage(action: 'note_progress', note: '<factual 1-line progress>') to checkpoint ongoing work, ` +
+    `(2) resolve ${target.id} with 'validationProof' if done, ` +
+    `(3) split with 'add_tertiary' if scope grew too large, or ` +
+    `(4) call 'add_finding' ONLY if a genuine new blocker/fact emerged.`
+  )
+}
+
+function buildTier2SyncEscalation(
+  activeSO: SecondaryObjective,
+  activeTO: TertiaryObjective | undefined,
+  unsyncedScore: number,
+  threshold: number,
+): string {
+  const target = formatTargetLabel(activeSO, activeTO)
+  return (
+    `⚠️ [Objective Sync Warning — ${target.label}]: You reached ${unsyncedScore} weighted actions (2x threshold ${threshold}) without syncing after the Tier-1 advisory. ` +
+    `Do NOT re-plan and do NOT invent filler findings. Checkpoint ${target.id} now via 'note_progress', resolve it with 'validationProof', ` +
+    `split via 'add_tertiary', or register a real blocker with 'add_finding' before continuing. ` +
+    `Do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`
+  )
+}
+
+// Track active outer Code Mode (`execute`) call IDs per session so inner tool calls
+// sharing the same context.id do not double-count or abort mid-script on sync checks.
+export const activeCodeModeCalls = new Map<string, Set<string>>()
+
+function isInnerCodeModeCall(sessionID: string, tool: string, callId?: unknown): boolean {
+  if (tool === "execute" || typeof callId !== "string" || callId.length === 0) return false
+  return activeCodeModeCalls.get(sessionID)?.has(callId) === true
+}
+
+function registerCodeModeCall(sessionID: string, callId?: unknown): void {
+  if (typeof callId !== "string" || callId.length === 0) return
+  let active = activeCodeModeCalls.get(sessionID)
+  if (!active) {
+    active = new Set<string>()
+    activeCodeModeCalls.set(sessionID, active)
+  }
+  active.add(callId)
+}
+
+function unregisterCodeModeCall(sessionID: string, callId?: unknown): void {
+  if (typeof callId !== "string" || callId.length === 0) return
+  const active = activeCodeModeCalls.get(sessionID)
+  if (!active) return
+  active.delete(callId)
+  if (active.size === 0) activeCodeModeCalls.delete(sessionID)
+}
+
+function extractAfterEventText(event: any): string {
+  const content = event?.result?.content
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    return content
+      .filter((item: any) => item?.type === "text" && typeof item.text === "string")
+      .map((item: any) => item.text)
+      .join("\n")
+  }
+  if (typeof event?.error?.message === "string") return event.error.message
+  return ""
+}
+
+function appendAfterEventGuidance(event: any, guidance: string, dedupMarker: string): boolean {
+  if (!event) return false
+  if (event.status === "error" && event.error) {
+    const err = event.error
+    if (typeof err.message !== "string" || err.message.includes(dedupMarker)) return false
+    const updatedMessage = `${err.message}\n\n${guidance}`
+    if (err instanceof Tool.Error) {
+      event.error = new Tool.Error({
+        message: updatedMessage,
+        ...(err.error !== undefined ? { error: err.error } : {}),
+        ...(err.metadata !== undefined ? { metadata: err.metadata } : {}),
+      })
+    } else {
+      err.message = updatedMessage
+    }
+    return true
+  }
+  if (!event.result) return false
+  if (typeof event.result.content === "string") {
+    if (event.result.content.includes(dedupMarker)) return false
+    event.result.content += `\n\n${guidance}`
+    return true
+  }
+  if (Array.isArray(event.result.content)) {
+    const alreadyPresent = event.result.content.some(
+      (item: any) => item?.type === "text" && typeof item.text === "string" && item.text.includes(dedupMarker),
+    )
+    if (alreadyPresent) return false
+    event.result.content = [...event.result.content, { type: "text", text: guidance }]
+    return true
+  }
+  return false
+}
 
 export const isTestEnvironment = () =>
   typeof process !== "undefined" &&
@@ -276,6 +433,9 @@ export function clearSessionObjectives(sessionID: string) {
   antiLoopWarnings.delete(sessionID)
   actionWarnings.delete(sessionID)
   actionsWithoutObjectiveSync.delete(sessionID)
+  pendingSyncAdvisories.delete(sessionID)
+  consecutiveFailureCounts.delete(sessionID)
+  activeCodeModeCalls.delete(sessionID)
   postCloseSecondaryRemindedSessions.delete(sessionID)
 }
 
@@ -775,6 +935,7 @@ export function updateSecondaryObjective(
   }
 
   const now = Date.now()
+  target.consecutiveProgressNotes = 0
   target.updatedAt = now
   po.updatedAt = now
   persistSessionObjectives(sessionID)
@@ -872,6 +1033,7 @@ export function addTertiaryObjective(
     parent.updatedAt = now
   }
 
+  parent.consecutiveProgressNotes = 0
   po.updatedAt = now
   persistSessionObjectives(sessionID)
   return { success: true, objective: tertiary }
@@ -999,10 +1161,111 @@ export function updateTertiaryObjective(
   }
 
   const now = Date.now()
+  target.consecutiveProgressNotes = 0
   target.updatedAt = now
   po.updatedAt = now
   persistSessionObjectives(sessionID)
   return { success: true, objective: target, poReopened, parentReopened }
+}
+
+export const MAX_CONSECUTIVE_PROGRESS_NOTES = 3
+
+const TRIVIAL_PROGRESS_RE =
+  /^(still\s+working|working\s+on\s+it|in\s+progress|continuing|progress\s+update|checking|almost\s+done|keep\s+going|making\s+progress|updating)\.?$/i
+
+export function noteObjectiveProgress(
+  sessionID: string,
+  note: string,
+  targetId?: string,
+): {
+  success: boolean
+  error?: string
+  targetId?: string
+  count?: number
+  limit?: number
+  message?: string
+} {
+  const po = sessionObjectives.get(sessionID)
+  if (!po) {
+    return { success: false, error: `No active objective tree found for session ${sessionID}.` }
+  }
+
+  let target: SecondaryObjective | TertiaryObjective | undefined
+  if (targetId && targetId.trim()) {
+    const cleanId = targetId.trim().toLowerCase()
+    for (const so of po.secondaries) {
+      if (so.id.toLowerCase() === cleanId) {
+        target = so
+        break
+      }
+      const child = (so.children ?? []).find((t) => t.id.toLowerCase() === cleanId)
+      if (child) {
+        target = child
+        break
+      }
+    }
+    if (!target) {
+      return { success: false, error: `Objective '${targetId}' not found.` }
+    }
+    if (target.status !== "exploring") {
+      return {
+        success: false,
+        error: `Cannot record progress on ${target.id} (status: '${target.status}'). Progress checkpoints require an objective in 'exploring' status.`,
+      }
+    }
+  } else {
+    const active = findActiveExecutionTarget(po)
+    target = active.activeTO ?? active.activeSO
+    if (!target) {
+      const hint = active.nextPendingSO
+        ? ` Transition ${active.nextPendingSO.id} to 'exploring' via 'update_secondary' first.`
+        : ""
+      return {
+        success: false,
+        error: `No active objective in 'exploring' status to attach progress to.${hint}`,
+      }
+    }
+  }
+
+  const trimmed = (note ?? "").trim()
+  const minChars = getObjectivesConfig(sessionID).findingMinChars
+  if (!trimmed || trimmed.length < minChars || isPlaceholder(trimmed) || TRIVIAL_PROGRESS_RE.test(trimmed)) {
+    return {
+      success: false,
+      error: `note_progress requires a concrete factual progress note (>= ${minChars} non-placeholder characters, e.g. 'Scanned 20/40 Outlook pages; 12 matching threads collected'). Trivial or placeholder notes are rejected.`,
+    }
+  }
+
+  const nextCount = (target.consecutiveProgressNotes ?? 0) + 1
+  if (nextCount > MAX_CONSECUTIVE_PROGRESS_NOTES) {
+    return {
+      success: false,
+      error:
+        `Progress checkpoint cap reached (${MAX_CONSECUTIVE_PROGRESS_NOTES}/${MAX_CONSECUTIVE_PROGRESS_NOTES} consecutive notes on ${target.id}): ` +
+        `do not keep checkpointing indefinitely. Resolve ${target.id} with 'validationProof', split it into smaller subtasks via 'add_tertiary', or register a real blocker with 'add_finding'.`,
+    }
+  }
+
+  const now = Date.now()
+  target.lastProgressNote = trimmed
+  target.lastProgressAt = now
+  target.consecutiveProgressNotes = nextCount
+  target.updatedAt = now
+  po.updatedAt = now
+  persistSessionObjectives(sessionID)
+
+  const capHint =
+    nextCount === MAX_CONSECUTIVE_PROGRESS_NOTES
+      ? ` (final consecutive checkpoint ${nextCount}/${MAX_CONSECUTIVE_PROGRESS_NOTES} — next update should resolve ${target.id}, split via 'add_tertiary', or register a real finding)`
+      : ""
+  const message = `✓ Progress noted on ${target.id} (${nextCount}/${MAX_CONSECUTIVE_PROGRESS_NOTES}): ${trimmed}${capHint}`
+  return {
+    success: true,
+    targetId: target.id,
+    count: nextCount,
+    limit: MAX_CONSECUTIVE_PROGRESS_NOTES,
+    message,
+  }
 }
 
 // ---------- Epistemic layer: findings, options, DoD, fingerprints (F-2..F-5, F-7) ----------
@@ -1146,6 +1409,13 @@ export function addFinding(
     updatedAt: now,
   }
   po.findings.push(finding)
+  const owningSO = po.secondaries.find((s) => s.id.toLowerCase() === finding.soRef.toLowerCase())
+  if (owningSO) {
+    owningSO.consecutiveProgressNotes = 0
+    for (const child of owningSO.children ?? []) {
+      if (child.status === "exploring") child.consecutiveProgressNotes = 0
+    }
+  }
   po.updatedAt = now
   persistSessionObjectives(sessionID)
 
@@ -1420,25 +1690,28 @@ export function setDoDCriteria(
   return { success: true, dod: po.dod }
 }
 
-// F-9: record a normalized read action against the active SO; repeat keys queue a warning.
-function recordToolAction(sessionID: string, tool: string, input: any): void {
+// F-9: record a normalized action against the active SO; repeat keys queue and return a stagnation warning.
+function recordToolAction(sessionID: string, tool: string, input: any): string | undefined {
   const po = sessionObjectives.get(sessionID)
-  if (!po) return
+  if (!po) return undefined
   const active =
     po.secondaries.find((s) => s.status === "exploring") ?? po.secondaries.find((s) => s.status === "pending")
-  if (!active) return
+  if (!active) return undefined
 
   const normalizedKey = normalizeToolActionKey(tool, input)
   active.actionLog ??= []
   const entry = active.actionLog.find((e) => e.normalizedKey === normalizedKey)
+  let stagnationWarning: string | undefined
   if (entry) {
     entry.count += 1
     entry.lastAt = Date.now()
     const repeatThreshold = getObjectivesConfig(sessionID).repeatedActionWarningThreshold
     if (entry.count >= repeatThreshold) {
-      const warnings = actionWarnings.get(sessionID) ?? []
-      const warning = `Repeated action on ${active.id}: ${normalizedKey} executed ${entry.count} times. Value-first check: does skipping it change the known conclusion? If not, stop repeating it.`
-      if (!warnings.includes(warning)) warnings.push(warning)
+      const warnings = (actionWarnings.get(sessionID) ?? []).filter(
+        (existing) => !existing.startsWith(`Repeated action on ${active.id}: ${normalizedKey} executed `),
+      )
+      stagnationWarning = `Repeated action on ${active.id}: ${normalizedKey} executed ${entry.count} times. Value-first check: does skipping it change the known conclusion? If not, stop repeating it.`
+      warnings.push(stagnationWarning)
       actionWarnings.set(sessionID, warnings)
     }
   } else {
@@ -1446,13 +1719,20 @@ function recordToolAction(sessionID: string, tool: string, input: any): void {
   }
   po.updatedAt = Date.now()
   persistSessionObjectives(sessionID)
+  return stagnationWarning
 }
 
 function normalizeToolActionKey(tool: string, input: any): string {
   const value = (key: string) => (typeof input?.[key] === "string" ? input[key] : "")
+  const collapseWhitespace = (text: string) => text.trim().replace(/\s+/g, " ")
   switch (tool) {
-    case "read":
-      return `read:${value("path")}`
+    case "read": {
+      const path = value("path")
+      const offset = typeof input?.offset === "number" ? input.offset : undefined
+      const limit = typeof input?.limit === "number" ? input.limit : undefined
+      const range = offset !== undefined || limit !== undefined ? `@${offset ?? ""}:${limit ?? ""}` : ""
+      return `read:${path}${range}`
+    }
     case "list":
       return `list:${value("path")}`
     case "glob":
@@ -1463,6 +1743,16 @@ function normalizeToolActionKey(tool: string, input: any): string {
       return `websearch:${value("query")}`
     case "webfetch":
       return `webfetch:${value("url")}`
+    case "shell": {
+      const cmd = collapseWhitespace(value("command")).slice(0, 140)
+      const wd = value("workdir").trim()
+      return wd ? `shell:${cmd}@${wd}` : `shell:${cmd}`
+    }
+    case "execute": {
+      const code = collapseWhitespace(value("code"))
+      const digest = createHash("sha256").update(code).digest("hex").slice(0, 16)
+      return `execute:${digest}`
+    }
     default:
       try {
         return `${tool}:${JSON.stringify(input ?? {}).slice(0, 120)}`
@@ -2021,6 +2311,9 @@ export function renderObjectiveTree(po: PrimaryObjective, opts?: RenderObjective
         if (so.blocker) {
           lines.push(`  - ⚠️ *Blocker:* ${so.blocker}`)
         }
+        if (so.lastProgressNote && so.status === "exploring") {
+          lines.push(`  - 📝 *Progress:* ${so.lastProgressNote}`)
+        }
         if (so.validationProof) {
           const proofText = isCompact && !isFocusedSO ? truncateText(so.validationProof, 240) : so.validationProof
           lines.push(`  - ✅ *Validation Proof:* ${proofText}`)
@@ -2047,6 +2340,9 @@ export function renderObjectiveTree(po: PrimaryObjective, opts?: RenderObjective
           }
           if (t.blocker) {
             lines.push(`    - ⚠️ *Blocker:* ${t.blocker}`)
+          }
+          if (t.lastProgressNote && t.status === "exploring") {
+            lines.push(`    - 📝 *Progress:* ${t.lastProgressNote}`)
           }
           if (t.validationProof) {
             const tProof = isCompact && !isFocusedTO ? truncateText(t.validationProof, 240) : t.validationProof
@@ -2157,7 +2453,8 @@ export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
   const objectiveLines = (line: string, s: SecondaryObjective): string[] => [
     line,
     ...(s.children ?? []).map(
-      (t) => `  - [${t.id}] [${t.status.toUpperCase()}] ${t.title}${t.validationProof ? ` (Proof: ${t.validationProof})` : ""}`,
+      (t) =>
+        `  - [${t.id}] [${t.status.toUpperCase()}] ${t.title}${t.lastProgressNote && t.status === "exploring" ? ` (Progress: ${t.lastProgressNote})` : ""}${t.validationProof ? ` (Proof: ${t.validationProof})` : ""}`,
     ),
   ]
 
@@ -2184,7 +2481,12 @@ export function formatCompactionObjectivesInput(po: PrimaryObjective): string {
     "",
     "### Active / Exploring Objectives",
     ...(active.length > 0
-      ? active.flatMap((s) => objectiveLines(`- [${s.id}] [EXPLORING] ${s.title} (Rationale: ${s.rationale})`, s))
+      ? active.flatMap((s) =>
+          objectiveLines(
+            `- [${s.id}] [EXPLORING] ${s.title} (Rationale: ${s.rationale})${s.lastProgressNote ? ` [Progress: ${s.lastProgressNote}]` : ""}`,
+            s,
+          ),
+        )
       : ["- (none)"]),
     "",
     "### Blocked Objectives",
@@ -2749,6 +3051,7 @@ const ObjectiveActionSchema = Schema.Union([
   Schema.Literal("unapprove_plan"),
   Schema.Literal("handoff_plan"),
   Schema.Literal("checkpoint"),
+  Schema.Literal("note_progress"),
   Schema.Literal("audit"),
   Schema.Literal("configure"),
   Schema.Literal("list"),
@@ -2922,7 +3225,7 @@ export const ObjectiveInputSchema = Schema.Struct({
   action: ObjectiveActionSchema.pipe(
     Schema.annotate({
       description:
-        "Action to perform: 'set_primary' (establish Primary Objective and declare plannedSecondaryCount), 'complete_primary' (close resolved Primary Objective), 'add_secondary' (add a single secondary objective), 'update_secondary' (update a single secondary objective), 'add_tertiary' (add a single tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage a single tertiary: 'id' is the TO's own id), 'add_finding'/'update_finding'/'search_findings' (add a single epistemic finding F-NNN with typed evidence), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod'/'proof_dod' (decomposed Definition of Done criteria and direct proof attaching), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), or 'list'. Secondaries and findings must be added strictly one by one using top-level properties; array inputs are removed. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef. When an objective tree is active, call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
+        "Action to perform: 'set_primary' (establish Primary Objective and declare plannedSecondaryCount), 'complete_primary' (close resolved Primary Objective), 'add_secondary' (add a single secondary objective), 'update_secondary' (update a single secondary objective), 'add_tertiary' (add a single tertiary sub-objective under an SO: 'id' is the PARENT SO id), 'update_tertiary' (manage a single tertiary: 'id' is the TO's own id), 'note_progress' (lightweight factual 1-line progress checkpoint on the active exploring SO/TO, max 3 consecutive), 'add_finding'/'update_finding'/'search_findings' (add a single epistemic finding F-NNN with typed evidence), 'add_option'/'update_option' (multi-candidate options with a live Result column), 'add_fingerprint' (blocker fingerprints), 'update_dod'/'proof_dod' (decomposed Definition of Done criteria and direct proof attaching), 'export_tree' (serialized document + rendered projection), 'import_tree' (hydrate from topicKey or serialized tree), 'sync' (rehydrate from the persistent store after compaction/resume), 'present_plan'/'resume_plan'/'checkpoint' (plan pause and phase checkpoints), 'audit' (run the compliance audit on demand), 'configure' (inspect or adjust bounded session thresholds), or 'list'. Secondaries and findings must be added strictly one by one using top-level properties; array inputs are removed. An SO cannot be resolved while any of its tertiary sub-objectives is open; the PO cannot close until every SO and TO is closed and every DoD criterion has a proofRef. When an objective tree is active, call to update and reconcile objectives before delivering the final response to the user, and immediately after compaction.",
     }),
   ),
   title: Schema.optional(
@@ -3145,7 +3448,10 @@ export const ObjectiveInputSchema = Schema.Struct({
   ),
   note: Schema.optional(
     Schema.NullOr(Schema.String).pipe(
-      Schema.annotate({ description: "Free-form note for 'resume_plan' (user's instruction) or 'checkpoint' (phase label)" }),
+      Schema.annotate({
+        description:
+          "Note for 'note_progress' (concrete factual 1-line progress >=15 chars), 'resume_plan' (user's instruction), or 'checkpoint' (phase label)",
+      }),
     ),
   ),
   delegation: Schema.optional(
@@ -3308,6 +3614,7 @@ const PAUSED_MUTATING_ACTIONS = new Set([
   "add_fingerprint",
   "update_dod",
   "proof_dod",
+  "note_progress",
   "import_tree",
   "complete_primary",
   "resolve_primary",
@@ -3469,8 +3776,20 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
   const rawAction = String(input.action || "").toLowerCase()
   const po = sessionObjectives.get(sessionID)
 
+  let configClampedNote = ""
   if (input.config && typeof input.config === "object") {
     const parsedCfg = normalizeObjectivesConfigInput(input.config)
+    if (!isTestEnvironment()) {
+      delete parsedCfg.unattended
+    }
+    if (
+      parsedCfg.maxActionsWithoutSync !== undefined &&
+      parsedCfg.maxActionsWithoutSync > AGENT_CONFIG_MAX_ACTIONS_CEILING
+    ) {
+      const requested = parsedCfg.maxActionsWithoutSync
+      parsedCfg.maxActionsWithoutSync = AGENT_CONFIG_MAX_ACTIONS_CEILING
+      configClampedNote = ` (clamped maxActionsWithoutSync from ${requested} to safe agent ceiling ${AGENT_CONFIG_MAX_ACTIONS_CEILING}; use user config/CLI/env for higher limits)`
+    }
     if (Object.keys(parsedCfg).length > 0) {
       setSessionObjectivesConfig(sessionID, parsedCfg)
       if (po) {
@@ -3482,7 +3801,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 
   if (rawAction === "configure") {
     const currentCfg = getObjectivesConfig(sessionID)
-    const msg = `Objectives Protocol configuration for session '${sessionID}': ${JSON.stringify(currentCfg)}`
+    const msg = `Objectives Protocol configuration for session '${sessionID}': ${JSON.stringify(currentCfg)}${configClampedNote}`
     return {
       output: {
         success: true,
@@ -4656,6 +4975,29 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     return { output: { success: true, message, tree }, content: tree }
   }
 
+  if (rawAction === "note_progress") {
+    const approvalError = checkPlanApprovalGuard(po, "exploring", sessionID, "note_progress")
+    if (approvalError) {
+      return {
+        output: { success: false, message: approvalError, tree: treeOf(sessionID) },
+        content: approvalError,
+      }
+    }
+    const noted = noteObjectiveProgress(sessionID, String(input.note ?? ""), typeof input.id === "string" ? input.id : undefined)
+    if (!noted.success) {
+      const errMsg = noted.error || "Failed to note progress."
+      return {
+        output: { success: false, message: errMsg, tree: "" },
+        content: errMsg,
+      }
+    }
+    const ack = noted.message || `✓ Progress noted on ${noted.targetId}.`
+    return {
+      output: { success: true, message: ack, tree: "" },
+      content: ack,
+    }
+  }
+
   if (rawAction === "checkpoint") {
     const checkpoint = makeCheckpoint(sessionID, input.note)
     if (!checkpoint.success) {
@@ -4787,11 +5129,14 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
 
         // Reset unsynced consecutive action and read counters whenever the user intervenes in chat
         actionsWithoutObjectiveSync.delete(sessionID)
+        pendingSyncAdvisories.delete(sessionID)
         consecutiveReadCounts.delete(sessionID)
+        consecutiveFailureCounts.delete(sessionID)
         antiLoopWarnings.delete(sessionID)
         actionWarnings.delete(sessionID)
+        activeCodeModeCalls.delete(sessionID)
 
-        const po = sessionObjectives.get(sessionID)
+        const po = sessionObjectives.get(sessionID) ?? (await hydrateSessionObjectives(sessionID))
         if (!po) return
 
         const rawText =
@@ -4963,6 +5308,10 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       const sessionID = event.sessionID
       if (!sessionID) return
       if (await isSubagentSession(sessionID)) return
+
+      // Hydrate from persistent store / session metadata if not yet in memory so guards
+      // and sync messages never fall back to the !po branch when an objective tree exists.
+      const po = sessionObjectives.get(sessionID) ?? (await hydrateSessionObjectives(sessionID))
       const cfg = getObjectivesConfig(sessionID)
 
       if (event.tool === "todowrite") {
@@ -4974,7 +5323,6 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       // Invariante de detención forzada tras present_plan:
       // Cuando el árbol está congelado esperando la aprobación del usuario en DialogPlanApproval,
       // cualquier herramienta ejecutada por el agente se detiene mecánicamente para forzar el fin del turno.
-      const po = sessionObjectives.get(sessionID)
       if (
         !isTestEnvironment() &&
         po &&
@@ -4996,7 +5344,6 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       }
 
       if (event.tool === "edit" || event.tool === "write") {
-        const po = sessionObjectives.get(sessionID)
         if (po && !po.approvedByUser && !po.unattended && !cfg.unattended) {
           const isUnattendedEnv =
             typeof process !== "undefined" &&
@@ -5009,39 +5356,85 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         }
       }
 
+      const callId = (event as any).id
+      const innerCodeMode = isInnerCodeModeCall(sessionID, event.tool, callId)
+
       if (event.tool === "objective_manage") {
         actionsWithoutObjectiveSync.delete(sessionID)
+        pendingSyncAdvisories.delete(sessionID)
         consecutiveReadCounts.delete(sessionID)
-      } else if (event.tool !== "question" && event.tool !== "session_compact") {
-        const unsyncedCount = (actionsWithoutObjectiveSync.get(sessionID) ?? 0) + 1
+        consecutiveFailureCounts.delete(sessionID)
+      } else if (
+        !innerCodeMode &&
+        event.tool !== "question" &&
+        event.tool !== "session_compact" &&
+        event.tool !== "context_budget"
+      ) {
+        const prevCount = actionsWithoutObjectiveSync.get(sessionID) ?? 0
+        const unsyncedCount = addWeightedActionCount(prevCount, getSyncActionWeight(event.tool))
         actionsWithoutObjectiveSync.set(sessionID, unsyncedCount)
 
-        if (unsyncedCount >= cfg.maxActionsWithoutSync) {
-          // Reset on throw to break permanent deadlocks on subsequent calls.
-          actionsWithoutObjectiveSync.delete(sessionID)
-          consecutiveReadCounts.delete(sessionID)
-          const po = sessionObjectives.get(sessionID)
-          if (!po) {
-            throw new Error(
-              `⚠️ [Objective Sync / Anti-Loop Warning]: You have executed ${unsyncedCount} consecutive operations without structuring or updating your objective tree. ONLY during a brief initial reconnaissance phase is omitting objective updates permitted. You must structure your plan or register findings calling 'objective_manage' ('set_primary', 'add_secondary', 'add_finding') before continuing.`,
-            )
-          }
-          const planPresented = Boolean(
-            po.planPresentedAt ||
+        const planPresented = Boolean(
+          po &&
+            (po.planPresentedAt ||
               po.status === "presented_awaiting_confirmation" ||
               po.approvedByUser ||
               po.unattended ||
-              cfg.unattended,
-          )
-          if (po.secondaries.length > 0 && !planPresented) {
+              cfg.unattended),
+        )
+        const target = po ? findActiveExecutionTarget(po) : undefined
+        const inApprovedExecution = Boolean(po && planPresented && target?.activeSO)
+
+        if (inApprovedExecution && target?.activeSO) {
+          const tier1Threshold = cfg.maxActionsWithoutSync
+          const tier2Threshold = cfg.maxActionsWithoutSync * 2
+          if (unsyncedCount >= tier2Threshold) {
+            // Tier-2 hard escalation after ignoring Tier-1 advisory; reset on throw to prevent deadlock.
+            actionsWithoutObjectiveSync.delete(sessionID)
+            pendingSyncAdvisories.delete(sessionID)
+            consecutiveReadCounts.delete(sessionID)
+            throw new Error(buildTier2SyncEscalation(target.activeSO, target.activeTO, unsyncedCount, tier1Threshold))
+          }
+          if (prevCount < tier1Threshold && unsyncedCount >= tier1Threshold) {
+            // Tier-1 non-blocking advisory: let the tool execute and append guidance in execute.after.
+            pendingSyncAdvisories.set(
+              sessionID,
+              buildTier1SyncAdvisory(target.activeSO, target.activeTO, unsyncedCount),
+            )
+          }
+        } else if (unsyncedCount >= cfg.maxActionsWithoutSync) {
+          // Reset on throw to break permanent deadlocks on subsequent calls.
+          actionsWithoutObjectiveSync.delete(sessionID)
+          pendingSyncAdvisories.delete(sessionID)
+          consecutiveReadCounts.delete(sessionID)
+          if (!po) {
             throw new Error(
-              `⚠️ [Objective Sync & Plan Presentation Warning]: You have executed ${unsyncedCount} consecutive actions without updating your objective tree and without presenting the plan to the user. If you established an objective tree, you must present the plan with 'objective_manage(action: "present_plan")' for user review and approval before executing tasks. Only during read-only reconnaissance is omitting objective updates permitted.`,
+              `⚠️ [Objective Sync / Anti-Loop Warning]: You have accumulated ${unsyncedCount} weighted operations without establishing an objective tree. ONLY during a brief initial reconnaissance phase is omitting objective updates permitted. Structure your plan via 'objective_manage(action: "set_primary", ...)' before continuing multi-step work.`,
+            )
+          }
+          if (po.secondaries.length > 0 && !planPresented) {
+            const countLabel =
+              po.plannedSecondaryCount !== undefined
+                ? `${po.secondaries.length}/${po.plannedSecondaryCount}`
+                : `${po.secondaries.length}`
+            throw new Error(
+              `⚠️ [Objective Sync & Plan Presentation Warning]: You have accumulated ${unsyncedCount} weighted actions on "${po.title}" (${countLabel} secondary objective(s) drafted) without presenting the plan to the user. Finish drafting if needed and call 'objective_manage(action: "present_plan")' for user review and approval before executing tasks.`,
+            )
+          }
+          if (po.secondaries.length > 0 && target?.nextPendingSO) {
+            throw new Error(
+              `⚠️ [Objective Sync Warning]: Your plan "${po.title}" is approved, but no Secondary Objective is currently in 'exploring' status after ${unsyncedCount} weighted actions. Transition ${target.nextPendingSO.id} ("${target.nextPendingSO.title}") to 'exploring' via 'objective_manage(action: "update_secondary")' before continuing. Do NOT invoke 'session_compact' for this warning.`,
             )
           }
           throw new Error(
-            `⚠️ [Objective Sync Warning]: You have executed ${unsyncedCount} consecutive actions without updating your active objective tree. With an active tree, you must continuously sync real progress with 'objective_manage' (moving an SO to 'exploring' before implementation, resolving it with 'validationProof' upon completion, or registering findings with 'add_finding') before executing further actions. Note: 'objective_manage' incremental responses use compact projection; do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`,
+            `⚠️ [Objective Sync Warning]: You have accumulated ${unsyncedCount} weighted actions without updating your active objective tree "${po.title}". Sync real progress with 'objective_manage' (or resolve completed work with 'validationProof') before executing further actions. Do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`,
           )
         }
+      }
+
+      // Register outer Code Mode call ID only after all execute.before guards succeed.
+      if (event.tool === "execute") {
+        registerCodeModeCall(sessionID, callId)
       }
     })
 
@@ -5050,9 +5443,31 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       if (!sessionID) return
       if (await isSubagentSession(sessionID)) return
 
-      // F-9: track normalized read actions per active SO (anti-loop, value-first).
-      if (READONLY_TOOLS.has(event.tool) && event.tool !== "question") {
-        recordToolAction(sessionID, event.tool, event.input)
+      const callId = (event as any).id
+      const innerCodeMode = isInnerCodeModeCall(sessionID, event.tool, callId)
+      if (event.tool === "execute") {
+        unregisterCodeModeCall(sessionID, callId)
+      }
+
+      // Deliver queued Tier-1 non-blocking sync advisory on the completing top-level tool result.
+      if (!innerCodeMode && event.tool !== "objective_manage") {
+        const pendingAdvisory = pendingSyncAdvisories.get(sessionID)
+        if (pendingAdvisory) {
+          pendingSyncAdvisories.delete(sessionID)
+          appendAfterEventGuidance(event, pendingAdvisory, "[Objective Sync Advisory")
+        }
+      }
+
+      // F-9: track normalized actions per active SO (anti-loop & stagnation across reads, shell, and execute).
+      const isStagnationTrackedTool =
+        (READONLY_TOOLS.has(event.tool) && event.tool !== "question") ||
+        event.tool === "shell" ||
+        event.tool === "execute"
+      if (!innerCodeMode && isStagnationTrackedTool) {
+        const repeatWarning = recordToolAction(sessionID, event.tool, event.input)
+        if (repeatWarning) {
+          appendAfterEventGuidance(event, `⚠️ [Stagnation Warning]: ${repeatWarning}`, "[Stagnation Warning]")
+        }
       }
 
       // F-10: track files modified via edit/write for documentation-surface detection.
@@ -5061,27 +5476,42 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         if (path) trackTouchedFile(sessionID, path)
       }
 
-      // Reflexive failure auto-nudge: if a tool execution encounters an error/failure,
-      // append a lightweight reminder inviting the agent to evaluate whether to register an epistemic finding.
-      const po = sessionObjectives.get(sessionID)
-      if (po && po.status === "exploring" && event.tool !== "objective_manage") {
+      // Reflexive failure auto-nudge & consecutive-failure stagnation detection:
+      // Detect errors across string content, Tool.Content[] arrays, and Tool.Error events without mutating event.system.
+      const po = sessionObjectives.get(sessionID) ?? (await hydrateSessionObjectives(sessionID))
+      if (!innerCodeMode && event.tool !== "objective_manage") {
         let isFailure = false
         if ((event as any).status === "error" || (event as any).error) {
           isFailure = true
         } else if (event.tool === "shell") {
-          const content = typeof (event as any).result?.content === "string" ? (event as any).result.content : ""
+          const content = extractAfterEventText(event)
           const output = (event as any).result?.output
           const exitCode = typeof output?.exitCode === "number" ? output.exitCode : undefined
           if ((exitCode !== undefined && exitCode !== 0) || content.includes("Exited with code") || /error:|command not found|fatal:|FAIL:/i.test(content)) {
             isFailure = true
           }
+        } else if (event.tool === "execute" && (event as any).result?.output?.error === true) {
+          isFailure = true
         }
 
-        if (isFailure && (event as any).result && typeof (event as any).result.content === "string") {
-          const nudge = "\n\n💡 [Protocol Guidance]: A command or tool reported an issue/failure. Analyze whether this symptom or blocker warrants registering an epistemic finding via objective_manage(action: 'add_finding') before attempting a fix."
-          if (!(event as any).result.content.includes("[Protocol Guidance]")) {
-            ;(event as any).result.content += nudge
+        if (isFailure) {
+          const failStreak = (consecutiveFailureCounts.get(sessionID) ?? 0) + 1
+          consecutiveFailureCounts.set(sessionID, failStreak)
+          const cfg = getObjectivesConfig(sessionID)
+          if (po && failStreak >= cfg.repeatedActionWarningThreshold) {
+            const active = findActiveExecutionTarget(po)
+            const targetHint = active.activeTO?.id ?? active.activeSO?.id ?? "the active objective"
+            appendAfterEventGuidance(
+              event,
+              `⚠️ [Stagnation Warning]: ${failStreak} consecutive tool failures detected while working on ${targetHint}. Stop repeating failing attempts blindly — register the root blocker via objective_manage(action: 'add_finding') and change strategy or isolate the observation blocker first.`,
+              "[Stagnation Warning]",
+            )
+          } else if (po && po.status === "exploring") {
+            const nudge = "💡 [Protocol Guidance]: A command or tool reported an issue/failure. Analyze whether this symptom or blocker warrants registering an epistemic finding via objective_manage(action: 'add_finding') before attempting a fix."
+            appendAfterEventGuidance(event, nudge, "[Protocol Guidance]")
           }
+        } else {
+          consecutiveFailureCounts.delete(sessionID)
         }
       }
     })
