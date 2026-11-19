@@ -13,9 +13,10 @@ import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/shell/commands/command"
 import { DesktopCommands } from "@/shell/commands/desktop"
 import { ProjectIconsProvider } from "@/shell/layout/project-icons"
-import { GlobalProvider } from "@/runtime/server/runtime"
+import { GlobalProvider, useGlobal } from "@/runtime/server/runtime"
 import { LanguageProvider, UiI18nBridge, type Locale } from "@/runtime/i18n/language"
-import { ServerConnection, ServersProvider } from "@/runtime/server/registry"
+import { formatBrowserDocumentTitle, ServerConnection, ServersProvider, useServers } from "@/runtime/server/registry"
+import { usePlatform } from "@/runtime/platform/platform"
 import { SettingsProvider } from "@/settings/model"
 import { TabsProvider } from "@/shell/tabs/tabs"
 import { ErrorPage } from "@/shell/errors/error"
@@ -84,6 +85,24 @@ export function AppBaseProviders(
   )
 }
 
+function DefaultMachineTitle() {
+  const platform = usePlatform()
+  const servers = useServers()
+  const global = useGlobal()
+
+  const machine = () => {
+    if (platform.platform !== "web") return undefined
+    const conn = servers.list.find(servers.current) ?? servers.list[0]
+    if (!conn) return undefined
+    const key = ServerConnection.key(conn)
+    const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
+
+    return servers.machineBadge(conn, worktrees)
+  }
+
+  return <Title>{formatBrowserDocumentTitle({ machine: machine() })}</Title>
+}
+
 export function AppInterface(props: {
   children?: JSX.Element
   canonicalLocalServer?: ServerConnection.Key
@@ -97,6 +116,7 @@ export function AppInterface(props: {
     <TabsProvider>
       <GlobalProvider>
         <ProjectIconsProvider>
+          <DefaultMachineTitle />
           <BodyTypography />
           <CommandProvider>
             <DesktopCommands />

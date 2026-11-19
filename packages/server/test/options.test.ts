@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { ServerOptions } from "@opencode/server/options"
 import { Option, Schema } from "effect"
+import { resolveServerHostname } from "../src/handlers/server"
 
 const decode = Schema.decodeUnknownOption(ServerOptions)
 
@@ -39,4 +40,30 @@ test("accepts an embedder fetch and rejects other values", () => {
   const fetch = () => Promise.resolve(new Response())
   expect(Option.getOrThrow(decode({ fetch })).fetch).toBe(fetch)
   expect(Option.isNone(decode({ fetch: "https://example.com" }))).toBe(true)
+})
+
+test("resolveServerHostname honors explicit env overrides and derives devcontainer folder for Docker hex hostnames", () => {
+  expect(
+    resolveServerHostname({
+      rawHostname: "555e4ddc3e90",
+      env: { OPENCODE_SERVER_NAME: "OIPA" },
+      listWorkspaces: () => ["oipa_arl"],
+    }),
+  ).toBe("OIPA")
+
+  expect(
+    resolveServerHostname({
+      rawHostname: "555e4ddc3e90",
+      env: {},
+      listWorkspaces: () => ["oipa_arl"],
+    }),
+  ).toBe("oipa_arl")
+
+  expect(
+    resolveServerHostname({
+      rawHostname: "Mac-Studio-de-Juan.local",
+      env: {},
+      listWorkspaces: () => [],
+    }),
+  ).toBe("Mac-Studio-de-Juan.local")
 })

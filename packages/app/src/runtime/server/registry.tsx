@@ -26,6 +26,65 @@ export function serverName(conn?: ServerConnection.Any, ignoreDisplayName = fals
   return (ServerConnection.http(conn)?.url ?? "").replace(/^https?:\/\//, "").replace(/\/+$/, "")
 }
 
+const DOCKER_HEX_HOST = /^[0-9a-f]{12,64}$/i
+
+function formatWorkspaceTag(folder: string) {
+  const clean = folder
+    .trim()
+    .replace(/_(arl|dev|devcontainer|container|workspace)$/i, "")
+    .trim()
+
+  if (!clean) return undefined
+
+  return clean.length <= 6 && /^[a-z0-9]+$/i.test(clean) ? clean.toUpperCase() : clean
+}
+
+export function resolveMachineBadge(input: {
+  conn?: ServerConnection.Any
+  hostname?: string
+  worktrees?: ReadonlyArray<string>
+}): string | undefined {
+  if (input.conn?.displayName?.trim()) return input.conn.displayName.trim()
+
+  const worktrees = input.worktrees ?? []
+  for (const wt of worktrees) {
+    const match = /^\/workspaces\/([^/]+)/.exec(wt.trim())
+    if (match?.[1]) {
+      const formatted = formatWorkspaceTag(match[1])
+      if (formatted) return formatted
+    }
+  }
+
+  const rawHost = (input.hostname ?? "").trim()
+  if (!rawHost) return undefined
+
+  const wsMatch = /^\/workspaces\/([^/]+)/.exec(rawHost)
+  if (wsMatch?.[1]) {
+    return formatWorkspaceTag(wsMatch[1])
+  }
+
+  if (DOCKER_HEX_HOST.test(rawHost)) return undefined
+
+  if (/\.local$/i.test(rawHost) || /^mac[-_]/i.test(rawHost) || rawHost === "localhost" || rawHost === "127.0.0.1") {
+    return "Local"
+  }
+
+  return formatWorkspaceTag(rawHost) ?? rawHost
+}
+
+export function formatBrowserDocumentTitle(input: {
+  sessionTitle?: string
+  machine?: string
+}): string {
+  const prefix = input.machine?.trim() ? `[${input.machine.trim()}] ` : ""
+
+  if (input.sessionTitle?.trim()) {
+    return `${prefix}${input.sessionTitle.trim()} · OpenCode`
+  }
+
+  return `${prefix}OpenCode`
+}
+
 /**
  * What switchers and titles call a server: a custom name wins, then, for the server the app runs beside, its
  * hostname or the fallback; other servers show their address.
@@ -365,6 +424,19 @@ export const { use: useServers, provider: ServersProvider } = createSimpleContex
       },
       setHostname(key: ServerConnection.Key, hostname: string) {
         if (store.hostnames[key] !== hostname) setStore("hostnames", key, hostname)
+      },
+      hostname(key: ServerConnection.Key) {
+        return store.hostnames[key]
+      },
+      machineBadge(conn?: ServerConnection.Any, worktrees?: ReadonlyArray<string>) {
+        if (!conn) return undefined
+        const key = ServerConnection.key(conn)
+
+        return resolveMachineBadge({
+          conn,
+          hostname: store.hostnames[key],
+          worktrees,
+        })
       },
       projects: {
         forServer: projectsForServer,

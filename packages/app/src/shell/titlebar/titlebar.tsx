@@ -25,7 +25,7 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
 import { readSessionTabsRemovedDetail, SESSION_TABS_REMOVED_EVENT } from "@/shell/titlebar/session-events"
 import { useGlobal } from "@/runtime/server/runtime"
-import { ServerConnection } from "@/runtime/server/registry"
+import { ServerConnection, useServers } from "@/runtime/server/registry"
 import { tabKey, useTabs } from "@/shell/tabs/tabs"
 import type { ComposerState } from "@/composer/persistence"
 import "./titlebar.css"
@@ -201,9 +201,24 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
           {(_) => {
             const layout = useLayout()
             const global = useGlobal()
+            const servers = useServers()
 
             const tabs = useTabs()
             const tabsStore = tabs.store
+
+            const webMachineBadge = createMemo(() => {
+              if (platform.platform !== "web") return undefined
+              const tab = currentTab()
+              const conn =
+                (tab ? servers.list.find((item) => ServerConnection.key(item) === tab.server) : undefined) ??
+                servers.list.find(servers.current) ??
+                servers.list[0]
+              if (!conn) return undefined
+              const key = ServerConnection.key(conn)
+              const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
+
+              return servers.machineBadge(conn, worktrees)
+            })
 
             createEffect(() => {
               if (
@@ -592,6 +607,16 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                 <Show when={!mobile() && !props.verticalTabs}>
                   {/* Pulls the first tab's avatar 10px from Search, past the row gap plus the tab's own inset. */}
                   <div class="-me-0.5 flex shrink-0 items-center gap-0.5">
+                    <Show when={webMachineBadge()}>
+                      {(badge) => (
+                        <span
+                          data-slot="titlebar-machine-badge"
+                          class="me-1 inline-flex h-6 shrink-0 items-center rounded-[5px] border border-v2-border-border-muted bg-v2-background-bg-layer-02 px-2 font-mono text-[11px] font-medium leading-[var(--line-height-compact)] text-v2-text-text-muted select-none"
+                        >
+                          {badge()}
+                        </span>
+                      )}
+                    </Show>
                     {homeButton()}
                     {searchButton()}
                   </div>

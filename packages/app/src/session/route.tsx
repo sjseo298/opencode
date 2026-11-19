@@ -16,6 +16,8 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { useNotification } from "@/shell/notifications/notification"
 import { ComposerPersistenceProvider } from "@/composer/persistence"
 import { useData, useServer } from "@/runtime/server/current"
+import { formatBrowserDocumentTitle, useServers } from "@/runtime/server/registry"
+import { usePlatform } from "@/runtime/platform/platform"
 import { ServerConnection } from "@/runtime/server/registry"
 import { useSettingsCommand } from "@/settings/command"
 import { useSettings } from "@/settings/model"
@@ -54,6 +56,14 @@ export function TargetSessionRouteContent() {
   const view = createMemo(() => sessionRouteView(resolution(), server.health))
   const viewed = createMemo(() => viewedSessionID(view()))
   const title = createMemo(() => sessionDocumentTitle(view()))
+  const platform = usePlatform()
+  const servers = useServers()
+  const machine = createMemo(() => {
+    if (platform.platform !== "web") return undefined
+    const worktrees = server.ctx.projects.list().map((p) => p.worktree)
+
+    return servers.machineBadge(server.conn, worktrees)
+  })
   const modelDirectory = createMemo(() => sessionModelDirectory(resolution()))
 
   // Kept once the session leaves `ready`: the session providers can still read it while the route
@@ -86,7 +96,7 @@ export function TargetSessionRouteContent() {
   return (
     <>
       <MarkSessionViewed sessionID={viewed} />
-      <SessionDocumentTitle title={title} />
+      <SessionDocumentTitle title={title} machine={machine} />
       <ModelsProvider directory={modelDirectory()}>
         <TargetSessionSettingsCommand />
         <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)}>
@@ -286,11 +296,11 @@ function MarkSessionViewed(props: { sessionID: () => string | undefined }) {
 }
 
 // Browser tabs and desktop windows are otherwise indistinguishable, so name them after the open session.
-function SessionDocumentTitle(props: { title: () => string | undefined }) {
+function SessionDocumentTitle(props: { title: () => string | undefined; machine?: () => string | undefined }) {
   // Keyed: <Title> reads its text inside a meta effect, which would hit a stale Show accessor once the session is deleted.
   return (
     <Show when={props.title()} keyed>
-      {(value) => <Title>{`${value} · OpenCode`}</Title>}
+      {(value) => <Title>{formatBrowserDocumentTitle({ sessionTitle: value, machine: props.machine?.() })}</Title>}
     </Show>
   )
 }

@@ -2,6 +2,8 @@ import { expect, test } from "bun:test"
 import {
   canRemoveServer,
   createServerProjects,
+  formatBrowserDocumentTitle,
+  resolveMachineBadge,
   resolveServerList,
   resolveVisibleServers,
   ServerConnection,
@@ -35,6 +37,46 @@ test("the current server is named by its hostname, a custom name wins, and other
   expect(serverLabel({ ...sidecar, displayName: "Studio" }, current)).toBe("Studio")
   expect(serverLabel(remote)).toBe("apollo.example.test:4096")
   expect(serverLabel({ ...remote, displayName: "apollo" })).toBe("apollo")
+})
+
+test("resolveMachineBadge and formatBrowserDocumentTitle identify Local, OIPA devcontainers, and custom names", () => {
+  const localConn: ServerConnection.Http = { type: "http", http: { url: "http://127.0.0.1:49374" } }
+  const oipaConn: ServerConnection.Http = { type: "http", http: { url: "http://127.0.0.1:49380" } }
+
+  // Local macOS hostname -> Local
+  expect(resolveMachineBadge({ conn: localConn, hostname: "Mac-Studio-de-Juan.local" })).toBe("Local")
+
+  // Docker hex container hostname + /workspaces/oipa_arl -> OIPA
+  expect(
+    resolveMachineBadge({
+      conn: oipaConn,
+      hostname: "555e4ddc3e90",
+      worktrees: ["/workspaces/oipa_arl", "/home/vscode"],
+    }),
+  ).toBe("OIPA")
+
+  // Server reporting resolved devcontainer folder name directly in hostname -> OIPA
+  expect(resolveMachineBadge({ conn: oipaConn, hostname: "oipa_arl" })).toBe("OIPA")
+
+  // Without hostname or /workspaces worktree (e.g. default e2e harness), badge is omitted
+  expect(resolveMachineBadge({ conn: localConn, worktrees: ["C:/OpenCode/Tabs"] })).toBeUndefined()
+
+  // Explicit displayName wins
+  expect(resolveMachineBadge({ conn: { ...oipaConn, displayName: "OIPA-Prod" }, hostname: "555e4ddc3e90" })).toBe(
+    "OIPA-Prod",
+  )
+
+  // Browser tab titles
+  expect(formatBrowserDocumentTitle({ machine: "Local" })).toBe("[Local] OpenCode")
+  expect(formatBrowserDocumentTitle({ machine: "OIPA" })).toBe("[OIPA] OpenCode")
+  expect(formatBrowserDocumentTitle({ sessionTitle: "Fix auth", machine: "Local" })).toBe(
+    "[Local] Fix auth · OpenCode",
+  )
+  expect(formatBrowserDocumentTitle({ sessionTitle: "Fix auth", machine: "OIPA" })).toBe(
+    "[OIPA] Fix auth · OpenCode",
+  )
+  expect(formatBrowserDocumentTitle({ sessionTitle: "Fix auth" })).toBe("Fix auth · OpenCode")
+  expect(formatBrowserDocumentTitle({})).toBe("OpenCode")
 })
 
 test("startup auth_token credentials override a persisted same-url server; without one the persisted password stays", () => {
