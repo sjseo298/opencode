@@ -13,9 +13,13 @@ import {
   getObjectives,
   clearSessionObjectives,
   actionsWithoutObjectiveSync,
+  preApprovalExplorationCounts,
   activeCodeModeCalls,
   consecutiveFailureCounts,
   AGENT_CONFIG_MAX_ACTIONS_CEILING,
+  AGENT_CONFIG_MAX_EXPLORATION_CEILING,
+  isMutatingShellCommand,
+  isPreApprovalMutatingTool,
   MAX_CONSECUTIVE_PROGRESS_NOTES,
   MAX_CONSECUTIVE_READS,
   MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC,
@@ -451,72 +455,91 @@ describe("hierarchical-objectives plugin", () => {
       )
     })
 
-    test("triggers objective sync and plan presentation warning after consecutive actions without update (default 15)", async () => {
+    test("emits non-blocking exploration advisory every 40 actions indefinitely without user approval while preserving tool output", async () => {
       const { toolHooks } = await setupPluginInstance()
       const sid = uniqueSessionID("actions-sync-warning")
-      const hook = toolHooks["execute.before"]?.[0]
-      expect(hook).toBeDefined()
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
+      expect(beforeHook).toBeDefined()
+      expect(afterHook).toBeDefined()
       expect(MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC).toBe(15)
       expect(DEFAULT_OBJECTIVES_CONFIG.maxActionsWithoutSync).toBe(15)
+      expect(DEFAULT_OBJECTIVES_CONFIG.explorationActionsThreshold).toBe(40)
 
       const po = setPrimaryObjective(sid, "Test Primary", "Verify all criteria")
       po.approvedByUser = false
       addSecondaryObjective(sid, "SO-1", "Dependency rationale")
 
-      // 14 actions without objective sync (should pass under new default of 15)
-      for (let i = 0; i < 14; i++) {
-        await hook!({ sessionID: sid, tool: "shell" })
+      // Actions 1..39 are silent (no throw, no advisory)
+      for (let i = 1; i <= 39; i++) {
+        await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: `f${i}.ts` } })).resolves.toBeUndefined()
       }
+      const after39: any = { sessionID: sid, tool: "read", status: "completed", result: { content: "content-39" } }
+      await afterHook!(after39)
+      expect(after39.result.content).toBe("content-39")
 
-      // 15th action triggers plan presentation warning because plan was not presented
-      expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow(
-        "Objective Sync & Plan Presentation Warning",
-      )
+      // Action 40 emits non-blocking advisory via execute.after alongside tool output
+      await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: "f40.ts" } })).resolves.toBeUndefined()
+      const after40: any = { sessionID: sid, tool: "read", status: "completed", result: { content: "content-40" } }
+      await afterHook!(after40)
+      expect(after40.result.content).toContain("content-40")
+      expect(after40.result.content).toContain("[Exploration Budget Advisory (40 read-only actions, reminder every 40)]")
+
+      // Actions 41..80 continue non-blocking; action 80 emits the next periodic advisory
+      for (let i = 41; i <= 79; i++) {
+        await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: `f${i}.ts` } })).resolves.toBeUndefined()
+      }
+      await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: "f80.ts" } })).resolves.toBeUndefined()
+      const after80: any = { sessionID: sid, tool: "read", status: "completed", result: { content: "content-80" } }
+      await afterHook!(after80)
+      expect(after80.result.content).toContain("content-80")
+      expect(after80.result.content).toContain("[Exploration Budget Advisory (80 read-only actions, reminder every 40)]")
     })
 
-    test("resets unsynced action counter to 0 when user intervenes in chat via prompt hook", async () => {
+    test("resets unsynced action and exploration counters to 0 when user intervenes in chat via prompt hook", async () => {
       const { toolHooks, sessionHooks } = await setupPluginInstance()
       const sid = uniqueSessionID("reset-unsynced-on-user-prompt")
       const hook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
       const promptHook = sessionHooks["prompt"]?.[0]
       expect(hook).toBeDefined()
+      expect(afterHook).toBeDefined()
       expect(promptHook).toBeDefined()
 
-      // 1. Without active PO (e.g. reconnaissance phase): weighted actions accumulate (read = 0.5)
+      // 1. Without active PO (exploration phase): preApprovalExplorationCounts accumulates
       for (let i = 0; i < 5; i++) {
         await hook!({ sessionID: sid, tool: "read" })
       }
-      expect(actionsWithoutObjectiveSync.get(sid)).toBe(2.5)
+      expect(preApprovalExplorationCounts.get(sid)).toBe(5)
 
-      // User intervenes in chat
+      // User intervenes in chat -> resets exploration counter
       await promptHook!({ sessionID: sid, text: "Intervención de usuario previa a PO" })
-      expect(actionsWithoutObjectiveSync.get(sid)).toBeUndefined()
+      expect(preApprovalExplorationCounts.get(sid)).toBeUndefined()
 
-      // 2. With active PO: user intervenes before reaching limit (15)
+      // 2. With unapproved PO: user intervenes before reaching 40
       const po = setPrimaryObjective(sid, "Test Primary", "Verify all criteria")
       po.approvedByUser = false
       addSecondaryObjective(sid, "SO-1", "Dependency rationale")
 
-      // Execute 14 actions without sync
-      for (let i = 0; i < 14; i++) {
-        await hook!({ sessionID: sid, tool: "shell" })
+      for (let i = 0; i < 39; i++) {
+        await hook!({ sessionID: sid, tool: "read" })
       }
-      expect(actionsWithoutObjectiveSync.get(sid)).toBe(14)
+      expect(preApprovalExplorationCounts.get(sid)).toBe(39)
 
       // User speaks in chat via prompt hook (can also test event.prompt.text structure)
       await promptHook!({ sessionID: sid, prompt: { text: "¿Cómo va la investigación?" } })
-      expect(actionsWithoutObjectiveSync.get(sid)).toBeUndefined()
+      expect(preApprovalExplorationCounts.get(sid)).toBeUndefined()
 
-      // Counter restarted from 0, allowing another 14 actions without throwing
-      for (let i = 0; i < 14; i++) {
-        await hook!({ sessionID: sid, tool: "shell" })
+      // Counter restarted from 0, allowing another 39 silent actions before 40th emits advisory
+      for (let i = 0; i < 39; i++) {
+        await hook!({ sessionID: sid, tool: "read" })
       }
-      expect(actionsWithoutObjectiveSync.get(sid)).toBe(14)
+      expect(preApprovalExplorationCounts.get(sid)).toBe(39)
 
-      // The 15th consecutive action triggers the expected warning
-      expect(() => hook!({ sessionID: sid, tool: "shell" })).toThrow(
-        "Objective Sync & Plan Presentation Warning",
-      )
+      await expect(hook!({ sessionID: sid, tool: "read" })).resolves.toBeUndefined()
+      const after40: any = { sessionID: sid, tool: "read", status: "completed", result: { content: "ok" } }
+      await afterHook!(after40)
+      expect(after40.result.content).toContain("[Exploration Budget Advisory (40 read-only actions, reminder every 40)]")
     })
 
     test("supports configurable Protocolo de Objetivos thresholds via global settings, session .json config, and CLI/env overrides", async () => {
@@ -3300,8 +3323,9 @@ describe("hierarchical-objectives plugin", () => {
           { sessionID: sid },
         )
         expect(res.output.success).toBe(true)
-        expect(res.output.tree).toContain("Primary Objective [EXPLORING]")
+        expect(res.output.tree).toContain("Primary Objective [INVESTIGATING]")
         expect(res.output.tree).not.toContain("PRESENTED_AWAITING_CONFIRMATION")
+        expect(getObjectives(sid)?.approvedByUser).toBe(false)
       } finally {
         process.env.NODE_ENV = origNodeEnv
         process.env.BUN_ENV = origBunEnv
@@ -4090,21 +4114,21 @@ describe("hierarchical-objectives plugin", () => {
       }
     })
 
-    test("still throws Objective Sync Warning for main thread sessions after 15 actions", async () => {
+    test("still emits periodic exploration advisory for main thread sessions at 40 actions", async () => {
       const { toolHooks } = await setupPluginInstanceLocal()
       const mainSid = uniqueSessionID("main-sync-warning")
 
       const beforeHook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
       expect(beforeHook).toBeDefined()
+      expect(afterHook).toBeDefined()
 
-      // 14 effectful actions stay under default threshold 15; 15th triggers warning
-      for (let i = 0; i < 14; i++) {
-        await beforeHook!({ sessionID: mainSid, tool: "shell" })
+      for (let i = 0; i < 40; i++) {
+        await expect(beforeHook!({ sessionID: mainSid, tool: "read" })).resolves.toBeUndefined()
       }
-
-      await expect(async () => {
-        await beforeHook!({ sessionID: mainSid, tool: "shell" })
-      }).toThrow("Objective Sync / Anti-Loop Warning")
+      const afterEvent: any = { sessionID: mainSid, tool: "read", status: "completed", result: { content: "main-read" } }
+      await afterHook!(afterEvent)
+      expect(afterEvent.result.content).toContain("[Exploration Budget Advisory (40 read-only actions, reminder every 40)]")
     })
 
     test("does not enforce plan approval guard on subagent sessions for edit/write", async () => {
@@ -5024,6 +5048,329 @@ describe("hierarchical-objectives plugin", () => {
           OPENCODE_OBJECTIVES_CLI_OVERRIDES: JSON.stringify({ max_actions_without_sync: 80 }),
         })
         expect(getObjectivesConfig(sid).maxActionsWithoutSync).toBe(80)
+      } finally {
+        setSessionObjectivesConfig(sid, undefined)
+        setSessionObjectivesEnv(sid, undefined)
+      }
+    })
+  })
+
+  describe("Approval Hardening & Cumulative 2-Tier Exploration Budget", () => {
+    test("interactive set_primary without plannedSecondaryCount or with presentPlan: false NEVER auto-approves and blocks closing any SO/TO/PO", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("no-auto-approve-interactive")
+
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        // Omitting plannedSecondaryCount AND passing presentPlan: false must STILL start unapproved
+        const initRes = await tool.execute(
+          {
+            action: "set_primary",
+            title: "Read-only diagnostic without planned count",
+            definitionOfDone: "Findings verified and approved",
+            presentPlan: false,
+          },
+          { sessionID: sid },
+        )
+        expect(initRes.output.success).toBe(true)
+        const po = getObjectives(sid)!
+        expect(po.approvedByUser).toBe(false)
+        expect(po.status).toBe("investigating")
+
+        // Agent drafts SO-1 and adds a finding (allowed during investigating)
+        const addSO = await tool.execute(
+          {
+            action: "add_secondary",
+            title: "Inspect logs",
+            rationale: "Collect diagnostic facts",
+            delegation: { mode: "main", justification: "Direct inspection." },
+          },
+          { sessionID: sid },
+        )
+        expect(addSO.output.success).toBe(true)
+
+        // Agent attempts to start or close SO-1 WITHOUT user approval -> MUST BE REJECTED
+        const tryExplore = await tool.execute(
+          {
+            action: "update_secondary",
+            id: "SO-1",
+            status: "exploring",
+            delegation: { mode: "main", justification: "Direct inspection." },
+          },
+          { sessionID: sid },
+        )
+        expect(tryExplore.output.success).toBe(false)
+        expect(tryExplore.content).toContain("Plan Approval Required")
+
+        const tryResolve = await tool.execute(
+          {
+            action: "update_secondary",
+            id: "SO-1",
+            status: "resolved",
+            validationProof: "exit code 0 confirmed",
+          },
+          { sessionID: sid },
+        )
+        expect(tryResolve.output.success).toBe(false)
+        expect(tryResolve.content).toContain("Plan Approval Required")
+        expect(getObjectives(sid)!.secondaries[0].status).toBe("pending")
+
+        const tryDiscard = await tool.execute(
+          {
+            action: "update_secondary",
+            id: "SO-1",
+            status: "discarded",
+          },
+          { sessionID: sid },
+        )
+        expect(tryDiscard.output.success).toBe(false)
+        expect(tryDiscard.content).toContain("Plan Approval Required")
+
+        const tryComplete = await tool.execute(
+          {
+            action: "complete_primary",
+            validationProof: "exit code 0",
+          },
+          { sessionID: sid },
+        )
+        expect(tryComplete.output.success).toBe(false)
+        expect(tryComplete.content).toContain("Plan Approval Required")
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
+    })
+
+    test("engine-level updateSecondaryObjective, updateTertiaryObjective, and updatePrimaryObjective unconditionally block closing without approvedByUser even with bypassGates", () => {
+      const sid = uniqueSessionID("engine-defense-in-depth")
+      const po = setPrimaryObjective(sid, "Unapproved Engine Tree", "Done", undefined, { approvedByUser: false })
+      addSecondaryObjective(sid, "Step 1", "Rationale 1")
+      addTertiaryObjective(sid, "SO-1", "Substep 1", "Tertiary rationale")
+      expect(po.approvedByUser).toBe(false)
+
+      const soRes = updateSecondaryObjective(
+        sid,
+        "SO-1",
+        { status: "resolved", validationProof: "exit code 0" },
+        { bypassGates: true },
+      )
+      expect(soRes.success).toBe(false)
+      expect(soRes.error).toContain("Plan Approval Required")
+
+      const toRes = updateTertiaryObjective(
+        sid,
+        "SO-1-T1",
+        { status: "resolved", validationProof: "exit code 0" },
+        { bypassGates: true },
+      )
+      expect(toRes.success).toBe(false)
+      expect(toRes.error).toContain("Plan Approval Required")
+
+      const poRes = updatePrimaryObjective(
+        sid,
+        { status: "resolved", validationProof: "exit code 0" },
+        { bypassGates: true },
+      )
+      expect(poRes.success).toBe(false)
+      expect(poRes.error).toContain("Plan Approval Required")
+    })
+
+    test("casual approval words in prompt hook do NOT approve an unpresented plan in investigating status", async () => {
+      const { triggerPromptHook } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("casual-prompt-unpresented")
+      const po = setPrimaryObjective(sid, "Draft Investigation", "Done", undefined, { approvedByUser: false })
+      po.status = "investigating"
+      addSecondaryObjective(sid, "SO-1", "Check logs")
+
+      // Casual message starting with "adelante" while still investigating (never presented) must NOT approve
+      await triggerPromptHook(sid, "adelante, revisa también el archivo de configuración")
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+      expect(getObjectives(sid)!.status).toBe("investigating")
+
+      // Once formally presented, canonical approval text DOES approve
+      presentPlan(sid, "Ready for review")
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+      await triggerPromptHook(sid, "aprobado")
+      expect(getObjectives(sid)!.approvedByUser).toBe(true)
+      expect(getObjectives(sid)!.status).toBe("exploring")
+    })
+
+    test("periodic non-blocking exploration advisory fires every N actions (N, 2N, 3N), ignores draft resets, counts Code Mode as 1 unit, and switches to weighted budget after approval", async () => {
+      const { toolHooks, getRegisteredTool, triggerPromptHook } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("exploration-periodic-nonblocking")
+      const tool = getRegisteredTool()
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      const afterHook = toolHooks["execute.after"]?.[0]
+
+      const po = setPrimaryObjective(sid, "Deep Exploration", "Done", undefined, {
+        approvedByUser: false,
+        config: { explorationActionsThreshold: 5, maxActionsWithoutSync: 4 },
+      })
+      po.status = "investigating"
+
+      // Run 3 read actions, then interleave objective_manage (add_secondary + add_finding)
+      for (let i = 0; i < 3; i++) {
+        await beforeHook!({ sessionID: sid, tool: "read", input: { path: `f${i}.ts` } })
+      }
+      await beforeHook!({ sessionID: sid, tool: "objective_manage", input: { action: "add_secondary" } })
+      await tool.execute(
+        {
+          action: "add_secondary",
+          title: "Investigate module A",
+          rationale: "Need structure before plan",
+          delegation: { mode: "main", justification: "Quick read-only pass." },
+        },
+        { sessionID: sid },
+      )
+      await beforeHook!({ sessionID: sid, tool: "objective_manage", input: { action: "add_finding" } })
+      await tool.execute(
+        {
+          action: "add_finding",
+          soRef: "SO-1",
+          title: "Module A loads lazily",
+          evidence: { type: "FILE_READ", source: "src/a.ts:1-20" },
+          result: "Dynamic import confirmed in src/a.ts lines 10-15.",
+          nextAction: "Check src/b.ts before presenting plan.",
+          delegation: { mode: "main", justification: "Single file check." },
+        },
+        { sessionID: sid },
+      )
+
+      // Counter MUST STILL be 3 (not reset by draft actions!)
+      expect(preApprovalExplorationCounts.get(sid)).toBe(3)
+
+      // Code Mode execute with 10 inner read calls counts as ONLY +1 (total 4, still silent)
+      await beforeHook!({ sessionID: sid, tool: "execute", id: "cm_exp_1", input: { code: "return 1" } })
+      for (let i = 0; i < 10; i++) {
+        await beforeHook!({ sessionID: sid, tool: "browse_eval", id: "cm_exp_1", input: {} })
+      }
+      await afterHook!({
+        sessionID: sid,
+        tool: "execute",
+        id: "cm_exp_1",
+        status: "completed",
+        result: { content: [{ type: "text", text: "1" }] },
+      })
+      expect(preApprovalExplorationCounts.get(sid)).toBe(4)
+
+      // Action 5 emits non-blocking advisory alongside real output
+      await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: "f5.ts" } })).resolves.toBeUndefined()
+      const after5: any = { sessionID: sid, tool: "read", status: "completed", result: { content: "file 5" } }
+      await afterHook!(after5)
+      expect(after5.result.content).toContain("file 5")
+      expect(after5.result.content).toContain("[Exploration Budget Advisory (5 read-only actions, reminder every 5)]")
+
+      // Actions 6..10 remain non-blocking; action 10 emits the 2nd periodic advisory
+      for (let i = 6; i <= 9; i++) {
+        await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: `f${i}.ts` } })).resolves.toBeUndefined()
+      }
+      await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: "f10.ts" } })).resolves.toBeUndefined()
+      const after10: any = { sessionID: sid, tool: "read", status: "completed", result: { content: "file 10" } }
+      await afterHook!(after10)
+      expect(after10.result.content).toContain("file 10")
+      expect(after10.result.content).toContain("[Exploration Budget Advisory (10 read-only actions, reminder every 5)]")
+
+      // Present & approve plan -> clears exploration counter and switches to weighted budget (read=0.5, shell=1.0)
+      presentPlan(sid, "Plan ready")
+      expect(preApprovalExplorationCounts.get(sid)).toBeUndefined()
+      await triggerPromptHook(sid, "aprobado")
+      updateSecondaryObjective(sid, "SO-1", {
+        status: "exploring",
+        delegation: { mode: "main", justification: "Now approved for execution." },
+      })
+
+      await beforeHook!({ sessionID: sid, tool: "read", input: { path: "a.ts" } })
+      await beforeHook!({ sessionID: sid, tool: "shell", input: { command: "git status" } })
+      expect(actionsWithoutObjectiveSync.get(sid)).toBe(1.5)
+    })
+
+    test("pre-approval exploration mode strictly blocks mutating shell commands and Code Mode tools while permitting read-only inspection", async () => {
+      const { toolHooks } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("pre-approval-readonly-guard")
+      const beforeHook = toolHooks["execute.before"]?.[0]
+      expect(beforeHook).toBeDefined()
+
+      const po = setPrimaryObjective(sid, "Read-Only Recon", "Plan approved first", undefined, { approvedByUser: false })
+      po.status = "investigating"
+
+      // Direct classifier checks
+      expect(isMutatingShellCommand("git status")).toBe(false)
+      expect(isMutatingShellCommand('git log -n 5 --format="-> %s"')).toBe(false)
+      expect(isMutatingShellCommand('rg "a > b" packages/core/src')).toBe(false)
+      expect(isMutatingShellCommand("ls -la 2>/dev/null")).toBe(false)
+      expect(isMutatingShellCommand("rm -rf tmp/foo")).toBe(true)
+      expect(isMutatingShellCommand("echo hello > out.txt")).toBe(true)
+      expect(isMutatingShellCommand("sed -i 's/foo/bar/' file.ts")).toBe(true)
+      expect(isMutatingShellCommand("git commit -m 'bad'")).toBe(true)
+      expect(isMutatingShellCommand("bun install lodash")).toBe(true)
+      expect(isMutatingShellCommand("curl -X POST https://example.com/api")).toBe(true)
+      expect(isPreApprovalMutatingTool("browse.click")).toBe(true)
+      expect(isPreApprovalMutatingTool("browse_fill")).toBe(true)
+      expect(isPreApprovalMutatingTool("worktree_create")).toBe(true)
+      expect(isPreApprovalMutatingTool("browse.snapshot")).toBe(false)
+
+      // Read-only commands and tools are ALLOWED before approval
+      await expect(beforeHook!({ sessionID: sid, tool: "read", input: { path: "README.md" } })).resolves.toBeUndefined()
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "shell", input: { command: "git status && git log -n 3" } }),
+      ).resolves.toBeUndefined()
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "browse.snapshot", input: { tab: 1 } }),
+      ).resolves.toBeUndefined()
+
+      // Mutating tools and commands are STRICTLY BLOCKED before approval
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "edit", input: { path: "src/a.ts" } }),
+      ).rejects.toThrow("Plan Approval Required")
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "shell", input: { command: "touch newfile.txt" } }),
+      ).rejects.toThrow("Plan Approval Required")
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "shell", input: { command: "echo data >> log.txt" } }),
+      ).rejects.toThrow("Plan Approval Required")
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "browse.click", id: "cm_ro_1", input: { tab: 1, ref: "e1" } }),
+      ).rejects.toThrow("Plan Approval Required")
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "worktree_create", input: { name: "tmp" } }),
+      ).rejects.toThrow("Plan Approval Required")
+
+      // Once user approves the plan, mutating commands and tools are allowed
+      po.approvedByUser = true
+      po.status = "exploring"
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "shell", input: { command: "touch newfile.txt" } }),
+      ).resolves.toBeUndefined()
+      await expect(
+        beforeHook!({ sessionID: sid, tool: "browse.click", input: { tab: 1, ref: "e1" } }),
+      ).resolves.toBeUndefined()
+    })
+
+    test("configure clamps agent-supplied exploration_actions_threshold to safe ceiling while env override retains authority", async () => {
+      const { getRegisteredTool } = await setupPluginInstanceLocal()
+      const sid = uniqueSessionID("configure-exploration-cap")
+      const tool = getRegisteredTool()
+
+      try {
+        const res = await tool.execute(
+          { action: "configure", config: { exploration_actions_threshold: 500 } },
+          { sessionID: sid },
+        )
+        expect(res.output.success).toBe(true)
+        expect(getObjectivesConfig(sid).explorationActionsThreshold).toBe(AGENT_CONFIG_MAX_EXPLORATION_CEILING)
+        expect(res.content).toContain(
+          `clamped explorationActionsThreshold from 500 to safe agent ceiling ${AGENT_CONFIG_MAX_EXPLORATION_CEILING}`,
+        )
+
+        setSessionObjectivesEnv(sid, {
+          OPENCODE_OBJECTIVES_EXPLORATION_ACTIONS_THRESHOLD: "120",
+        })
+        expect(getObjectivesConfig(sid).explorationActionsThreshold).toBe(120)
       } finally {
         setSessionObjectivesConfig(sid, undefined)
         setSessionObjectivesEnv(sid, undefined)

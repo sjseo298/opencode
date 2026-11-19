@@ -16,6 +16,7 @@ import {
   FINDING_EVIDENCE_TYPES,
   type FindingStatus,
   AGENT_CONFIG_MAX_ACTIONS_CEILING,
+  AGENT_CONFIG_MAX_EXPLORATION_CEILING,
   READONLY_ACTION_WEIGHT,
   EFFECTFUL_ACTION_WEIGHT,
   DEFAULT_OBJECTIVES_CONFIG,
@@ -45,6 +46,7 @@ import { autoConfigureEmbeddingsScorer, warmUpFindingsEmbeddings } from "./objec
 export {
   setFindingScorer,
   AGENT_CONFIG_MAX_ACTIONS_CEILING,
+  AGENT_CONFIG_MAX_EXPLORATION_CEILING,
   READONLY_ACTION_WEIGHT,
   EFFECTFUL_ACTION_WEIGHT,
   DEFAULT_OBJECTIVES_CONFIG,
@@ -181,11 +183,16 @@ export function isSubagentSessionCached(sessionID: string): boolean | undefined 
 export const consecutiveReadCounts = new Map<string, number>()
 export const antiLoopWarnings = new Map<string, string>()
 
-// Action tracking for objective tree continuous sync enforcement
+// Action tracking for objective tree continuous sync enforcement (approved execution mode)
 export const actionsWithoutObjectiveSync = new Map<string, number>()
 export const MAX_ACTIONS_WITHOUT_OBJECTIVE_SYNC = DEFAULT_OBJECTIVES_CONFIG.maxActionsWithoutSync
 
-// Pending Tier-1 non-blocking sync advisories queued in execute.before and appended in execute.after
+// Cumulative exploration action tracking in pre-approval mode (!po or !isApproved).
+// Intentionally NOT reset by draft actions (add_secondary, add_finding, etc.) or by Tier-2 throws;
+// cleared only on present_plan, genuine approval, or user chat intervention.
+export const preApprovalExplorationCounts = new Map<string, number>()
+
+// Pending Tier-1 non-blocking sync/exploration advisories queued in execute.before and appended in execute.after
 export const pendingSyncAdvisories = new Map<string, string>()
 
 // Consecutive tool failure counts per session for stagnation detection (F-9)
@@ -251,6 +258,31 @@ function buildTier2SyncEscalation(
     `Do NOT re-plan and do NOT invent filler findings. Checkpoint ${target.id} now via 'note_progress', resolve it with 'validationProof', ` +
     `split via 'add_tertiary', or register a real blocker with 'add_finding' before continuing. ` +
     `Do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`
+  )
+}
+
+function buildExplorationPeriodicAdvisory(
+  po: PrimaryObjective | undefined,
+  count: number,
+  interval: number,
+): string {
+  if (!po) {
+    return (
+      `⚠️ [Exploration Budget Advisory (${count} read-only actions, reminder every ${interval})]: ` +
+      `You have executed ${count} exploration actions without establishing an objective plan. ` +
+      `When reconnaissance is complete, structure your plan via 'objective_manage(action: "set_primary", ...)' -> 'add_secondary' -> 'present_plan'. ` +
+      `Mutating operations and objective closures remain strictly blocked until the user approves the plan.`
+    )
+  }
+  const countLabel =
+    po.plannedSecondaryCount !== undefined
+      ? `${po.secondaries.length}/${po.plannedSecondaryCount}`
+      : `${po.secondaries.length}`
+  return (
+    `⚠️ [Exploration Budget Advisory (${count} read-only actions, reminder every ${interval})]: ` +
+    `You have executed ${count} pre-approval exploration actions on "${po.title}" (${countLabel} secondary objective(s) drafted) without presenting the plan for user approval. ` +
+    `When ready, finish drafting and call 'objective_manage(action: "present_plan")'. ` +
+    `Mutating operations and closing/starting any objective remain strictly blocked until explicit user approval.`
   )
 }
 
@@ -383,6 +415,78 @@ function persistSessionObjectives(sessionID: string): void {
   void syncSessionObjectivesMetadata(sessionID, po).catch(() => {})
 }
 
+export const PRE_APPROVAL_MUTATING_TOOLS = new Set([
+  "edit",
+  "write",
+  "apply_diff",
+  "patch",
+  "delete_file",
+  "browse_click",
+  "browse.click",
+  "browse_fill",
+  "browse.fill",
+  "browse_type",
+  "browse.type",
+  "browse_drag",
+  "browse.drag",
+  "browse_press",
+  "browse.press",
+  "browse_select",
+  "browse.select",
+  "browse_upload",
+  "browse.upload",
+  "worktree_create",
+  "worktree_remove",
+  "opencode.worktree_create",
+  "opencode.worktree_remove",
+  "artifact_create",
+  "artifact_update",
+  "artifact_delete",
+  "opencode.artifact_create",
+  "opencode.artifact_update",
+  "opencode.artifact_delete",
+])
+
+export function isPreApprovalMutatingTool(tool: string): boolean {
+  const norm = tool.trim().toLowerCase()
+  if (PRE_APPROVAL_MUTATING_TOOLS.has(norm)) return true
+  // Catch namespaced browse/worktree/artifact mutation variants (e.g. "mcp__browse__click")
+  if (/(?:^|[._/])browse[._/](click|fill|type|drag|press|select|upload)$/i.test(norm)) return true
+  if (/(?:^|[._/])(worktree_(create|remove)|artifact_(create|update|delete))$/i.test(norm)) return true
+  return false
+}
+
+const MUTATING_SHELL_CMD_RE =
+  /(?:^|[;&|]\s*|\$\(\s*)(?:sudo\s+)?(?:rm|rmdir|mv|cp|mkdir|touch|chmod|chown|chgrp|ln|truncate|dd|tee)\b/i
+const MUTATING_INPLACE_RE = /(?:^|[;&|]\s*)(?:sed|perl)\b[^\n]*\s-[a-zA-Z]*i\b/i
+const MUTATING_GIT_RE =
+  /(?:^|[;&|]\s*)git\s+(?:-[a-zA-Z]\s+\S+\s+)*(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|restore|cherry-pick|revert|stash|clean|rm|mv|branch\s+-[dDmM])\b/i
+const MUTATING_PKG_RE =
+  /(?:^|[;&|]\s*)(?:bun|npm|pnpm|yarn)\s+(?:install|i|add|remove|rm|uninstall|update|upgrade|publish|link)\b/i
+const MUTATING_CURL_RE =
+  /(?:^|[;&|]\s*)curl\b[^\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--request\s*(?:POST|PUT|PATCH|DELETE)|--data\b|-d\s|-F\s|--upload-file\b|-o\s|-O\b)/i
+
+export function isMutatingShellCommand(command: string): boolean {
+  const raw = (command ?? "").trim()
+  if (!raw) return false
+
+  // Strip quoted strings to avoid false positives on literals like `grep "a > b"` or `git log --format="-> %s"`.
+  const unquoted = raw.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, '""')
+
+  // Detect file output redirections (> or >>) while ignoring safe fd / /dev/null redirections.
+  const withoutSafeRedirects = unquoted
+    .replace(/\b[0-9]*>&[0-9]+\b/g, "")
+    .replace(/(?:[0-9]*|&)>>?\s*\/dev\/null\b/g, "")
+  if (/(?:^|[^<])>>?\s*[^\s&|;]/.test(withoutSafeRedirects)) return true
+
+  if (MUTATING_SHELL_CMD_RE.test(unquoted)) return true
+  if (MUTATING_INPLACE_RE.test(unquoted)) return true
+  if (MUTATING_GIT_RE.test(unquoted)) return true
+  if (MUTATING_PKG_RE.test(unquoted)) return true
+  if (MUTATING_CURL_RE.test(unquoted)) return true
+  return false
+}
+
 export const READONLY_TOOLS = new Set([
   "read",
   "list",
@@ -433,6 +537,7 @@ export function clearSessionObjectives(sessionID: string) {
   antiLoopWarnings.delete(sessionID)
   actionWarnings.delete(sessionID)
   actionsWithoutObjectiveSync.delete(sessionID)
+  preApprovalExplorationCounts.delete(sessionID)
   pendingSyncAdvisories.delete(sessionID)
   consecutiveFailureCounts.delete(sessionID)
   activeCodeModeCalls.delete(sessionID)
@@ -562,6 +667,23 @@ export function setPrimaryObjective(
 const isClosedStatus = (status: SecondaryObjectiveStatus) =>
   status === "resolved" || status === "discarded" || status === "cancelled"
 
+function isUnattendedEnvironment(sessionID?: string): boolean {
+  const cfg = getObjectivesConfig(sessionID)
+  return Boolean(
+    cfg.unattended ||
+      (typeof process !== "undefined" &&
+        (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true")),
+  )
+}
+
+export function isPlanApprovedForExecution(po: PrimaryObjective | undefined, sessionID?: string): boolean {
+  if (!po) return false
+  if (po.approvedByUser === true) return true
+  if (po.unattended === true) return true
+  if (isUnattendedEnvironment(sessionID)) return true
+  return false
+}
+
 export function updatePrimaryObjective(
   sessionID: string,
   updates: {
@@ -583,6 +705,15 @@ export function updatePrimaryObjective(
   if (updates.definitionOfDone !== undefined) po.definitionOfDone = updates.definitionOfDone.trim()
   if (updates.validationProof !== undefined) po.validationProof = updates.validationProof?.trim() || undefined
   if (updates.dod !== undefined) po.dod = updates.dod
+
+  // Absolute non-bypassable invariant: NEVER close or finalize the PO without user plan approval.
+  if (updates.status === "resolved" && !isPlanApprovedForExecution(po, sessionID)) {
+    return {
+      success: false,
+      error:
+        "⚠️ [Protocol Guard - Plan Approval Required]: Cannot close or finalize the Primary Objective without explicit user approval of the plan (approvedByUser: false). Present the plan via 'present_plan' and await user confirmation.",
+    }
+  }
 
   if (updates.status === "resolved" && !opts?.bypassGates) {
     // No-shortcuts closure rule: an SO counts as closed only when the SO itself AND every one of its tertiary sub-objectives are closed.
@@ -763,6 +894,14 @@ export function updateSecondaryObjective(
   const target = po.secondaries.find((s) => s.id.toLowerCase() === id.trim().toLowerCase())
   if (!target) {
     return { success: false, error: `Secondary objective ${id} not found.` }
+  }
+
+  // Absolute non-bypassable invariant: NEVER close or finalize any SO without user plan approval.
+  if (updates.status && isClosedStatus(updates.status) && !isPlanApprovedForExecution(po, sessionID)) {
+    return {
+      success: false,
+      error: `⚠️ [Protocol Guard - Plan Approval Required]: Cannot close or finalize ${id} (status: '${updates.status}') without explicit user approval of the plan (approvedByUser: false). Present the plan via 'present_plan' and await user confirmation.`,
+    }
   }
 
   if (updates.status === "exploring" && !opts?.bypassGates && !updates.delegation && !target.delegation) {
@@ -1064,6 +1203,14 @@ export function updateTertiaryObjective(
   }
   if (!target) {
     return { success: false, error: `Tertiary objective ${id} not found.` }
+  }
+
+  // Absolute non-bypassable invariant: NEVER close or finalize any TO without user plan approval.
+  if (updates.status && isClosedStatus(updates.status) && !isPlanApprovedForExecution(po, sessionID)) {
+    return {
+      success: false,
+      error: `⚠️ [Protocol Guard - Plan Approval Required]: Cannot close or finalize ${id} (status: '${updates.status}') without explicit user approval of the plan (approvedByUser: false). Present the plan via 'present_plan' and await user confirmation.`,
+    }
   }
 
   if (updates.status === "exploring" && !opts?.bypassGates && !updates.delegation && !target.delegation) {
@@ -2005,6 +2152,8 @@ export function presentPlan(
   po.phase = { paused: true, since: now, checkpointAt: po.phase?.checkpointAt, reason: reason?.trim() || undefined }
   pendingPlanApprovalSessions.add(sessionID)
   authenticatedApprovalSessions.delete(sessionID)
+  preApprovalExplorationCounts.delete(sessionID)
+  pendingSyncAdvisories.delete(sessionID)
 
   if (options?.unattended !== undefined) {
     po.unattended = options.unattended
@@ -2044,6 +2193,8 @@ export function resumePlan(sessionID: string, note?: string): { success: boolean
   po.approvedByUser = true
   authenticatedApprovalSessions.add(sessionID)
   pendingPlanApprovalSessions.delete(sessionID)
+  preApprovalExplorationCounts.delete(sessionID)
+  pendingSyncAdvisories.delete(sessionID)
   if (po.status === "presented_awaiting_confirmation" || po.status === "investigating") po.status = "exploring"
   po.phase = { ...po.phase, paused: false, reason: note?.trim() || po.phase?.reason }
   po.updatedAt = now
@@ -3641,15 +3792,10 @@ function checkPlanApprovalGuard(
   action?: string,
 ): string | undefined {
   if (!po) return undefined
-  if (po.approvedByUser) return undefined
-  if (po.unattended) return undefined
-  const cfg = getObjectivesConfig(sessionID)
-  const isUnattendedEnv =
-    cfg.unattended ||
-    (typeof process !== "undefined" &&
-      (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true"))
-  if (isUnattendedEnv) {
-    po.approvedByUser = true
+  if (isPlanApprovedForExecution(po, sessionID)) {
+    if (isUnattendedEnvironment(sessionID) && !po.approvedByUser) {
+      po.approvedByUser = true
+    }
     return undefined
   }
 
@@ -3788,7 +3934,15 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     ) {
       const requested = parsedCfg.maxActionsWithoutSync
       parsedCfg.maxActionsWithoutSync = AGENT_CONFIG_MAX_ACTIONS_CEILING
-      configClampedNote = ` (clamped maxActionsWithoutSync from ${requested} to safe agent ceiling ${AGENT_CONFIG_MAX_ACTIONS_CEILING}; use user config/CLI/env for higher limits)`
+      configClampedNote += ` (clamped maxActionsWithoutSync from ${requested} to safe agent ceiling ${AGENT_CONFIG_MAX_ACTIONS_CEILING}; use user config/CLI/env for higher limits)`
+    }
+    if (
+      parsedCfg.explorationActionsThreshold !== undefined &&
+      parsedCfg.explorationActionsThreshold > AGENT_CONFIG_MAX_EXPLORATION_CEILING
+    ) {
+      const requested = parsedCfg.explorationActionsThreshold
+      parsedCfg.explorationActionsThreshold = AGENT_CONFIG_MAX_EXPLORATION_CEILING
+      configClampedNote += ` (clamped explorationActionsThreshold from ${requested} to safe agent ceiling ${AGENT_CONFIG_MAX_EXPLORATION_CEILING}; use user config/CLI/env for higher limits)`
     }
     if (Object.keys(parsedCfg).length > 0) {
       setSessionObjectivesConfig(sessionID, parsedCfg)
@@ -3952,12 +4106,18 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       created.unattended = true
       created.approvedByUser = true
       created.status = "exploring"
-    } else if (isPlanning) {
+      persistSessionObjectives(sessionID)
+    } else if (!isTestEnv || isPlanning) {
+      // HARD INVARIANT: In interactive (non-unattended) mode, EVERY new objective tree MUST
+      // start unapproved (approvedByUser: false, status: 'investigating') — even when
+      // plannedSecondaryCount is omitted or presentPlan: false is passed.
       created.approvedByUser = false
       created.status = "investigating"
+      persistSessionObjectives(sessionID)
     } else {
       created.approvedByUser = true
       created.status = "exploring"
+      persistSessionObjectives(sessionID)
     }
     let countWarning: string | undefined
     if (hasPlannedSecondaries) {
@@ -5127,8 +5287,9 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         if (!sessionID) return
         if (await isSubagentSession(sessionID)) return
 
-        // Reset unsynced consecutive action and read counters whenever the user intervenes in chat
+        // Reset unsynced consecutive action, exploration, and read counters whenever the user intervenes in chat
         actionsWithoutObjectiveSync.delete(sessionID)
+        preApprovalExplorationCounts.delete(sessionID)
         pendingSyncAdvisories.delete(sessionID)
         consecutiveReadCounts.delete(sessionID)
         consecutiveFailureCounts.delete(sessionID)
@@ -5156,15 +5317,21 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         }
 
         const isExplicitApprovalMetadata = Boolean(event?.metadata?.planApproval)
-        const isCanonicalApprovalText =
-          promptText.includes("Plan aprobado explícitamente por el usuario") ||
+        const isExplicitDialogApprovalText = promptText.includes("Plan aprobado explícitamente por el usuario")
+        const isCasualApprovalText =
           /^(plan\s+aprobado|aprobado|aprobar|proceder|adelante|approved|proceed)\b/i.test(promptText)
 
         const isRefinementRequest =
           /refin|ajust|cambi|modific|corri|esper|pregunt|\bno\b/i.test(promptText) &&
-          !isCanonicalApprovalText
+          !isExplicitDialogApprovalText &&
+          !isCasualApprovalText
 
-        if (isExplicitApprovalMetadata || (isCanonicalApprovalText && !isRefinementRequest)) {
+        const isPresentedForApproval = po.status === "presented_awaiting_confirmation"
+        if (
+          isExplicitApprovalMetadata ||
+          isExplicitDialogApprovalText ||
+          (isPresentedForApproval && isCasualApprovalText && !isRefinementRequest)
+        ) {
           po.approvedByUser = true
           authenticatedApprovalSessions.add(sessionID)
           pendingPlanApprovalSessions.delete(sessionID)
@@ -5343,14 +5510,22 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         }
       }
 
-      if (event.tool === "edit" || event.tool === "write") {
-        if (po && !po.approvedByUser && !po.unattended && !cfg.unattended) {
-          const isUnattendedEnv =
-            typeof process !== "undefined" &&
-            (process.env.OPENCODE_UNATTENDED === "true" || process.env.UNATTENDED === "true")
-          if (!isUnattendedEnv) {
+      const isApproved = isPlanApprovedForExecution(po, sessionID)
+
+      // Strict read-only guard before user plan approval:
+      // In exploration / pre-approval mode (po && !isApproved), ZERO mutating operations are allowed:
+      // blocks edit/write/patch, mutating shell commands, and mutating Code Mode tools (browse/worktree/artifact).
+      if (po && !isApproved) {
+        if (isPreApprovalMutatingTool(event.tool)) {
+          throw new Error(
+            `⚠️ [Protocol Guard - Plan Approval Required]: Mutating tool '${event.tool}' is prohibited during exploration before user approval of the objective plan (approvedByUser: false). Only read-only exploration commands are permitted; present the plan via 'present_plan' and await explicit user confirmation.`,
+          )
+        }
+        if (event.tool === "shell") {
+          const cmd = typeof (event.input as any)?.command === "string" ? (event.input as any).command : ""
+          if (isMutatingShellCommand(cmd)) {
             throw new Error(
-              "⚠️ [Protocol Guard - Plan Approval Required]: Modifying project files before user approval of the objective plan is prohibited. Present the plan via 'present_plan' and await explicit user confirmation.",
+              `⚠️ [Protocol Guard - Plan Approval Required]: Mutating shell command is prohibited during exploration before user approval of the objective plan (approvedByUser: false). Only read-only shell commands are permitted; present the plan via 'present_plan' and await explicit user confirmation.`,
             )
           }
         }
@@ -5360,6 +5535,10 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       const innerCodeMode = isInnerCodeModeCall(sessionID, event.tool, callId)
 
       if (event.tool === "objective_manage") {
+        // In approved execution mode, objective_manage resets sync counters.
+        // Note: preApprovalExplorationCounts is intentionally NOT reset here so draft actions
+        // (add_secondary, add_finding, etc.) cannot bypass the pre-approval exploration budget;
+        // only present_plan, genuine approval, or user chat intervention resets it.
         actionsWithoutObjectiveSync.delete(sessionID)
         pendingSyncAdvisories.delete(sessionID)
         consecutiveReadCounts.delete(sessionID)
@@ -5370,65 +5549,62 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         event.tool !== "session_compact" &&
         event.tool !== "context_budget"
       ) {
-        const prevCount = actionsWithoutObjectiveSync.get(sessionID) ?? 0
-        const unsyncedCount = addWeightedActionCount(prevCount, getSyncActionWeight(event.tool))
-        actionsWithoutObjectiveSync.set(sessionID, unsyncedCount)
+        if (!po || !isApproved) {
+          // Exploration / Pre-Approval Mode (read-only only):
+          // Indefinite non-blocking periodic advisory every explorationActionsThreshold actions (default: 40).
+          // The tool executes normally and execute.after appends the advisory alongside the real output.
+          const prevExploration = preApprovalExplorationCounts.get(sessionID) ?? 0
+          const explorationCount = prevExploration + 1
+          preApprovalExplorationCounts.set(sessionID, explorationCount)
 
-        const planPresented = Boolean(
-          po &&
-            (po.planPresentedAt ||
-              po.status === "presented_awaiting_confirmation" ||
-              po.approvedByUser ||
-              po.unattended ||
-              cfg.unattended),
-        )
-        const target = po ? findActiveExecutionTarget(po) : undefined
-        const inApprovedExecution = Boolean(po && planPresented && target?.activeSO)
+          const advisoryInterval = Math.max(1, cfg.explorationActionsThreshold)
+          if (explorationCount % advisoryInterval === 0) {
+            pendingSyncAdvisories.set(
+              sessionID,
+              buildExplorationPeriodicAdvisory(po, explorationCount, advisoryInterval),
+            )
+          }
+        } else {
+          // Approved Execution Mode: weighted sync counter with Tier-1 advisory and Tier-2 escalation
+          preApprovalExplorationCounts.delete(sessionID)
+          const prevCount = actionsWithoutObjectiveSync.get(sessionID) ?? 0
+          const unsyncedCount = addWeightedActionCount(prevCount, getSyncActionWeight(event.tool))
+          actionsWithoutObjectiveSync.set(sessionID, unsyncedCount)
 
-        if (inApprovedExecution && target?.activeSO) {
-          const tier1Threshold = cfg.maxActionsWithoutSync
-          const tier2Threshold = cfg.maxActionsWithoutSync * 2
-          if (unsyncedCount >= tier2Threshold) {
-            // Tier-2 hard escalation after ignoring Tier-1 advisory; reset on throw to prevent deadlock.
+          const target = findActiveExecutionTarget(po)
+          const inApprovedExecution = Boolean(target.activeSO)
+
+          if (inApprovedExecution && target.activeSO) {
+            const tier1Threshold = cfg.maxActionsWithoutSync
+            const tier2Threshold = cfg.maxActionsWithoutSync * 2
+            if (unsyncedCount >= tier2Threshold) {
+              // Tier-2 hard escalation after ignoring Tier-1 advisory; reset on throw to prevent deadlock.
+              actionsWithoutObjectiveSync.delete(sessionID)
+              pendingSyncAdvisories.delete(sessionID)
+              consecutiveReadCounts.delete(sessionID)
+              throw new Error(buildTier2SyncEscalation(target.activeSO, target.activeTO, unsyncedCount, tier1Threshold))
+            }
+            if (prevCount < tier1Threshold && unsyncedCount >= tier1Threshold) {
+              // Tier-1 non-blocking advisory: let the tool execute and append guidance in execute.after.
+              pendingSyncAdvisories.set(
+                sessionID,
+                buildTier1SyncAdvisory(target.activeSO, target.activeTO, unsyncedCount),
+              )
+            }
+          } else if (unsyncedCount >= cfg.maxActionsWithoutSync) {
+            // Reset on throw to break permanent deadlocks on subsequent calls.
             actionsWithoutObjectiveSync.delete(sessionID)
             pendingSyncAdvisories.delete(sessionID)
             consecutiveReadCounts.delete(sessionID)
-            throw new Error(buildTier2SyncEscalation(target.activeSO, target.activeTO, unsyncedCount, tier1Threshold))
-          }
-          if (prevCount < tier1Threshold && unsyncedCount >= tier1Threshold) {
-            // Tier-1 non-blocking advisory: let the tool execute and append guidance in execute.after.
-            pendingSyncAdvisories.set(
-              sessionID,
-              buildTier1SyncAdvisory(target.activeSO, target.activeTO, unsyncedCount),
-            )
-          }
-        } else if (unsyncedCount >= cfg.maxActionsWithoutSync) {
-          // Reset on throw to break permanent deadlocks on subsequent calls.
-          actionsWithoutObjectiveSync.delete(sessionID)
-          pendingSyncAdvisories.delete(sessionID)
-          consecutiveReadCounts.delete(sessionID)
-          if (!po) {
+            if (po.secondaries.length > 0 && target.nextPendingSO) {
+              throw new Error(
+                `⚠️ [Objective Sync Warning]: Your plan "${po.title}" is approved, but no Secondary Objective is currently in 'exploring' status after ${unsyncedCount} weighted actions. Transition ${target.nextPendingSO.id} ("${target.nextPendingSO.title}") to 'exploring' via 'objective_manage(action: "update_secondary")' before continuing. Do NOT invoke 'session_compact' for this warning.`,
+              )
+            }
             throw new Error(
-              `⚠️ [Objective Sync / Anti-Loop Warning]: You have accumulated ${unsyncedCount} weighted operations without establishing an objective tree. ONLY during a brief initial reconnaissance phase is omitting objective updates permitted. Structure your plan via 'objective_manage(action: "set_primary", ...)' before continuing multi-step work.`,
+              `⚠️ [Objective Sync Warning]: You have accumulated ${unsyncedCount} weighted actions without updating your active objective tree "${po.title}". Sync real progress with 'objective_manage' (or resolve completed work with 'validationProof') before executing further actions. Do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`,
             )
           }
-          if (po.secondaries.length > 0 && !planPresented) {
-            const countLabel =
-              po.plannedSecondaryCount !== undefined
-                ? `${po.secondaries.length}/${po.plannedSecondaryCount}`
-                : `${po.secondaries.length}`
-            throw new Error(
-              `⚠️ [Objective Sync & Plan Presentation Warning]: You have accumulated ${unsyncedCount} weighted actions on "${po.title}" (${countLabel} secondary objective(s) drafted) without presenting the plan to the user. Finish drafting if needed and call 'objective_manage(action: "present_plan")' for user review and approval before executing tasks.`,
-            )
-          }
-          if (po.secondaries.length > 0 && target?.nextPendingSO) {
-            throw new Error(
-              `⚠️ [Objective Sync Warning]: Your plan "${po.title}" is approved, but no Secondary Objective is currently in 'exploring' status after ${unsyncedCount} weighted actions. Transition ${target.nextPendingSO.id} ("${target.nextPendingSO.title}") to 'exploring' via 'objective_manage(action: "update_secondary")' before continuing. Do NOT invoke 'session_compact' for this warning.`,
-            )
-          }
-          throw new Error(
-            `⚠️ [Objective Sync Warning]: You have accumulated ${unsyncedCount} weighted actions without updating your active objective tree "${po.title}". Sync real progress with 'objective_manage' (or resolve completed work with 'validationProof') before executing further actions. Do NOT invoke 'session_compact' for this warning (compact only upon [CRITICAL PRE-COMPACTION ADVISORY]).`,
-          )
         }
       }
 
@@ -5449,12 +5625,15 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         unregisterCodeModeCall(sessionID, callId)
       }
 
-      // Deliver queued Tier-1 non-blocking sync advisory on the completing top-level tool result.
+      // Deliver queued Tier-1 non-blocking sync/exploration advisory on the completing top-level tool result.
       if (!innerCodeMode && event.tool !== "objective_manage") {
         const pendingAdvisory = pendingSyncAdvisories.get(sessionID)
         if (pendingAdvisory) {
           pendingSyncAdvisories.delete(sessionID)
-          appendAfterEventGuidance(event, pendingAdvisory, "[Objective Sync Advisory")
+          const dedupMarker = pendingAdvisory.includes("[Exploration Budget Advisory")
+            ? "[Exploration Budget Advisory"
+            : "[Objective Sync Advisory"
+          appendAfterEventGuidance(event, pendingAdvisory, dedupMarker)
         }
       }
 

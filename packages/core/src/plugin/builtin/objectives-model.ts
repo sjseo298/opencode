@@ -116,6 +116,8 @@ export const SEARCH_NOVEL_THRESHOLD = 0.55
 
 /** Safe upper bound for agent-supplied maxActionsWithoutSync overrides via objective_manage(action: "configure"). */
 export const AGENT_CONFIG_MAX_ACTIONS_CEILING = 50
+/** Safe upper bound for agent-supplied explorationActionsThreshold overrides via objective_manage(action: "configure"). */
+export const AGENT_CONFIG_MAX_EXPLORATION_CEILING = 80
 /** Weighted sync-gate cost for pure read-only tools (vs 1.0 for effectful tools). */
 export const READONLY_ACTION_WEIGHT = 0.5
 export const EFFECTFUL_ACTION_WEIGHT = 1
@@ -125,6 +127,8 @@ export const EFFECTFUL_ACTION_WEIGHT = 1
 export interface ObjectivesProtocolConfig {
   /** Maximum consecutive tool operations (reads, searches, commands, edits) allowed without synchronizing the objective tree before emitting [Objective Sync Warning] (default: 15) */
   maxActionsWithoutSync: number
+  /** Periodic non-blocking advisory interval in exploration/pre-approval mode (!po or !approvedByUser); emits an advisory in execute.after every N read-only actions indefinitely (default: 40) */
+  explorationActionsThreshold: number
   /** Number of identical normalized read calls on the same active Secondary Objective before emitting a repeated-action warning (default: 2) */
   repeatedActionWarningThreshold: number
   /** Similarity score threshold (0.0-1.0) at or above which add_finding rejects a duplicate finding and requires update_finding (default: 0.68) */
@@ -161,6 +165,7 @@ export interface ObjectivesProtocolConfig {
 
 export const DEFAULT_OBJECTIVES_CONFIG: Readonly<ObjectivesProtocolConfig> = {
   maxActionsWithoutSync: 15,
+  explorationActionsThreshold: 40,
   repeatedActionWarningThreshold: 2,
   searchAttachThreshold: SEARCH_ATTACH_THRESHOLD,
   searchNovelThreshold: SEARCH_NOVEL_THRESHOLD,
@@ -242,6 +247,11 @@ export function normalizeObjectivesConfigInput(raw: unknown): Partial<Objectives
       r.max_consecutive_reads,
   )
   if (maxActions !== undefined) out.maxActionsWithoutSync = maxActions
+
+  const explorationActions = toPositiveInt(
+    r.explorationActionsThreshold ?? r.exploration_actions_threshold ?? r.maxExplorationActions,
+  )
+  if (explorationActions !== undefined) out.explorationActionsThreshold = explorationActions
 
   const repeated = toPositiveInt(
     r.repeatedActionWarningThreshold ?? r.repeated_action_warning_threshold ?? r.repeatedActionThreshold,
@@ -332,6 +342,7 @@ export function parseObjectivesConfigFromEnv(
   const fromVars = normalizeObjectivesConfigInput({
     maxActionsWithoutSync:
       env.OPENCODE_OBJECTIVES_MAX_ACTIONS_WITHOUT_SYNC ?? env.OPENCODE_OBJECTIVES_MAX_CONSECUTIVE_READS,
+    explorationActionsThreshold: env.OPENCODE_OBJECTIVES_EXPLORATION_ACTIONS_THRESHOLD,
     repeatedActionWarningThreshold: env.OPENCODE_OBJECTIVES_REPEATED_ACTION_THRESHOLD,
     searchAttachThreshold: env.OPENCODE_OBJECTIVES_SEARCH_ATTACH_THRESHOLD,
     searchNovelThreshold: env.OPENCODE_OBJECTIVES_SEARCH_NOVEL_THRESHOLD,
