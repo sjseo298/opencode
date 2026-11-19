@@ -206,20 +206,6 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
             const tabs = useTabs()
             const tabsStore = tabs.store
 
-            const webMachineBadge = createMemo(() => {
-              if (platform.platform !== "web") return undefined
-              const tab = currentTab()
-              const conn =
-                (tab ? servers.list.find((item) => ServerConnection.key(item) === tab.server) : undefined) ??
-                servers.list.find(servers.current) ??
-                servers.list[0]
-              if (!conn) return undefined
-              const key = ServerConnection.key(conn)
-              const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
-
-              return servers.machineBadge(conn, worktrees)
-            })
-
             createEffect(() => {
               if (
                 settings.appearance.tabLayout() === "vertical" &&
@@ -236,6 +222,22 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
             const preparing = routeSync.preparing
             const session = routeSync.session
             const currentTab = routeSync.currentTab
+
+            const webMachineBadge = createMemo(() => {
+              if (platform.platform !== "web") return undefined
+              const tab = currentTab()
+
+              const conn =
+                (tab ? servers.list.find((item) => ServerConnection.key(item) === tab.server) : undefined) ??
+                servers.list.find(servers.current) ??
+                servers.list[0]
+
+              if (!conn) return undefined
+              const key = ServerConnection.key(conn)
+              const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
+
+              return servers.machineBadge(conn, worktrees)
+            })
 
             makeEventListener(window, SESSION_TABS_REMOVED_EVENT, (event) => {
               const detail = readSessionTabsRemovedDetail(event)
