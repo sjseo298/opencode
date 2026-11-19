@@ -1286,7 +1286,14 @@ export function Session(props: {
 
         const applyLimit = (targetKey: string, newLimit: number) => {
           const store = ensureStore()
-          store.set(targetKey, { limit: newLimit })
+          store.set(targetKey, { limit: newLimit, manualOverride: true })
+          void client.api.session
+            .command({
+              sessionID,
+              name: "setContextLimit",
+              text: `${targetKey} ${newLimit}`,
+            })
+            .catch(() => undefined)
           toast.show({
             message: `Context limit for ${targetKey} set to ${Locale.number(newLimit)} tokens (session only)`,
             variant: "success",

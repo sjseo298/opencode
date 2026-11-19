@@ -161,10 +161,24 @@ export { getDynamicModelContextLimit }
 export async function applyModelContextLimit(input: {
   modelKey: string
   limit: number
+  sessionID?: string
   sdk: ReturnType<typeof useServerSDK>
+  data?: ReturnType<typeof useData>
   language: ReturnType<typeof useLanguage>
 }) {
   setDynamicModelContextLimit(input.modelKey, input.limit)
+
+  const targetSessionID = input.sessionID ?? input.data?.session.list()[0]?.id
+
+  if (targetSessionID) {
+    await input.sdk.api.session
+      .command({
+        sessionID: targetSessionID,
+        name: "setContextLimit",
+        text: `${input.modelKey} ${input.limit}`,
+      })
+      .catch(() => undefined)
+  }
 
   showToast({
     variant: "success",
@@ -175,7 +189,7 @@ export async function applyModelContextLimit(input: {
   })
 }
 
-export function DialogSetContextLimit(props: { activeModelKey?: string }) {
+export function DialogSetContextLimit(props: { activeModelKey?: string; sessionID?: string }) {
   const sdk = useServerSDK()
   const data = useData()
   const workspace = useWorkspaceLocation()
@@ -231,7 +245,9 @@ export function DialogSetContextLimit(props: { activeModelKey?: string }) {
     await applyModelContextLimit({
       modelKey: targetModel,
       limit: parsed,
+      sessionID: props.sessionID,
       sdk,
+      data,
       language,
     })
   }

@@ -6,7 +6,7 @@ Consulta LlamaCPP, LM Studio y proveedores habilitados en OpenCode (GitHub Copil
 genera la configuración de opencode, compara con la actual y actualiza si hay cambios.
 
 También integra modos de inicio y gestión del servicio local equivalentes a RemoteDevcontainers:
-  - opencodeplus web | open     : Asegura el servicio local y relay browse, genera link pair y abre la Web UI en el navegador
+  - opencodeplus web | open     : Asegura el servicio local y relay browse, genera link pair y abre la Web UI en Google Chrome
   - opencodeplus pair | link    : Asegura el servicio local y muestra el link de un solo uso sin abrir navegador
   - opencodeplus tui [args...]  : Asegura el servicio local y conecta la TUI local (--server)
   - opencodeplus start          : Inicia o asegura que el servicio local esté activo
@@ -1621,6 +1621,35 @@ def generate_local_pair_link(service_url: str, binary_cmd: Optional[str] = None)
     return (output, pair_url)
 
 
+def open_url_in_chrome(url: str) -> None:
+    """Open URL explicitly in Google Chrome (where the `browse` extension runs), falling back to default browser if unavailable."""
+    if sys.platform == "darwin":
+        chrome_apps = [
+            Path("/Applications/Google Chrome.app"),
+            Path.home() / "Applications" / "Google Chrome.app",
+        ]
+        if any(app.exists() for app in chrome_apps) and shutil.which("open"):
+            console.print(f"[cyan]🌐 Abriendo en Google Chrome:[/] [bold]{url}[/]")
+            res = subprocess.run(["open", "-a", "Google Chrome", url], capture_output=True)
+            if res.returncode == 0:
+                return
+    else:
+        for chrome_bin in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+            found = shutil.which(chrome_bin)
+            if found:
+                console.print(f"[cyan]🌐 Abriendo en Google Chrome ({chrome_bin}):[/] [bold]{url}[/]")
+                subprocess.Popen([found, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+
+    console.print(f"[cyan]🌐 Abriendo en navegador:[/] [bold]{url}[/]")
+    open_cmd = "open" if sys.platform == "darwin" else "xdg-open"
+    if shutil.which(open_cmd):
+        subprocess.run([open_cmd, url])
+    else:
+        import webbrowser
+        webbrowser.open(url)
+
+
 def action_launch_web(open_browser: bool = True) -> None:
     """Ensure local service, ensure browse relay (for web mode), generate one-time pairing link, and optionally open browser."""
     binary = resolve_opencode_binary()
@@ -1643,13 +1672,7 @@ def action_launch_web(open_browser: bool = True) -> None:
         return
 
     if open_browser:
-        console.print(f"[cyan]🌐 Abriendo en navegador:[/] [bold]{pair_url}[/]")
-        open_cmd = "open" if sys.platform == "darwin" else "xdg-open"
-        if shutil.which(open_cmd):
-            subprocess.run([open_cmd, pair_url])
-        else:
-            import webbrowser
-            webbrowser.open(pair_url)
+        open_url_in_chrome(pair_url)
 
 
 def action_launch_pair() -> None:
@@ -1770,7 +1793,7 @@ def action_manage_service() -> None:
         action_service_status()
         console.print(Panel("Gestión de Servicio Local y Conexión (Estilo RemoteDevcontainers)", border_style="cyan"))
         console.print("  [bold cyan]\\[1][/] [dim](\\[t])[/] Conectar Terminal (TUI)   — Asegura servicio y conecta la TUI local (--server)")
-        console.print("  [bold cyan]\\[2][/] [dim](\\[w])[/] Abrir Web UI (Navegador)  — Asegura servicio y relay browse, genera link pair y abre navegador")
+        console.print("  [bold cyan]\\[2][/] [dim](\\[w])[/] Abrir Web UI (Chrome)     — Asegura servicio y relay browse, genera link pair y abre Google Chrome")
         console.print("  [bold cyan]\\[3][/] [dim](\\[p])[/] Mostrar link Pair         — Asegura servicio y muestra el link de un solo uso")
         console.print("  [bold cyan]\\[4][/]       Iniciar / Asegurar        — Levanta el servicio local si está detenido (start)")
         console.print("  [bold cyan]\\[5][/]       Reiniciar servicio        — Reinicia el servicio local en segundo plano (restart)")
@@ -2719,7 +2742,7 @@ def print_cli_usage() -> None:
     console.print(f"Uso: [bold]{prog}[/] \\[comando]\n")
     console.print("[bold cyan]Comandos de inicio y servicio local (estilo RemoteDevcontainers):[/]")
     console.print("  [bold]menu[/]             (Default sin argumentos) Abre el menú interactivo completo (1-12 o atajos t/w/p/s)")
-    console.print("  [bold]web | open[/]       Asegura servicio local y relay browse, genera link pair y abre el navegador")
+    console.print("  [bold]web | open[/]       Asegura servicio local y relay browse, genera link pair y abre Google Chrome")
     console.print("  [bold]pair | link[/]      Asegura el servicio local y muestra el link de un solo uso sin abrir navegador")
     console.print("  [bold]tui \\[args...][/]    Asegura el servicio local y conecta la TUI local (--server)")
     console.print("  [bold]start[/]            Inicia o asegura que el servicio local en segundo plano esté activo")
@@ -2782,7 +2805,7 @@ def show_main_menu() -> None:
 
     console.print("  [bold cyan]🚀 Iniciar / Conectar OpenCode[/]")
     console.print("    [bold green]\\[1][/] [dim](\\[t])[/] [bold]Iniciar en Terminal (TUI)[/]   — Asegura el servicio local y conecta la TUI interactiva")
-    console.print("    [bold green]\\[2][/] [dim](\\[w])[/] [bold]Iniciar OpenCode Web[/]        — Asegura servicio y relay browse, genera link pair y abre navegador")
+    console.print("    [bold green]\\[2][/] [dim](\\[w])[/] [bold]Iniciar OpenCode Web[/]        — Asegura servicio y relay browse, genera link pair y abre Google Chrome")
     console.print("    [bold green]\\[3][/] [dim](\\[p])[/] [bold]Generar Link Pair[/]           — Asegura el servicio y muestra el link (sin abrir navegador)")
     console.print("    [bold green]\\[4][/] [dim](\\[s])[/] [bold]Servicio Local (Daemon)[/]     — Estado detallado, start, restart, stop, web y pair")
 

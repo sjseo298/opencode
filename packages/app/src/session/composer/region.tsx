@@ -696,6 +696,7 @@ export function ActiveSessionComposerRegion(props: {
                     footer={
                       <ComposerStatusBar
                         model={props.model.composer.model.selection}
+                        sessionID={props.session.identity.params.id}
                         tokens={contextTokens()}
                         autoApprove={{
                           active: autoApprove.active(),

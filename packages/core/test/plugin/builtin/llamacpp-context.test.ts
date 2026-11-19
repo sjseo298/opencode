@@ -199,6 +199,78 @@ describe("llamacpp-context", () => {
       expect(sessionHooks["model.request"]).toBeDefined()
       expect(commands["context"]).toBeDefined()
       expect(commands["refresh-context"]).toBeDefined()
+      expect(commands["setContextLimit"]).toBeDefined()
+      expect(commands["setcontextlimit"]).toBeDefined()
+    })
+
+    test("setContextLimit command applies universal context limit to any provider (e.g. google/antigravity) and protects it from auto-refresh", async () => {
+      delete (globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__
+      let registeredModelTransform: any
+      let modelReloadCount = 0
+      const commands: Record<string, any> = {}
+
+      const mockCtx: any = {
+        options: {},
+        model: {
+          transform: async (fn: any) => {
+            registeredModelTransform = fn
+          },
+          reload: async () => {
+            modelReloadCount += 1
+          },
+        },
+        session: {
+          hook: async () => {},
+          get: async () => ({
+            model: { providerID: "google", id: "antigravity-gemini-4-argon-low" },
+          }),
+        },
+        command: {
+          transform: async (fn: any) => {
+            fn({
+              add: (def: any) => {
+                commands[def.name] = def
+              },
+            })
+          },
+        },
+      }
+
+      await plugin.setup(mockCtx)
+
+      // Apply limit for active non-llamacpp model via single arg ("64k")
+      await commands["setContextLimit"].execute({
+        sessionID: "ses-ag-1",
+        prompt: { text: "64k" },
+      })
+
+      const store = getOrCreateDynamicContextStore()
+      expect(store.getLimit("google/antigravity-gemini-4-argon-low")).toBe(64_000)
+      expect(store.isManualOverride?.("google/antigravity-gemini-4-argon-low")).toBe(true)
+      expect(modelReloadCount).toBe(1)
+
+      // Auto-polling without manualOverride: true must NOT overwrite the user's manual limit
+      store.set("google/antigravity-gemini-4-argon-low", { limit: 200_000 })
+      expect(store.getLimit("google/antigravity-gemini-4-argon-low")).toBe(64_000)
+
+      // Model transform must update both limit.context and clamp limit.input for any provider
+      let updatedLimit: { context: number; input?: number; output: number } | undefined
+      const mockEditor: any = {
+        provider: { get: () => undefined },
+        get: (pID: string, mID: string) =>
+          pID === "google" && mID === "antigravity-gemini-4-argon-low"
+            ? { limit: { context: 200_000, input: 180_000, output: 32_768 } }
+            : undefined,
+        update: (_pID: string, _mID: string, updater: any) => {
+          const draft = { limit: { context: 200_000, input: 180_000, output: 32_768 } }
+          updater(draft)
+          updatedLimit = draft.limit
+        },
+      }
+
+      registeredModelTransform(mockEditor)
+      expect(updatedLimit).toEqual({ context: 64_000, input: 64_000, output: 32_768 })
+      delete (globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__
     })
 
     test("updates model context on model.request hook", async () => {

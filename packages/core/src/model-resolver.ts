@@ -498,6 +498,17 @@ export const layer = Layer.effect(
         usesAPIKeyAuth(runtimeInfo.package)
           ? LanguageModel.update(model, { route: model.route.with({ auth: Auth.none }) })
           : model
+      const dynamicLimit = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__?.getLimit?.(
+        `${selected.providerID}/${selected.id}`,
+      )
+      const effectiveContext =
+        typeof dynamicLimit === "number" && Number.isFinite(dynamicLimit) && dynamicLimit > 0
+          ? dynamicLimit
+          : selected.limit.context
+      const effectiveInput =
+        selected.limit.input !== undefined && effectiveContext > 0
+          ? Math.min(selected.limit.input, effectiveContext)
+          : selected.limit.input
       return {
         model: runtime,
         ref: Ref.make({
@@ -507,7 +518,14 @@ export const layer = Layer.effect(
         }),
         capabilities: selected.capabilities,
         cost: selected.cost,
-        limit: selected.limit,
+        limit:
+          effectiveContext === selected.limit.context && effectiveInput === selected.limit.input
+            ? selected.limit
+            : {
+                ...selected.limit,
+                context: effectiveContext,
+                ...(effectiveInput === undefined ? {} : { input: effectiveInput }),
+              },
         compaction: runtimeInfo.settings?.compaction,
         cache: runtimeInfo.settings?.cache,
         // The WebSocket transport can't present a client certificate, so `tls` keeps the model on HTTP.

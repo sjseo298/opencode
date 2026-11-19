@@ -114,6 +114,7 @@ async function loadDialog(kind: SessionDialogKind, context: SessionCommandContex
     return () => (
       <DialogSetContextLimit
         activeModelKey={currentModel ? `${currentModel.providerID}/${currentModel.id}` : undefined}
+        sessionID={context.session.identity.params.id}
       />
     )
   }
@@ -570,7 +571,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         return
       }
 
-      await applyModelContextLimit({ modelKey: activeKey, limit: parsed, sdk: serverSDK, language })
+      await applyModelContextLimit({
+        modelKey: activeKey,
+        limit: parsed,
+        sessionID: actions.session.identity.params.id,
+        sdk: serverSDK,
+        data,
+        language,
+      })
 
       return
     }
@@ -584,7 +592,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       return
     }
 
-    await applyModelContextLimit({ modelKey: targetModel, limit: parsed, sdk: serverSDK, language })
+    await applyModelContextLimit({
+      modelKey: targetModel,
+      limit: parsed,
+      sessionID: actions.session.identity.params.id,
+      sdk: serverSDK,
+      data,
+      language,
+    })
   }
 
   const copyLastMessage = async () => {

@@ -232,11 +232,17 @@ function overlay(
     if (config.body !== undefined) model.body = Provider.mergeOverlay(model.body, config.body)
     if (config.capabilities !== undefined)
       model.capabilities = Model.mergeCapabilities(config.capabilities, model.capabilities)
+    // FORK: live dynamic context override published by llamacpp-context or user setContextLimit
+    const dynamic = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__?.getLimit?.(`${providerID}/${id}`)
     if (config.limit !== undefined) {
-      // FORK: live llama.cpp context override published by the llamacpp-context plugin
-      const dynamic = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__?.getLimit?.(`${providerID}/${id}`)
       model.limit = { ...model.limit, ...config.limit }
-      if (typeof dynamic === "number" && dynamic > 0) model.limit.context = dynamic
+    }
+    if (typeof dynamic === "number" && dynamic > 0) {
+      model.limit = {
+        ...model.limit,
+        context: dynamic,
+        ...(model.limit.input !== undefined ? { input: Math.min(model.limit.input, dynamic) } : {}),
+      }
     }
   })
   // Variants are spelled for the final package, which the update above normalizes from `aisdk:*`.

@@ -8,6 +8,7 @@ import { useLanguage } from "@/runtime/i18n/language"
 
 export function ComposerStatusBar(props: {
   model: ModelSelection
+  sessionID?: string
   tokens?: number
   autoApprove?: {
     active: boolean
@@ -36,7 +37,7 @@ export function ComposerStatusBar(props: {
     const current = activeModel()
     const activeModelKey = current ? `${current.provider.id}/${current.id}` : undefined
     const { DialogSetContextLimit } = await import("@/session/commands/session-control-dialogs")
-    void dialog.show(() => <DialogSetContextLimit activeModelKey={activeModelKey} />)
+    void dialog.show(() => <DialogSetContextLimit activeModelKey={activeModelKey} sessionID={props.sessionID} />)
   }
 
   return (

@@ -261,6 +261,7 @@ export async function fetchContextLimit(baseURL: string, timeoutMs = 3_000): Pro
 
 export type DynamicContextData = {
   limit?: number
+  manualOverride?: boolean
   used?: number
   totalSlots?: number
   maxSubagents?: number
@@ -278,6 +279,7 @@ export type DynamicContextStore = {
   latestBaseURL?: string
   get(key: string): DynamicContextData | undefined
   getLimit(key: string): number | undefined
+  isManualOverride?(key: string): boolean
   getUsed(key: string): number | undefined
   getTotalSlots(key?: string): number | undefined
   getMaxSubagents(key?: string): number | undefined
@@ -287,6 +289,7 @@ export type DynamicContextStore = {
     key: string,
     data: {
       limit?: number
+      manualOverride?: boolean
       used?: number
       totalSlots?: number
       maxSubagents?: number
@@ -323,6 +326,20 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
           }
         }
         return undefined
+      },
+      isManualOverride(key: string): boolean {
+        const direct = this.entries.get(key)?.manualOverride
+        if (direct) return true
+        const slash = key.indexOf("/")
+        if (slash !== -1) {
+          const modelID = key.slice(slash + 1)
+          for (const [k, v] of this.entries) {
+            if ((k === modelID || k.endsWith("/" + modelID) || modelID.endsWith(k)) && v.manualOverride) {
+              return true
+            }
+          }
+        }
+        return false
       },
       getUsed(key: string): number | undefined {
         const direct = this.entries.get(key)?.used
@@ -412,6 +429,7 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         key: string,
         data: {
           limit?: number
+          manualOverride?: boolean
           used?: number
           totalSlots?: number
           maxSubagents?: number
@@ -420,6 +438,10 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         },
       ) {
         const existing = this.entries.get(key)
+        const keepManualLimit = existing?.manualOverride === true && data.manualOverride !== true
+        const resolvedLimit = keepManualLimit ? existing?.limit : (data.limit ?? existing?.limit)
+        const resolvedManual =
+          data.manualOverride !== undefined ? data.manualOverride : (existing?.manualOverride ?? false)
         const resolvedSlots = data.totalSlots ?? existing?.totalSlots
         const resolvedMaxSub =
           data.maxSubagents ??
@@ -427,7 +449,8 @@ export function getOrCreateDynamicContextStore(): DynamicContextStore {
         const resolvedKvUnified = data.kvUnified ?? existing?.kvUnified
         const resolvedBaseURL = data.baseURL ?? existing?.baseURL
         const updated: DynamicContextData = {
-          limit: data.limit ?? existing?.limit,
+          limit: resolvedLimit,
+          manualOverride: resolvedManual,
           used: data.used ?? existing?.used,
           totalSlots: resolvedSlots,
           maxSubagents: resolvedMaxSub,
@@ -552,26 +575,36 @@ export const Plugin = OpenCodePlugin.define({
         }
       }
 
-      for (const [key, nCtx] of dynamicContexts) {
+      const allOverrides = new Map<string, number>(dynamicContexts)
+      for (const [k, v] of dynamicStore.entries) {
+        if (k.includes("/") && typeof v?.limit === "number" && v.limit > 0) {
+          allOverrides.set(k, v.limit)
+        }
+      }
+
+      for (const [key, nCtx] of allOverrides) {
         const firstSlash = key.indexOf("/")
         if (firstSlash === -1) continue
         const providerID = key.slice(0, firstSlash)
         const modelID = key.slice(firstSlash + 1)
         if (!providerID || !modelID) continue
 
+        const applyDraftLimit = (draft: { limit: { context: number; input?: number; output: number } }) => {
+          draft.limit.context = nCtx
+          if (typeof draft.limit.input === "number" && draft.limit.input > nCtx) {
+            draft.limit.input = nCtx
+          }
+        }
+
         const model = editor.get(providerID, modelID)
         if (model) {
-          editor.update(providerID, modelID, (draft) => {
-            draft.limit.context = nCtx
-          })
+          editor.update(providerID, modelID, applyDraftLimit)
         }
         if (typeof editor.list === "function") {
           for (const m of editor.list(providerID)) {
             const mid = String(m.id)
             if (mid === modelID || mid.endsWith(modelID) || modelID.endsWith(mid)) {
-              editor.update(providerID, m.id as any, (draft) => {
-                draft.limit.context = nCtx
-              })
+              editor.update(providerID, m.id as any, applyDraftLimit)
             }
           }
         }
@@ -623,9 +656,14 @@ export const Plugin = OpenCodePlugin.define({
         (pID === "lmstudio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080")
 
       const detected = await fetchContextInfo(baseURL, timeoutMs)
+      const effectiveLimit =
+        !input.force && dynamicStore.isManualOverride?.(key)
+          ? (dynamicStore.getLimit(key) ?? detected.limit)
+          : detected.limit
+
       cache.set(key, {
         checkedAt: now,
-        nCtx: detected.limit,
+        nCtx: effectiveLimit,
         used: detected.used,
         totalSlots: detected.totalSlots,
         maxSubagents: detected.maxSubagents,
@@ -633,24 +671,29 @@ export const Plugin = OpenCodePlugin.define({
       })
 
       if (
-        detected.limit !== undefined ||
+        effectiveLimit !== undefined ||
         detected.used !== undefined ||
         detected.totalSlots !== undefined ||
         detected.maxSubagents !== undefined ||
         detected.kvUnified !== undefined
       ) {
-        dynamicStore.set(key, { ...detected, baseURL })
+        dynamicStore.set(key, {
+          ...detected,
+          limit: effectiveLimit,
+          ...(input.force && detected.limit !== undefined ? { manualOverride: false } : {}),
+          baseURL,
+        })
       }
 
-      if (detected.limit === undefined) {
+      if (effectiveLimit === undefined) {
         return { updated: false, error: true }
       }
 
       const previous = dynamicContexts.get(key)
-      if (previous === detected.limit) {
+      if (previous === effectiveLimit) {
         return {
           updated: false,
-          nCtx: detected.limit,
+          nCtx: effectiveLimit,
           previous,
           totalSlots: detected.totalSlots,
           maxSubagents: detected.maxSubagents,
@@ -658,11 +701,11 @@ export const Plugin = OpenCodePlugin.define({
       }
 
       if (autoApply || input.force) {
-        dynamicContexts.set(key, detected.limit)
+        dynamicContexts.set(key, effectiveLimit)
         await ctx.model.reload()
         return {
           updated: true,
-          nCtx: detected.limit,
+          nCtx: effectiveLimit,
           previous,
           totalSlots: detected.totalSlots,
           maxSubagents: detected.maxSubagents,
@@ -671,7 +714,7 @@ export const Plugin = OpenCodePlugin.define({
 
       return {
         updated: false,
-        nCtx: detected.limit,
+        nCtx: effectiveLimit,
         previous,
         totalSlots: detected.totalSlots,
         maxSubagents: detected.maxSubagents,
@@ -785,6 +828,49 @@ export const Plugin = OpenCodePlugin.define({
       }
     }
 
+    const parseTokenLimitArg = (val: string): number | undefined => {
+      const clean = val.trim().toLowerCase()
+      if (!clean) return undefined
+      if (clean.endsWith("k")) {
+        const num = Number.parseFloat(clean.slice(0, -1))
+        return Number.isFinite(num) && num > 0 ? Math.round(num * 1_000) : undefined
+      }
+      if (clean.endsWith("m")) {
+        const num = Number.parseFloat(clean.slice(0, -1))
+        return Number.isFinite(num) && num > 0 ? Math.round(num * 1_000_000) : undefined
+      }
+      const num = Number.parseInt(clean.replace(/[,._]/g, ""), 10)
+      return Number.isFinite(num) && num > 0 ? num : undefined
+    }
+
+    const handleSetContextLimit = async (invocation: { sessionID: string; prompt?: { text?: string } }) => {
+      const rawText = (invocation.prompt?.text ?? "").trim()
+      const parts = rawText ? rawText.split(/\s+/) : []
+      const session = await ctx.session.get({ sessionID: invocation.sessionID }).catch(() => undefined)
+      const activeKey = session?.model ? `${session.model.providerID}/${session.model.id}` : undefined
+
+      let targetKey: string | undefined
+      let parsedLimit: number | undefined
+
+      if (parts.length === 1) {
+        parsedLimit = parseTokenLimitArg(parts[0] ?? "")
+        targetKey = activeKey
+      } else if (parts.length >= 2) {
+        targetKey = parts[0]
+        parsedLimit = parseTokenLimitArg(parts[1] ?? "")
+      }
+
+      if (!targetKey || !parsedLimit) return
+
+      dynamicStore.set(targetKey, { limit: parsedLimit, manualOverride: true })
+      dynamicContexts.set(targetKey, parsedLimit)
+      const existingCache = cache.get(targetKey)
+      if (existingCache) {
+        cache.set(targetKey, { ...existingCache, nCtx: parsedLimit, checkedAt: Date.now() })
+      }
+      await ctx.model.reload()
+    }
+
     await ctx.command.transform((editor) => {
       editor.add({
         name: "context",
@@ -795,6 +881,16 @@ export const Plugin = OpenCodePlugin.define({
         name: "refresh-context",
         description: "Refresh dynamic model context from llama.cpp /props",
         execute: handleRefresh,
+      })
+      editor.add({
+        name: "setContextLimit",
+        description: "Override the context window token limit for the active or selected model",
+        execute: handleSetContextLimit,
+      })
+      editor.add({
+        name: "setcontextlimit",
+        description: "Override the context window token limit for the active or selected model",
+        execute: handleSetContextLimit,
       })
     })
   },

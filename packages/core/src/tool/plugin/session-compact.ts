@@ -87,7 +87,10 @@ export const Plugin = {
                   (m) => m.providerID === session.model?.providerID && m.id === session.model?.id,
                 )
                 if (found?.limit?.context && found.limit.context > 0) {
-                  contextLimit = found.limit.context
+                  const dynamicLimit = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__?.getLimit?.(
+                    `${session.model.providerID}/${session.model.id}`,
+                  )
+                  contextLimit = dynamicLimit ?? found.limit.context
                 }
               }
 
