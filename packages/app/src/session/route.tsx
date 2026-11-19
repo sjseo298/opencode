@@ -56,14 +56,6 @@ export function TargetSessionRouteContent() {
   const view = createMemo(() => sessionRouteView(resolution(), server.health))
   const viewed = createMemo(() => viewedSessionID(view()))
   const title = createMemo(() => sessionDocumentTitle(view()))
-  const platform = usePlatform()
-  const servers = useServers()
-  const machine = createMemo(() => {
-    if (platform.platform !== "web") return undefined
-    const worktrees = server.ctx.projects.list().map((p) => p.worktree)
-
-    return servers.machineBadge(server.conn, worktrees)
-  })
   const modelDirectory = createMemo(() => sessionModelDirectory(resolution()))
 
   // Kept once the session leaves `ready`: the session providers can still read it while the route
@@ -73,6 +65,18 @@ export function TargetSessionRouteContent() {
 
     return current.type === "ready" ? current.session.location.directory : previous
   }, "")
+
+  const platform = usePlatform()
+  const servers = useServers()
+
+  const machine = createMemo(() => {
+    if (platform.platform !== "web") return undefined
+    const dir = directory() || modelDirectory()
+    const projectWorktrees = server.ctx.projects.list().map((p) => p.worktree)
+    const worktrees = dir ? [dir, ...projectWorktrees] : projectWorktrees
+
+    return servers.machineBadge(server.conn, worktrees)
+  })
 
   // Health updates rebuild the view; the preparing screen and its composer stay mounted through them.
   const preparing = createMemo(
@@ -297,10 +301,20 @@ function MarkSessionViewed(props: { sessionID: () => string | undefined }) {
 
 // Browser tabs and desktop windows are otherwise indistinguishable, so name them after the open session.
 function SessionDocumentTitle(props: { title: () => string | undefined; machine?: () => string | undefined }) {
-  // Keyed: <Title> reads its text inside a meta effect, which would hit a stale Show accessor once the session is deleted.
+  const documentTitle = createMemo(() => {
+    const sessionTitle = props.title()
+    const machine = props.machine?.()
+
+    if (!sessionTitle && !machine) return undefined
+
+    return formatBrowserDocumentTitle({ sessionTitle, machine })
+  })
+
+  // Keyed on the full formatted string: @solidjs/meta's <Title> only updates the DOM <title> tag when mounted,
+  // so any change in either `title()` or `machine()` remounts <Title> with the updated `[Host] Session · OpenCode`.
   return (
-    <Show when={props.title()} keyed>
-      {(value) => <Title>{formatBrowserDocumentTitle({ sessionTitle: value, machine: props.machine?.() })}</Title>}
+    <Show when={documentTitle()} keyed>
+      {(value) => <Title>{value}</Title>}
     </Show>
   )
 }

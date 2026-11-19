@@ -8,7 +8,7 @@ import { ThemeProvider } from "@opencode/ui/theme/context"
 import { MetaProvider, Title } from "@solidjs/meta"
 import { type BaseRouterProps, Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
-import { type Component, createRenderEffect, ErrorBoundary, type JSX, type ParentProps } from "solid-js"
+import { type Component, createMemo, createRenderEffect, ErrorBoundary, type JSX, type ParentProps, Show } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/shell/commands/command"
 import { DesktopCommands } from "@/shell/commands/desktop"
@@ -90,17 +90,23 @@ function DefaultMachineTitle() {
   const servers = useServers()
   const global = useGlobal()
 
-  const machine = () => {
-    if (platform.platform !== "web") return undefined
+  const text = createMemo(() => {
+    if (platform.platform !== "web") return "OpenCode"
     const conn = servers.list.find(servers.current) ?? servers.list[0]
-    if (!conn) return undefined
+
+    if (!conn) return "OpenCode"
     const key = ServerConnection.key(conn)
     const worktrees = global.serverCtx(key)?.projects.list().map((p) => p.worktree)
+    const machine = servers.machineBadge(conn, worktrees)
 
-    return servers.machineBadge(conn, worktrees)
-  }
+    return formatBrowserDocumentTitle({ machine })
+  })
 
-  return <Title>{formatBrowserDocumentTitle({ machine: machine() })}</Title>
+  return (
+    <Show when={text()} keyed>
+      {(value) => <Title>{value}</Title>}
+    </Show>
+  )
 }
 
 export function AppInterface(props: {

@@ -59,7 +59,16 @@ test("resolveMachineBadge and formatBrowserDocumentTitle identify Local, OIPA de
   expect(resolveMachineBadge({ conn: oipaConn, hostname: "oipa_arl" })).toBe("OIPA")
 
   // Without hostname or /workspaces worktree (e.g. default e2e harness), badge is omitted
-  expect(resolveMachineBadge({ conn: localConn, worktrees: ["C:/OpenCode/Tabs"] })).toBeUndefined()
+  expect(resolveMachineBadge({ conn: localConn, worktrees: ["C:/OpenCode/Tabs"], isLocal: true })).toBeUndefined()
+
+  // macOS local worktree fallback before /api/info hostname settles -> Local
+  expect(
+    resolveMachineBadge({
+      conn: localConn,
+      worktrees: ["/Users/atlantis/Documents/Desarrollo/opencode"],
+      isLocal: true,
+    }),
+  ).toBe("Local")
 
   // Explicit displayName wins
   expect(resolveMachineBadge({ conn: { ...oipaConn, displayName: "OIPA-Prod" }, hostname: "555e4ddc3e90" })).toBe(

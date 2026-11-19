@@ -43,6 +43,7 @@ export function resolveMachineBadge(input: {
   conn?: ServerConnection.Any
   hostname?: string
   worktrees?: ReadonlyArray<string>
+  isLocal?: boolean
 }): string | undefined {
   if (input.conn?.displayName?.trim()) return input.conn.displayName.trim()
 
@@ -56,7 +57,13 @@ export function resolveMachineBadge(input: {
   }
 
   const rawHost = (input.hostname ?? "").trim()
-  if (!rawHost) return undefined
+  if (!rawHost) {
+    if (input.isLocal && worktrees.some((wt) => /^\/Users\//.test(wt.trim()))) {
+      return "Local"
+    }
+
+    return undefined
+  }
 
   const wsMatch = /^\/workspaces\/([^/]+)/.exec(rawHost)
   if (wsMatch?.[1]) {
@@ -436,6 +443,7 @@ export const { use: useServers, provider: ServersProvider } = createSimpleContex
           conn,
           hostname: store.hostnames[key],
           worktrees,
+          isLocal: local(conn),
         })
       },
       projects: {
