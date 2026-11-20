@@ -61,8 +61,27 @@ function uniqueSessionID(prefix: string) {
 }
 
 describe("hierarchical-objectives plugin", () => {
+  const savedUnattendedEnv: Record<string, string | undefined> = {}
+  const unattendedEnvKeys = [
+    "OPENCODE_UNATTENDED",
+    "UNATTENDED",
+    "OPENCODE_OBJECTIVES_UNATTENDED",
+    "OPENCODE_OBJECTIVES_CLI_OVERRIDES",
+    "OPENCODE_OBJECTIVES_CONFIG",
+  ] as const
+
   beforeEach(() => {
-    // Fresh run
+    for (const key of unattendedEnvKeys) {
+      savedUnattendedEnv[key] = process.env[key]
+      delete process.env[key]
+    }
+  })
+
+  afterEach(() => {
+    for (const key of unattendedEnvKeys) {
+      if (savedUnattendedEnv[key] === undefined) delete process.env[key]
+      else process.env[key] = savedUnattendedEnv[key]
+    }
   })
 
   describe("Core Objective State & Methodology Rules", () => {

@@ -189,6 +189,7 @@ test("prompt footer renders max context limit when model is selected even withou
         cost: () => 0,
         message: { list: () => [] },
       },
+      job: { list: () => [] },
       shell: { list: () => [] },
       location: {
         model: { list: () => [{ providerID: "llamacpp", id: "ThinkingCap-Qwen3.8-27B", limit: { context: 262144 } }] },

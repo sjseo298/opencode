@@ -1113,7 +1113,7 @@ describe("SubagentTool reporting", () => {
 
       const reports = (yield* fixture.notices).filter((notice) => notice.metadata?.["source"] === "subagent")
       expect(reports).toHaveLength(1)
-      expect(reports[0]?.text).toContain(`<subagent sessionID="${childID}" state="completed"`)
+      expect(reports[0]?.text).toContain(`<background-result kind="subagent" sessionID="${childID}" state="completed"`)
       expect(reports[0]?.text).toContain("child synced answer")
     }),
   )
@@ -1166,7 +1166,7 @@ describe("SubagentTool reporting", () => {
 
       const reports = (yield* fixture.notices).filter((notice) => notice.metadata?.["source"] === "subagent")
       expect(reports).toHaveLength(1)
-      expect(reports[0]?.text).toContain(`<subagent sessionID="${childID}" state="cancelled"`)
+      expect(reports[0]?.text).toContain(`<background-result kind="subagent" sessionID="${childID}" state="cancelled"`)
       expect(yield* jobs.pendingBackground).toEqual([])
     }),
   )

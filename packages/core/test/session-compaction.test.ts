@@ -118,7 +118,7 @@ const dedicatedResolved = SessionRunnerModel.resolved(dedicatedCompactionModel, 
   cost,
   limit: { context: 128_000, output: 16_000 },
 })
-const runnerModelLayer = Layer.succeed(SessionRunnerModel.Service)({
+const runnerModelLayer = Layer.mock(SessionRunnerModel.Service)({
   resolve: (session) =>
     session.model?.id === "dedicated-compactor" ? Effect.succeed(dedicatedResolved) : Effect.succeed(resolved),
 })
