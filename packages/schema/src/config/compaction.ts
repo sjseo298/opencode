@@ -20,6 +20,10 @@ export class Info extends Schema.Class<Info>("Config.Compaction")({
     description:
       "Model to use for conversation compaction. When omitted, the session's active model performs compaction.",
   }),
+  background: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Write the summary in the background as the session nears automatic compaction, so it does not wait for one (default: true). A summary that is never used still costs tokens.",
+  }),
   keep: Keep.pipe(optional),
   buffer: Schema.Union([Percent, NonNegativeInt]).pipe(optional).annotate({
     description:

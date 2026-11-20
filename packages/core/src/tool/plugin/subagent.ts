@@ -10,6 +10,7 @@ import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
+import { SubagentDepth } from "../../session/subagent-depth.js"
 import { SubagentJob } from "../../session/subagent-job.js"
 import { LlamaCppKV } from "../../session/llamacpp-kv.js"
 import { getObjectivesConfig } from "../../plugin/builtin/objectives-model.js"
@@ -20,7 +21,7 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
   output: [
-    `The subagent is queued to start working in the background once this session stops and becomes idle (sessionID: ${sessionID}). You will receive a <subagent> message when it goes idle, and again after each later round of work.`,
+    `The subagent is queued to start working in the background once this session stops and becomes idle (sessionID: ${sessionID}). You will receive a <background-result kind="subagent"> message when it goes idle, and again after each later round of work.`,
     "DO NOT sleep, poll, proactively check on its progress, or duplicate this subagent's work.",
     "Briefly tell the user what you launched and end your response so the subagent can start.",
     "To send it follow-ups or change its instructions, call subagent again with this sessionID. If a subagent stalls or fails to start after a restart, call subagent with action: \"resume\" and this sessionID.",
@@ -117,7 +118,7 @@ export const Output = Schema.Struct({
 })
 export const description = [
   "Spawns an agent in a child session to work on the specified task, or idempotently resumes an existing child session.",
-  "Subagents always run in the background after the parent stops: the call returns immediately with a sessionID, the child begins once this parent session reaches idle, and you receive a `<subagent>` message each time the child goes idle, including after later work.",
+  'Subagents always run in the background after the parent stops: the call returns immediately with a sessionID, the child begins once this parent session reaches idle, and you receive a `<background-result kind="subagent">` message each time the child goes idle, including after later work.',
   "Briefly tell the user what you launched and end your response so the child can start. Do not sleep, poll, or proactively check on the child's progress.",
   "If an existing subagent appears stalled or failed to resume (for instance after a restart), call `subagent` with `action: \"resume\"` and its `sessionID` (idempotent; no duplicate prompt or `context_budget` required) to ensure it starts or retrieve its settled state.",
   "MANDATORY REQUIREMENT for `action: \"start\"`: You MUST invoke the `context_budget` tool BEFORE calling this tool, and provide `contextBudget: { availableHeadroom: <number> }`.",
@@ -148,12 +149,12 @@ export const Plugin = {
         (model) => model.providerID === ref.providerID && model.id === ref.id,
       )
       if (model === undefined) {
-        const other = (yield* models.available(["image", "decision"])).find(
+        const other = (yield* models.available(["image", "video", "decision"])).find(
           (model) => model.providerID === ref.providerID && model.id === ref.id,
         )
         return yield* new ToolFailure({
           message: other
-            ? `Model "${ref.providerID}/${ref.id}" is ${other.type === "image" ? "an image" : "a decision"} model; subagents need a chat model. Use the models tool to find one.`
+            ? `Model "${ref.providerID}/${ref.id}" is ${other.type === "image" ? "an image" : other.type === "video" ? "a video" : "a decision"} model; subagents need a chat model. Use the models tool to find one.`
             : `Model "${ref.providerID}/${ref.id}" is not available. Use the models tool to see what is available.`,
         })
       }
@@ -298,20 +299,12 @@ export const Plugin = {
                     (error) => new ToolFailure({ message: `Parent session not found: ${context.sessionID}`, error }),
                   ),
                 )
-              let current = parent
-              let depth = 0
-              while (current.parentID) {
-                depth++
-                current = yield* sessions
-                  .get(current.parentID)
-                  .pipe(
-                    Effect.mapError(
-                      (error) => new ToolFailure({ message: `Parent session not found: ${current.parentID}`, error }),
-                    ),
-                  )
-              }
-              const limit = Config.latest(yield* config.entries(), "experimental")?.subagent_depth ?? 1
-              if (depth >= limit)
+              const limit = yield* SubagentDepth.reached(parent, sessions, config).pipe(
+                Effect.mapError(
+                  (error) => new ToolFailure({ message: `Parent session not found: ${error.sessionID}`, error }),
+                ),
+              )
+              if (limit !== undefined)
                 return yield* new ToolFailure({
                   message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
                 })

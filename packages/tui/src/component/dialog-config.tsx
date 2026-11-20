@@ -737,7 +737,8 @@ export function DialogConfig(props: { current?: string }) {
       if (!result || typeof result !== "object") return undefined
       return (result as Record<string, unknown>)[key]
     }, config.data)
-    if (setting.path.join(".") === "theme.name") return current ?? themes.selected
+    // The theme context resolves aliases and missing themes, so it names what is actually shown.
+    if (setting.path.join(".") === "theme.name") return themes.selected
     if (setting.path.join(".") === "compaction.model") return serverCompactionModel() ?? current ?? setting.default
     if (setting.path[0] === "objectives" && setting.path[1]) {
       return serverObjectivesConfig()[setting.path[1]] ?? current ?? setting.default

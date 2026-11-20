@@ -178,6 +178,7 @@ function PreparingSession(props: { sessionID: string; pending: PendingSession })
             <SessionUserMessage
               sessionID={props.sessionID}
               message={props.pending.message}
+              fold={settings.general.foldUserMessages()}
               comments={readPromptPresentation(props.pending.message.metadata)?.comments}
               historicalAgent={props.pending.selection.agent}
               historicalModel={{
