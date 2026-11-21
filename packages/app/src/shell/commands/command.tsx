@@ -79,6 +79,7 @@ export interface CommandOption {
   /** Command id whose custom keybind this command takes; Settings > Shortcuts lists only that command. */
   follows?: string
   slash?: string
+  slashAliases?: readonly string[]
   slashArguments?: boolean
   /** Listed right after the option whose slash name this is, when one is registered. */
   slashAfter?: string

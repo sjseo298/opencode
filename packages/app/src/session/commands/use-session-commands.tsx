@@ -794,6 +794,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.rewind"),
       description: language.t("command.session.rewind.description"),
       slash: "rewind",
+      slashAliases: ["undo-steps", "undosteps", "retry-steps"],
       slashArguments: true,
       disabled: !actions.session.identity.params.id || actions.session.history.visibleUserMessages().length === 0,
       onSelect: (_source, input) => void rewindSteps(input),
@@ -803,16 +804,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.setContextLimit"),
       description: language.t("command.session.setContextLimit.description"),
       slash: "setContextLimit",
+      slashAliases: ["setcontextlimit"],
       slashArguments: true,
-      onSelect: (_source, input) => void setContextLimit(input),
-    }),
-    sessionCommand({
-      id: "session.context.limit.lower",
-      title: language.t("command.session.setContextLimit"),
-      description: language.t("command.session.setContextLimit.description"),
-      slash: "setcontextlimit",
-      slashArguments: true,
-      hidden: true,
       onSelect: (_source, input) => void setContextLimit(input),
     }),
     sessionCommand({
@@ -846,6 +839,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.delete"),
       description: language.t("command.session.delete.description"),
       slash: "delete",
+      slashAliases: ["session.delete"],
       disabled: !actions.session.identity.params.id,
       onSelect: deleteSession,
     }),
@@ -854,6 +848,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.switch"),
       description: language.t("command.session.switch.description"),
       slash: "sessions",
+      slashAliases: ["resume", "continue"],
       onSelect: switchSession,
     }),
     sessionCommand({
@@ -928,6 +923,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         description: language.t("palette.search.placeholder"),
         keybind: "mod+p",
         slash: "open",
+        slashAliases: ["projects", "project"],
         onSelect: openFile,
       }),
       fileCommand({
@@ -1078,6 +1074,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.mcp.toggle.description"),
       keybind: "mod+;",
       slash: "mcp",
+      slashAliases: ["mcps"],
       onSelect: chooseMcp,
     }),
   ]
@@ -1092,17 +1089,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
           : language.t("command.permissions.autoaccept.enable"),
       keybind: "mod+shift+a",
       slash: "yolo",
+      slashAliases: ["autoapprove", "auto-approve", "no-approval", "noapproval", "permissions"],
       keywords: "yolo autoapprove auto-approve no-approval permissions",
-      disabled: false,
-      onSelect: toggleAutoAccept,
-    }),
-    permissionsCommand({
-      id: "permissions.autoaccept.alias",
-      title: autoAccepting()
-        ? language.t("command.permissions.autoaccept.disable")
-        : language.t("command.permissions.autoaccept.enable"),
-      slash: "autoapprove",
-      hidden: true,
       disabled: false,
       onSelect: toggleAutoAccept,
     }),

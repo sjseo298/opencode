@@ -921,7 +921,7 @@ function App() {
         title: "Switch model",
         suggested: true,
         category: "Agent",
-        slash: { name: "models" },
+        slash: { name: "models", aliases: ["model"] },
         run: () => {
           dialog.replace(() => <DialogModel />)
         },
@@ -966,7 +966,7 @@ function App() {
         name: "agent.list",
         title: "Switch agent",
         category: "Agent",
-        slash: { name: "agents" },
+        slash: { name: "agents", aliases: ["agent"] },
         run: () => {
           dialog.replace(() => <DialogAgent />)
         },
@@ -984,7 +984,7 @@ function App() {
         name: "mcp.list",
         title: "MCP servers",
         category: "Agent",
-        slash: { name: "mcps" },
+        slash: { name: "mcps", aliases: ["mcp"] },
         run: () => {
           dialog.replace(() => <DialogMcp />)
         },

@@ -43,10 +43,16 @@ export function sessionFamily<T extends SessionNode>(sessions: readonly T[], ses
   return walk(root(current).id, [])
 }
 
+export interface DynamicContextOverride {
+  readonly limit?: number
+  readonly used?: number
+}
+
 export function contextUsage(
   messages: ReadonlyArray<SessionMessageInfo>,
   models: ReadonlyArray<ModelInfo> | undefined,
   boundary?: string,
+  dynamic?: DynamicContextOverride,
 ) {
   const last = lastAssistantWithUsage(messages, boundary)
   const lastAssistant =
@@ -55,16 +61,13 @@ export function contextUsage(
       (m): m is Extract<SessionMessageInfo, { type: "assistant" }> =>
         m.type === "assistant" && typeof m.model === "object" && m.model !== null,
     )
-  const modelKey = lastAssistant ? `${lastAssistant.model.providerID}/${lastAssistant.model.id}` : undefined
-  const store = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__
-  const dynamicInfo = modelKey ? store?.get?.(modelKey) : undefined
 
   let tokens = last
     ? last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    : (dynamicInfo?.used ?? 0)
+    : (dynamic?.used ?? 0)
 
-  if (typeof dynamicInfo?.used === "number" && dynamicInfo.used > 0 && dynamicInfo.used > tokens) {
-    tokens = dynamicInfo.used
+  if (typeof dynamic?.used === "number" && dynamic.used > 0 && dynamic.used > tokens) {
+    tokens = dynamic.used
   }
 
   if (tokens <= 0) return
@@ -73,8 +76,7 @@ export function contextUsage(
   const modelProviderID = lastAssistant?.model.providerID
   const model = models?.find((model) => model.providerID === modelProviderID && model.id === modelID)
 
-  const dynamicLimit = modelKey ? store?.getLimit?.(modelKey) : undefined
-  const contextLimit = typeof dynamicLimit === "number" && dynamicLimit > 0 ? dynamicLimit : model?.limit?.context
+  const contextLimit = typeof dynamic?.limit === "number" && dynamic.limit > 0 ? dynamic.limit : model?.limit?.context
 
   return {
     tokens,

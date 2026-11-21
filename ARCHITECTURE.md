@@ -192,7 +192,7 @@ Tokens de tema por rol semántico (no por color) con esquema extensible del tema
 ## 7. Build, checks y tests
 
 - **Turbo** (`turbo.json`, v2.10.2): tareas `typecheck`, `test`, `build` con orden explícito — `@opencode/core#typecheck` es pre-requisito de cli/sdk/server/simulation/tui; la tarea `transit` pliega las dependencias workspace al hash de los tests (los paquetes exportan sus fuentes, así que los tests nunca esperan el build de una dependencia) y **cada paquete con script `test` corre en CI** ("a new suite cannot be left out of CI").
-- **Check** (`bun run check` desde la raíz) = lint + typecheck: `oxlint` (con plugins) + **reglas propias de ast-grep para patrones Effect** (`script/ast-grep/**`, con tests de reglas vía `test:lint-rules`) + `turbo typecheck --concurrency=3`.
+- **Check** (`bun run check` desde la raíz) = lint + typecheck: `oxlint` (con plugins) + **reglas propias de ast-grep para patrones Effect** (`script/ast-grep/**`, con tests de reglas vía `test:lint-rules`) + **verificación de paridad TUI ↔ Web** (`script/check-surface-parity.ts` contra `packages/schema/src/surface-parity.ts`) + `turbo typecheck --concurrency=3`.
 - **Tests por paquete**: prohibidos desde la raíz — el script `test` de la raíz es un guard que termina 1 con *"do not run tests from root"*; se corren dentro del paquete (p. ej. `bun test` en `packages/core`, timeouts de 5 s).
 - **Guard de codegen**: `@opencode/client#check:generated` (regenerar + `git diff --exit-code`).
 - **Versiones compartidas**: el catálogo de workspaces de la raíz fija `effect 4.0.1`, OpenTUI `0.5.17`, Solid `1.9.15`, drizzle RC, Vite, etc.; `overrides` y `patches/` (patchedDependencies) mantienen consistencia global. Husky en `prepare`.

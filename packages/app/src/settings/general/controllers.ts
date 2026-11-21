@@ -7,7 +7,7 @@ import {
   AntigravityAccountsRpc,
   DEFAULT_ANTIGRAVITY_SETTINGS,
   type AntigravitySettings,
-} from "@/providers/antigravity/account-rpc"
+} from "@opencode/schema/antigravity"
 import {
   monoDefault,
   monoFontFamily,
@@ -180,9 +180,6 @@ export function createServerCompactionModelController(server: Accessor<ServerCon
           .catch(() => []),
       ])
 
-      const boundary = entries.findIndex((entry) => entry.type === "directory")
-      const global = boundary === -1 ? entries : entries.slice(0, boundary)
-
       const options = models
         .map((m) => ({
           id: `${m.providerID}/${m.id}`,
@@ -191,7 +188,7 @@ export function createServerCompactionModelController(server: Accessor<ServerCon
         .sort((a, b) => a.id.localeCompare(b.id, undefined, { sensitivity: "base" }))
 
       const current =
-        global
+        entries
           .flatMap((entry) => {
             if (entry.type !== "document" || !entry.info.compaction?.model) return []
             const m = entry.info.compaction.model
@@ -396,13 +393,28 @@ export const DEFAULT_OBJECTIVES_UI_CONFIG: ObjectivesConfigValues = {
 
 export function createServerObjectivesController(server: Accessor<ServerConnection.Any | undefined>) {
   const language = useLanguage()
+  let lastSynced: ObjectivesConfigValues = { ...DEFAULT_OBJECTIVES_UI_CONFIG }
 
   const setting = createOptimisticSetting({
     source: useServerCtx(server),
     initial: DEFAULT_OBJECTIVES_UI_CONFIG,
-    initialMeta: undefined,
+    initialMeta: Array.of<CompactionModelOption>(),
     load: async (context) => {
-      const entries = await context.sdk.api.config.get().catch(() => [])
+      const [entries, models] = await Promise.all([
+        context.sdk.api.config.get().catch(() => []),
+        context.sdk.api.model
+          .list()
+          .then((res) => res.data)
+          .catch(() => []),
+      ])
+
+      const options = models
+        .map((m) => ({
+          id: `${m.providerID}/${m.id}`,
+          name: `${m.providerID}/${m.name || m.id}`,
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id, undefined, { sensitivity: "base" }))
+
       const merged: ObjectivesConfigValues = { ...DEFAULT_OBJECTIVES_UI_CONFIG }
 
       for (const entry of entries) {
@@ -450,13 +462,52 @@ export function createServerObjectivesController(server: Accessor<ServerConnecti
         if (obj.subagent_model !== undefined) merged.subagent_model = obj.subagent_model
       }
 
+      lastSynced = { ...merged }
+
       return {
-        meta: undefined,
+        meta: options,
         value: merged,
       }
     },
     write: async (value, context) => {
-      await context.sdk.api.experimental.config.update({ objectives: value })
+      const keys: Array<keyof ObjectivesConfigValues> = [
+        "max_actions_without_sync",
+        "repeated_action_warning_threshold",
+        "search_attach_threshold",
+        "search_novel_threshold",
+        "finding_min_chars",
+        "delegation_justification_min_chars",
+        "fresh_session_percent_threshold",
+        "fresh_session_tokens_threshold",
+        "relevance_cooldown_ms",
+        "primary_pre_compaction_threshold",
+        "subagent_pre_compaction_threshold",
+        "min_subagent_budget",
+        "embeddings_enabled",
+        "unattended",
+        "llamacpp_kv_offload",
+        "llamacpp_slot_save_path",
+        "subagent_model",
+      ]
+
+      const patch: { [K in keyof ObjectivesConfigValues]?: ObjectivesConfigValues[K] | null } = {}
+
+      const assign = <K extends keyof ObjectivesConfigValues>(key: K) => {
+        const next = value[key]
+
+        patch[key] = next === undefined || next === "" ? null : next
+      }
+
+      for (const key of keys) {
+        if (value[key] !== lastSynced[key]) {
+          assign(key)
+        }
+      }
+
+      if (Object.keys(patch).length === 0) return
+
+      await context.sdk.api.experimental.config.update({ objectives: patch })
+      lastSynced = { ...value }
     },
     onError: (failure) =>
       showToast({
@@ -471,8 +522,9 @@ export function createServerObjectivesController(server: Accessor<ServerConnecti
 
   return {
     current: setting.value,
+    models: setting.meta,
     update: <K extends keyof ObjectivesConfigValues>(key: K, value: ObjectivesConfigValues[K]) => {
-      setting.select({ ...setting.value(), [key]: value })
+      setting.select({ ...setting.value(), [key]: value === "" ? undefined : value })
     },
     resetDefaults: () => {
       setting.select({ ...DEFAULT_OBJECTIVES_UI_CONFIG })

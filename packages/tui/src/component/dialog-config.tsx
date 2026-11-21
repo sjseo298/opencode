@@ -5,11 +5,12 @@ import { useData } from "../context/data"
 import { useLocation } from "../context/location"
 import { useThemes } from "../context/theme"
 import { useDialog, type DialogContext } from "../ui/dialog"
+import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect, DialogSelectChoice } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { DialogThemeList } from "./dialog-theme-list"
 import { errorMessage } from "../util/error"
-import { AntigravityAccountsRpc, type AntigravitySettings } from "../feature-plugins/antigravity/account-rpc"
+import { AntigravityAccountsRpc, type AntigravitySettings } from "@opencode/schema/antigravity"
 
 type Setting = {
   title: string
@@ -398,37 +399,37 @@ export const settings: Setting[] = [
     keywords: ["debug bar", "developer tools"],
   },
   {
-    title: "Acciones máx. sin sincronizar",
-    category: "Protocolo de Objetivos",
+    title: "Max actions without sync",
+    category: "Objectives Protocol",
     path: ["objectives", "max_actions_without_sync"],
     description:
-      "Operaciones consecutivas (lecturas, búsquedas, comandos o ediciones) permitidas sin actualizar el árbol de objetivos antes de emitir Objective Sync Warning (por defecto: 15)",
+      "Consecutive tool operations (reads, searches, commands, edits) allowed without synchronizing the objective tree before emitting Objective Sync Warning (default: 15)",
     default: 15,
     step: 1,
     min: 1,
     max: 100,
-    format: (value) => `${value} acciones (def: 15)`,
+    format: (value) => `${value} actions (def: 15)`,
     keywords: ["objectives", "objetivos", "sync", "warning", "reads", "anti-loop", "max_actions_without_sync"],
   },
   {
-    title: "Umbral de acción repetida",
-    category: "Protocolo de Objetivos",
+    title: "Repeated action threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "repeated_action_warning_threshold"],
     description:
-      "Lecturas idénticas sobre el mismo objetivo secundario antes de emitir advertencia de repetición (por defecto: 2)",
+      "Identical normalized read calls on the same active Secondary Objective before emitting a repeated-action warning (default: 2)",
     default: 2,
     step: 1,
     min: 1,
     max: 20,
-    format: (value) => `${value} repeticiones (def: 2)`,
+    format: (value) => `${value} repetitions (def: 2)`,
     keywords: ["objectives", "objetivos", "repeated", "repeated_action_warning_threshold"],
   },
   {
-    title: "Umbral similitud duplicado (add_finding)",
-    category: "Protocolo de Objetivos",
+    title: "Duplicate finding threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "search_attach_threshold"],
     description:
-      "Puntaje de similitud (0.0–1.0) desde el cual add_finding rechaza duplicados y exige update_finding (por defecto: 0.68)",
+      "Similarity score (0.0–1.0) at or above which add_finding rejects duplicates and requires update_finding (default: 0.68)",
     default: 0.68,
     step: 0.02,
     min: 0.1,
@@ -437,11 +438,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "finding", "similarity", "search_attach_threshold"],
   },
   {
-    title: "Umbral similitud advertencia (seeAlso)",
-    category: "Protocolo de Objetivos",
+    title: "Novel finding warning threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "search_novel_threshold"],
     description:
-      "Puntaje de similitud (0.0–1.0) desde el cual add_finding advierte similitud y enlaza seeAlso automáticamente (por defecto: 0.55)",
+      "Similarity score (0.0–1.0) at or above which add_finding warns and links seeAlso automatically (default: 0.55)",
     default: 0.55,
     step: 0.02,
     min: 0.05,
@@ -450,11 +451,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "finding", "novel", "search_novel_threshold"],
   },
   {
-    title: "Longitud mín. de hallazgos (chars)",
-    category: "Protocolo de Objetivos",
+    title: "Min finding length",
+    category: "Objectives Protocol",
     path: ["objectives", "finding_min_chars"],
     description:
-      "Caracteres mínimos exigidos en title, result y nextAction de cada hallazgo contra placeholders (por defecto: 15)",
+      "Minimum character length required in finding title, result, and nextAction against placeholders (default: 15)",
     default: 15,
     step: 1,
     min: 3,
@@ -463,11 +464,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "finding", "placeholder", "finding_min_chars"],
   },
   {
-    title: "Longitud mín. justificación delegación",
-    category: "Protocolo de Objetivos",
+    title: "Min delegation justification",
+    category: "Objectives Protocol",
     path: ["objectives", "delegation_justification_min_chars"],
     description:
-      "Caracteres mínimos exigidos en delegation.justification para modo main o subagent (por defecto: 10)",
+      "Minimum character length required in delegation.justification for main or subagent execution (default: 10)",
     default: 10,
     step: 1,
     min: 3,
@@ -476,11 +477,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "delegation", "delegation_justification_min_chars"],
   },
   {
-    title: "Umbral % Fresh Session (present_plan)",
-    category: "Protocolo de Objetivos",
+    title: "Fresh Session % threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "fresh_session_percent_threshold"],
     description:
-      "Porcentaje de ventana de contexto consumido en planificación desde el cual se recomienda Fresh Session (por defecto: 35%)",
+      "Context window percentage consumed during planning at or above which present_plan recommends Fresh Session (default: 35%)",
     default: 35,
     step: 5,
     min: 5,
@@ -489,11 +490,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "fresh session", "fresh_session_percent_threshold"],
   },
   {
-    title: "Umbral tokens Fresh Session",
-    category: "Protocolo de Objetivos",
+    title: "Fresh Session token threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "fresh_session_tokens_threshold"],
     description:
-      "Tokens consumidos en planificación desde los cuales present_plan recomienda Fresh Session (por defecto: 30000)",
+      "Tokens consumed during planning at or above which present_plan recommends Fresh Session (default: 30000)",
     default: 30000,
     step: 5000,
     min: 5000,
@@ -502,11 +503,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "fresh session", "tokens", "fresh_session_tokens_threshold"],
   },
   {
-    title: "Cooldown evaluación relevancia docs",
-    category: "Protocolo de Objetivos",
+    title: "Docs relevance cooldown",
+    category: "Objectives Protocol",
     path: ["objectives", "relevance_cooldown_ms"],
     description:
-      "Tiempo mínimo en ms entre evaluaciones one-shot de relevancia documental sobre llama.cpp (por defecto: 3000 ms)",
+      "Minimum time in ms between one-shot documentation relevance evaluations on llama.cpp (default: 3000 ms)",
     default: 3000,
     step: 500,
     min: 0,
@@ -515,11 +516,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "cooldown", "llamacpp", "relevance_cooldown_ms"],
   },
   {
-    title: "Aviso pre-compactación hilo principal",
-    category: "Protocolo de Objetivos",
+    title: "Primary pre-compaction threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "primary_pre_compaction_threshold"],
     description:
-      "Porcentaje del techo de contexto donde el hilo principal recibe aviso para consolidar objetivos e invocar session_compact (por defecto: 85%)",
+      "Context ceiling percentage at which the primary session receives CRITICAL PRE-COMPACTION ADVISORY to consolidate objectives and call session_compact (default: 85%)",
     default: 85,
     step: 5,
     min: 50,
@@ -528,11 +529,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "compaction", "primary_pre_compaction_threshold"],
   },
   {
-    title: "Aviso pre-compactación subagentes",
-    category: "Protocolo de Objetivos",
+    title: "Subagent pre-compaction threshold",
+    category: "Objectives Protocol",
     path: ["objectives", "subagent_pre_compaction_threshold"],
     description:
-      "Porcentaje del techo de contexto donde los subagentes reciben aviso para detener exploración y emitir <OUTPUT> (por defecto: 90%)",
+      "Context ceiling percentage at which subagents receive CRITICAL PRE-COMPACTION ADVISORY to stop exploration and return <OUTPUT> (default: 90%)",
     default: 90,
     step: 5,
     min: 50,
@@ -541,11 +542,11 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "subagent", "subagent_pre_compaction_threshold"],
   },
   {
-    title: "Presupuesto mín. tokens subagente",
-    category: "Protocolo de Objetivos",
+    title: "Min subagent token budget",
+    category: "Objectives Protocol",
     path: ["objectives", "min_subagent_budget"],
     description:
-      "Presupuesto mínimo de tokens libres requerido en context_budget para permitir delegación a subagentes (por defecto: 16000)",
+      "Minimum free token headroom required in context_budget to allow subagent delegation (default: 16000)",
     default: 16000,
     step: 2000,
     min: 2000,
@@ -554,44 +555,71 @@ export const settings: Setting[] = [
     keywords: ["objectives", "objetivos", "budget", "subagent", "min_subagent_budget"],
   },
   {
-    title: "Embeddings semánticos (LM Studio)",
-    category: "Protocolo de Objetivos",
+    title: "Subagent model override",
+    category: "Objectives Protocol",
+    path: ["objectives", "subagent_model"],
+    description: "Model used when spawning child subagents; defaults to the parent session's active model",
+    default: "",
+    format: (value) => (!value ? "parent session model (default)" : String(value)),
+    keywords: ["objectives", "objetivos", "subagent", "model", "subagent_model"],
+    open: (dialog) =>
+      dialog.replace(() => (
+        <DialogSubagentModel onClose={() => dialog.replace(() => <DialogConfig current="objectives.subagent_model" />)} />
+      )),
+  },
+  {
+    title: "Semantic embeddings (LM Studio)",
+    category: "Objectives Protocol",
     path: ["objectives", "embeddings_enabled"],
-    description:
-      "Habilita embeddings semánticos locales vía LM Studio para búsqueda de hallazgos (por defecto: on)",
+    description: "Enable local LM Studio semantic embeddings for add_finding and search_findings (default: on)",
     default: true,
     values: [false, true],
     labels: ["off", "on (def)"],
     keywords: ["objectives", "objetivos", "embeddings", "lmstudio", "embeddings_enabled"],
   },
   {
-    title: "Modo desatendido (auto-aprobación)",
-    category: "Protocolo de Objetivos",
+    title: "Unattended mode (auto-approve)",
+    category: "Objectives Protocol",
     path: ["objectives", "unattended"],
     description:
-      "Aprueba automáticamente el plan de objetivos sin congelar la sesión esperando confirmación humana (por defecto: off)",
+      "Automatically approve presented plans without freezing the session awaiting human confirmation (default: off)",
     default: false,
     values: [false, true],
     labels: ["off (def)", "on"],
     keywords: ["objectives", "objetivos", "unattended", "auto-approve"],
   },
   {
-    title: "KV cache offloading a disco (llama.cpp)",
-    category: "Protocolo de Objetivos",
+    title: "llama.cpp KV cache disk offload",
+    category: "Objectives Protocol",
     path: ["objectives", "llamacpp_kv_offload"],
     description:
-      "Vuelca la KV cache a disco y limpia el slot al despachar subagentes cuando parallel=2 para evitar OOM de VRAM (por defecto: on)",
+      "Save KV cache to disk and clear slot when dispatching subagents under parallel=2 to avoid VRAM OOM (default: on)",
     default: true,
     values: [false, true],
     labels: ["off", "on (def)"],
     keywords: ["objectives", "objetivos", "llamacpp", "kv", "offload", "subagent", "parallel"],
   },
   {
-    title: "Timeout de conexión inicial (Google API)",
+    title: "llama.cpp slot save path",
+    category: "Objectives Protocol",
+    path: ["objectives", "llamacpp_slot_save_path"],
+    description: "Optional directory path where llama-server saves and restores slot KV cache snapshots",
+    default: "",
+    format: (value) => (!value ? "default" : String(value)),
+    keywords: ["objectives", "objetivos", "llamacpp", "slot", "save", "path", "llamacpp_slot_save_path"],
+    open: (dialog) =>
+      dialog.replace(() => (
+        <DialogSlotSavePath
+          onClose={() => dialog.replace(() => <DialogConfig current="objectives.llamacpp_slot_save_path" />)}
+        />
+      )),
+  },
+  {
+    title: "Initial connection timeout",
     category: "Antigravity",
     path: ["antigravity", "connection_timeout_seconds"],
     description:
-      "Tiempo máximo en segundos de espera para recibir cabeceras HTTP de Google tras enviar el prompt (por defecto: 120s para contextos largos)",
+      "Maximum time in seconds to wait for HTTP headers from Google after sending a prompt (default: 120s for long contexts)",
     default: 120,
     step: 10,
     min: 5,
@@ -600,11 +628,11 @@ export const settings: Setting[] = [
     keywords: ["antigravity", "timeout", "connection", "google", "headers", "connection_timeout_seconds"],
   },
   {
-    title: "Timeout de inactividad de stream SSE",
+    title: "SSE stream idle timeout",
     category: "Antigravity",
     path: ["antigravity", "stream_idle_timeout_seconds"],
     description:
-      "Tiempo máximo de silencio en segundos durante el streaming antes de abortar la conexión (por defecto: 180s ante alta demanda)",
+      "Maximum silence in seconds during streaming before aborting the connection (default: 180s under high load)",
     default: 180,
     step: 15,
     min: 10,
@@ -613,11 +641,11 @@ export const settings: Setting[] = [
     keywords: ["antigravity", "timeout", "idle", "stream", "sse", "stream_idle_timeout_seconds"],
   },
   {
-    title: "Reintentos por saturación (503/529)",
+    title: "Capacity exhaustion retries",
     category: "Antigravity",
     path: ["antigravity", "max_capacity_retries"],
     description:
-      "Número máximo de reintentos con backoff exponencial cuando Google reporta servidor saturado o capacidad agotada (por defecto: 4)",
+      "Maximum exponential-backoff retries when Google reports server overload or 503/529 capacity exhausted (default: 4)",
     default: 4,
     step: 1,
     min: 0,
@@ -626,11 +654,10 @@ export const settings: Setting[] = [
     keywords: ["antigravity", "retries", "capacity", "503", "529", "max_capacity_retries"],
   },
   {
-    title: "Espera máxima acumulada por saturación",
+    title: "Max cumulative capacity wait",
     category: "Antigravity",
     path: ["antigravity", "max_capacity_delay_seconds"],
-    description:
-      "Tiempo acumulado máximo en segundos de espera durante los reintentos de saturación antes de fallar (por defecto: 30s)",
+    description: "Maximum cumulative wait time in seconds across capacity retries before failing (default: 30s)",
     default: 30,
     step: 5,
     min: 1,
@@ -639,11 +666,11 @@ export const settings: Setting[] = [
     keywords: ["antigravity", "delay", "capacity", "max_capacity_delay_seconds"],
   },
   {
-    title: "Dividir systemInstruction grande",
+    title: "Split large systemInstruction",
     category: "Antigravity",
     path: ["antigravity", "split_system_instruction"],
     description:
-      "Divide systemInstruction >14,000 chars hacia contents para evitar límites 429 en Gemini (por defecto: on)",
+      "Splits systemInstruction >14,000 chars into contents to avoid 429 rate limits on Gemini (default: on)",
     default: true,
     values: [false, true],
     labels: ["off", "on"],
@@ -754,6 +781,7 @@ export function DialogConfig(props: { current?: string }) {
     if (id === "theme.name")
       return Object.keys(themes.all()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
     if (id === "compaction.model") return ["active", ...availableModels()]
+    if (id === "objectives.subagent_model") return ["", ...availableModels()]
     return setting.values
   }
   const display = (setting: Setting) => {
@@ -783,6 +811,10 @@ export function DialogConfig(props: { current?: string }) {
     const setting = settings[index]
     const current = value(setting)
     const choices = values(setting)
+    if (setting.open && !choices && setting.step === undefined) {
+      setting.open(dialog)
+      return
+    }
     const rawNext = choices
       ? choices[(choices.indexOf(current) + direction + choices.length) % choices.length]
       : Math.min(setting.max!, Math.max(setting.min!, Number(current) + direction * setting.step!))
@@ -834,7 +866,7 @@ export function DialogConfig(props: { current?: string }) {
       ...(isObjectivesSetting && client
         ? [
             client.api.experimental.config.update({
-              objectives: { [setting.path[1]!]: next },
+              objectives: { [setting.path[1]!]: next === "" ? null : next },
             }),
           ]
         : []),
@@ -859,7 +891,15 @@ export function DialogConfig(props: { current?: string }) {
       onSelect={(option) => {
         const setting = settings[option.value]
         const open = setting.open
-        if ((newDesigns() || setting.path.join(".") === "compaction.model") && open) return open(dialog)
+        const id = settingID(setting)
+        if (
+          (newDesigns() ||
+            id === "compaction.model" ||
+            id === "objectives.subagent_model" ||
+            id === "objectives.llamacpp_slot_save_path") &&
+          open
+        )
+          return open(dialog)
         void change(1, option.value)
       }}
       footerHints={newDesigns() ? [] : [{ title: "change", label: "←/→" }]}
@@ -953,6 +993,132 @@ function DialogCompactionModel(props: { onClose?: () => void }) {
             if (props.onClose) return props.onClose()
             dialog.clear()
           })
+      }}
+    />
+  )
+}
+
+function DialogSubagentModel(props: { onClose?: () => void }) {
+  const config = useConfig()
+  const data = useData()
+  const location = useLocation()
+  const client = useClient()
+  const dialog = useDialog()
+  const toast = useToast()
+
+  const currentModel = createMemo(() => {
+    const entries = data.location.config.list(location.ref) ?? []
+    const fromServer = entries
+      .flatMap((entry) => {
+        if (entry.type !== "document" || !entry.info.objectives?.subagent_model) return []
+        return [entry.info.objectives.subagent_model]
+      })
+      .at(-1)
+    return fromServer ?? (config.data.objectives as { subagent_model?: string } | undefined)?.subagent_model ?? ""
+  })
+
+  const options = createMemo(() => {
+    const providers = new Map((data.location.provider.list(location.ref) ?? []).map((item) => [item.id, item]))
+    const models = (data.location.model.list(location.ref) ?? [])
+      .map((model) => {
+        const key = `${model.providerID}/${model.id}`
+        return {
+          title: model.name || model.id,
+          category: providers.get(model.providerID)?.name ?? model.providerID,
+          footer: key,
+          searchText: `${model.providerID} ${model.id} ${model.name}`,
+          value: key,
+        }
+      })
+      .sort((a, b) => a.value.localeCompare(b.value, undefined, { sensitivity: "base" }))
+    return [
+      {
+        title: "Parent session model (default)",
+        category: "Default",
+        footer: "Uses the parent session's active model",
+        searchText: "default parent session model",
+        value: "",
+      },
+      ...models,
+    ]
+  })
+
+  return (
+    <DialogSelect
+      title="Subagent model override"
+      searchInTitle
+      titlePlaceholder="Search models"
+      options={options()}
+      current={currentModel()}
+      onCancel={props.onClose}
+      onSelect={(opt) => {
+        const next = opt.value
+        void Promise.all([
+          config.update((draft) => {
+            if (!draft.objectives || typeof draft.objectives !== "object") draft.objectives = {}
+            ;(draft.objectives as Record<string, unknown>).subagent_model = next
+          }),
+          client.api.experimental.config.update({
+            objectives: { subagent_model: next || null },
+          }),
+        ])
+          .catch(toast.error)
+          .finally(() => {
+            if (props.onClose) return props.onClose()
+            dialog.clear()
+          })
+      }}
+    />
+  )
+}
+
+function DialogSlotSavePath(props: { onClose?: () => void }) {
+  const config = useConfig()
+  const data = useData()
+  const location = useLocation()
+  const client = useClient()
+  const dialog = useDialog()
+  const toast = useToast()
+
+  const currentPath = createMemo(() => {
+    const entries = data.location.config.list(location.ref) ?? []
+    const fromServer = entries
+      .flatMap((entry) => {
+        if (entry.type !== "document" || entry.info.objectives?.llamacpp_slot_save_path === undefined) return []
+        return [entry.info.objectives.llamacpp_slot_save_path]
+      })
+      .at(-1)
+    return (
+      fromServer ??
+      (config.data.objectives as { llamacpp_slot_save_path?: string } | undefined)?.llamacpp_slot_save_path ??
+      ""
+    )
+  })
+
+  const finish = () => {
+    if (props.onClose) return props.onClose()
+    dialog.clear()
+  }
+
+  return (
+    <DialogPrompt
+      title="llama.cpp slot save path"
+      placeholder="/path/to/kv-slots (leave empty for default)"
+      value={currentPath()}
+      onCancel={finish}
+      onConfirm={(input) => {
+        const next = input.trim()
+        void Promise.all([
+          config.update((draft) => {
+            if (!draft.objectives || typeof draft.objectives !== "object") draft.objectives = {}
+            ;(draft.objectives as Record<string, unknown>).llamacpp_slot_save_path = next
+          }),
+          client.api.experimental.config.update({
+            objectives: { llamacpp_slot_save_path: next || null },
+          }),
+        ])
+          .catch(toast.error)
+          .finally(finish)
       }}
     />
   )

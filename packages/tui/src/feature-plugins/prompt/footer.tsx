@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js"
 import { contextUsage, formatContextUsage } from "../../util/session"
 import { useTerminalDimensions } from "@opentui/solid"
 import { TextAttributes } from "@opentui/core"
@@ -22,15 +22,6 @@ export function PromptFooter(props: {
 }) {
   const dimensions = useTerminalDimensions()
   const [liveHovered, setLiveHovered] = createSignal(false)
-  const [dynamicRev, setDynamicRev] = createSignal(0)
-
-  onMount(() => {
-    const store = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__
-    if (store?.subscribe) {
-      const unsub = store.subscribe(() => setDynamicRev((r) => r + 1))
-      onCleanup(unsub)
-    }
-  })
 
   const counts = createMemo(() =>
     props.sessionID
@@ -41,7 +32,6 @@ export function PromptFooter(props: {
   const subagents = createMemo(() => label(counts().subagents, "subagent"))
   const shells = createMemo(() => label(counts().shells, "shell"))
   const status = createMemo(() => {
-    dynamicRev()
     if (!props.sessionID) return []
     const session = props.context.data.session.get(props.sessionID)
     if (!session) return []
@@ -61,16 +51,7 @@ export function PromptFooter(props: {
         ? models?.find((m) => m.providerID === usage.modelProviderID && m.id === usage.modelID)
         : undefined)
 
-    const store = (globalThis as any)?.__OPENCODE_DYNAMIC_CONTEXT__
-    const dynamicLimit =
-      (activeModel ? store?.getLimit?.(`${activeModel.providerID}/${activeModel.id}`) : undefined) ??
-      (sessionModel ? store?.getLimit?.(`${sessionModel.providerID}/${sessionModel.id}`) : undefined) ??
-      (usage?.modelProviderID && usage?.modelID ? store?.getLimit?.(`${usage.modelProviderID}/${usage.modelID}`) : undefined)
-
-    const contextLimit =
-      typeof dynamicLimit === "number" && dynamicLimit > 0
-        ? dynamicLimit
-        : (activeModel?.limit?.context ?? usage?.contextLimit)
+    const contextLimit = activeModel?.limit?.context ?? usage?.contextLimit
     const max = contextLimit ? `max ${Locale.number(contextLimit)}` : undefined
     return [
       max,

@@ -30,6 +30,13 @@
 - If the theme does not expose a token for the required semantic role, extend the theme schema, defaults, resolution, and types with that role before using it in a component. Do not repurpose the nearest-looking existing token.
 - When changing the public theme token surface, verify the built-in light and dark defaults and the custom-theme fallback path in addition to the affected TUI component.
 
+## Cross-Surface Coherence (TUI ↔ Web/Desktop)
+
+- Every user-facing feature (slash commands and aliases, server-backed settings, session control workflows, and status/approval dialogs) must maintain functional parity across Terminal (`packages/tui`, `packages/cli`) and Web/Desktop (`packages/app`, `packages/gui-plugins`, `packages/desktop`), or declare an explicit platform exception in `packages/schema/src/surface-parity.ts` (`SLASH_COMMAND_PARITY` / `SHARED_SERVER_SETTINGS`).
+- Shared contracts (`Rpc.define` definitions, `session.metadata.*` view schemas/normalizers, and parity manifests) belong in `@opencode/schema` (such as `antigravity.ts`, `dynamic-context.ts`, `objectives.ts`, `surface-parity.ts`). Never duplicate `Rpc.define` or `normalizePrimaryObjectiveView` inside UI packages (`tui`, `app`, `gui-plugins`, `desktop`).
+- Never use `globalThis.__OPENCODE_*` variables to communicate backend state to any UI package. Propagate dynamic runtime state (such as dynamic context limits) via canonical `@opencode/protocol` / `Rpc` + SSE events (`model.updated`, `session.metadata.updated`, etc.) and `@opencode/client`.
+- `bun script/check-surface-parity.ts` (included in `bun run lint` and `bun run check`) enforces slash command/alias parity, shared server setting coverage, and UI contract isolation. Run `bun run lint:changed` before finishing changes in GUI packages.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.

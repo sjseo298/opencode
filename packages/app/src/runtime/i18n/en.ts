@@ -1710,6 +1710,77 @@ export const dict = {
   "composer.footer.maxContext.tooltip": "Context window limit: {{limit}} tokens (click to adjust)",
   "composer.footer.autoApprove": "Auto-approve",
   "composer.footer.autoApprove.tooltip": "Auto-approve mode active — permission prompts are skipped (click to disable)",
+
+  "settings.compactionModel.title": "Compaction model",
+  "settings.compactionModel.description":
+    "LLM used for conversation compaction; returns to the session's active model once compaction completes.",
+  "settings.compactionModel.activeDefault": "Active model (default)",
+
+  "settings.objectives.section.title": "Objectives Protocol",
+  "settings.objectives.defaultBadge": "(default)",
+  "settings.objectives.suffix.actions": "actions",
+  "settings.objectives.suffix.repetitions": "repetitions",
+  "settings.objectives.suffix.chars": "chars",
+  "settings.objectives.suffix.tokens": "tokens",
+  "settings.objectives.suffix.ms": "ms",
+  "settings.objectives.resetDefaults": "Reset defaults",
+  "settings.objectives.row.maxActions.title": "Max actions without sync (max_actions_without_sync)",
+  "settings.objectives.row.maxActions.description":
+    "Maximum consecutive tool operations (reads, searches, commands, edits) allowed without synchronizing the objective tree before emitting Objective Sync Warning (default: 15).",
+  "settings.objectives.row.repeatedAction.title": "Repeated action warning threshold (repeated_action_warning_threshold)",
+  "settings.objectives.row.repeatedAction.description":
+    "Identical normalized reads on the same active Secondary Objective before emitting an anti-loop warning (default: 2).",
+  "settings.objectives.row.searchAttach.title": "Duplicate finding block threshold (search_attach_threshold)",
+  "settings.objectives.row.searchAttach.description":
+    "Similarity score (0.0–1.0) at or above which add_finding rejects duplicates and requires update_finding (default: 0.68).",
+  "settings.objectives.row.searchNovel.title": "Finding similarity warning threshold (search_novel_threshold)",
+  "settings.objectives.row.searchNovel.description":
+    "Similarity score (0.0–1.0) at or above which add_finding warns and links seeAlso automatically (default: 0.55).",
+  "settings.objectives.row.findingMinChars.title": "Minimum finding field length (finding_min_chars)",
+  "settings.objectives.row.findingMinChars.description":
+    "Minimum character count required in finding title, result, and nextAction against placeholders (default: 15).",
+  "settings.objectives.row.delegationMinChars.title":
+    "Minimum delegation justification length (delegation_justification_min_chars)",
+  "settings.objectives.row.delegationMinChars.description":
+    "Minimum character count required in delegation.justification for main or subagent execution (default: 10).",
+  "settings.objectives.row.freshPercent.title": "Fresh Session percent threshold (fresh_session_percent_threshold)",
+  "settings.objectives.row.freshPercent.description":
+    "Context window percentage consumed during planning at or above which present_plan recommends starting a Fresh Session (default: 35%).",
+  "settings.objectives.row.freshTokens.title": "Fresh Session token threshold (fresh_session_tokens_threshold)",
+  "settings.objectives.row.freshTokens.description":
+    "Tokens consumed during planning at or above which present_plan recommends starting a Fresh Session (default: 30,000).",
+  "settings.objectives.row.relevanceCooldown.title": "Document relevance evaluation cooldown (relevance_cooldown_ms)",
+  "settings.objectives.row.relevanceCooldown.description":
+    "Minimum time in milliseconds between one-shot document relevance evaluations on llama.cpp (default: 3000 ms).",
+  "settings.objectives.row.primaryCompaction.title":
+    "Primary thread pre-compaction threshold (primary_pre_compaction_threshold)",
+  "settings.objectives.row.primaryCompaction.description":
+    "Context ceiling percentage at which the primary session receives CRITICAL PRE-COMPACTION ADVISORY to consolidate objectives and call session_compact (default: 85%).",
+  "settings.objectives.row.subagentCompaction.title":
+    "Subagent pre-compaction threshold (subagent_pre_compaction_threshold)",
+  "settings.objectives.row.subagentCompaction.description":
+    "Context ceiling percentage at which a subagent receives CRITICAL PRE-COMPACTION ADVISORY to stop exploration and return <OUTPUT> (default: 90%).",
+  "settings.objectives.row.minSubagentBudget.title": "Minimum subagent token budget (min_subagent_budget)",
+  "settings.objectives.row.minSubagentBudget.description":
+    "Minimum free token headroom required in context_budget to authorize subagent delegation (default: 16,000).",
+  "settings.objectives.row.embeddingsEnabled.title": "Semantic embeddings for findings (embeddings_enabled)",
+  "settings.objectives.row.embeddingsEnabled.description":
+    "Enable local LM Studio semantic similarity embeddings for add_finding and search_findings (default: on).",
+  "settings.objectives.row.unattended.title": "Unattended / autonomous mode (unattended)",
+  "settings.objectives.row.unattended.description":
+    "Automatically approve presented plans without freezing in presented_awaiting_confirmation for human review (default: off).",
+  "settings.objectives.row.kvOffload.title": "llama.cpp KV cache disk offload (llamacpp_kv_offload)",
+  "settings.objectives.row.kvOffload.description":
+    "Save KV cache to disk and clear slot when dispatching subagents under parallel=2 to avoid VRAM OOM (default: on).",
+  "settings.objectives.row.slotSavePath.title": "llama.cpp slot save path (llamacpp_slot_save_path)",
+  "settings.objectives.row.slotSavePath.description":
+    "Optional directory where llama-server saves and restores slot KV cache snapshots; leave empty for default.",
+  "settings.objectives.row.slotSavePath.placeholder": "/path/to/kv-slots (optional)",
+  "settings.objectives.row.slotSavePath.save": "Save",
+  "settings.objectives.row.subagentModel.title": "Subagent model override (subagent_model)",
+  "settings.objectives.row.subagentModel.description":
+    "Model used when spawning child subagents; defaults to the parent session's active model.",
+  "settings.objectives.row.subagentModel.default": "Parent session model (default)",
 }
 
 export default dict

@@ -13,6 +13,7 @@
 ## Code
 
 - Follow Solid best practices, leave a comment when violating this: https://www.brenelz.com/posts/solid-js-best-practices/
+- Follow the `Cross-Surface Coherence (TUI ↔ Web/Desktop)` section in the root `AGENTS.md`: desktop renderer/main features must consume shared contracts from `@opencode/schema/*` and pass `bun script/check-surface-parity.ts`.
 - Renderer code follows the Suspense rules in `packages/app/AGENTS.md`: never read a resource in render without the `state` guard. An unguarded read makes the UI flash on first load.
 - Fonts follow the Fonts section of `packages/app/AGENTS.md`: use the UI, code and terminal font roles from the design system. Never add font files, `@font-face` rules or literal font families here.
 - Loading indicators follow the Loading Indicators section of `packages/app/AGENTS.md`: the dot-matrix `Spinner` is only for AI activity; every other loading state uses `Loader`.

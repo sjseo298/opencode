@@ -16,7 +16,7 @@ import {
   formatQuotaSummary,
   stripAnsiCodes,
   type AccountSummary,
-} from "./account-rpc"
+} from "@opencode/schema/antigravity"
 import {
   ANTIGRAVITY_TIMEOUT_MS,
   createAntigravityDialogState,

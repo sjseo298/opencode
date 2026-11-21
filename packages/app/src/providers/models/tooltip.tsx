@@ -1,4 +1,5 @@
 import { Show, type Component, type JSX } from "solid-js"
+import { resolveModelContextLimit } from "./context-limit"
 import { useLanguage } from "@/runtime/i18n/language"
 
 type InputKey = "text" | "image" | "audio" | "video" | "pdf"
@@ -7,8 +8,10 @@ type InputMap = Record<InputKey, boolean>
 
 type ModelInfo = {
   id: string
+  providerID?: string
   name: string
   provider: {
+    id?: string
     name: string
   }
   capabilities?: {
@@ -94,7 +97,7 @@ export const ModelTooltip: Component<{ model: ModelInfo; latest?: boolean; free?
     if (props.model.capabilities) {
       const input = props.model.capabilities.input
       const order: Array<InputKey> = ["text", "image", "audio", "video", "pdf"]
-      const entries = order.filter((key) => input[key]).map((key) => inputLabel(key))
+      const entries = order.flatMap((key) => (input[key] ? [inputLabel(key)] : []))
 
       return entries.length ? entries.join(", ") : undefined
     }
@@ -118,8 +121,9 @@ export const ModelTooltip: Component<{ model: ModelInfo; latest?: boolean; free?
       : language.t("model.tooltip.reasoning.none")
   }
 
-  const context = () => language.t("model.tooltip.context", { limit: props.model.limit.context.toLocaleString() })
-  const contextLimit = () => props.model.limit.context.toLocaleString(language.intl())
+  const resolvedContext = () => resolveModelContextLimit(props.model) ?? props.model.limit.context
+  const context = () => language.t("model.tooltip.context", { limit: resolvedContext().toLocaleString() })
+  const contextLimit = () => resolvedContext().toLocaleString(language.intl())
 
   if (props.v2) {
     return (

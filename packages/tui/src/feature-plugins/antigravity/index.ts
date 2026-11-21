@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode/plugin/tui"
 import type { LocationRef, OpenCodeClient } from "@opencode/client"
-import { AntigravityAccountsRpc, type AccountSummary } from "./account-rpc.js"
+import { AntigravityAccountsRpc, type AccountSummary } from "@opencode/schema/antigravity"
 import { formatQuotaDescription } from "./quota.js"
 
 // This plugin uses host dialogs and renders no JSX. Keep its public declarations

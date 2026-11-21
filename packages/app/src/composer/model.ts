@@ -272,14 +272,16 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     })),
     ...command.options
       .filter((item) => !item.disabled && !item.id.startsWith("suggested.") && item.slash)
-      .map((item) => ({
-        id: item.id,
-        trigger: item.slash!,
-        title: item.title,
-        description: item.description,
-        arguments: item.slashArguments,
-        type: "builtin" as const,
-      })),
+      .flatMap((item) =>
+        [item.slash!, ...(item.slashAliases ?? [])].map((trigger) => ({
+          id: item.id,
+          trigger,
+          title: item.title,
+          description: item.description,
+          arguments: item.slashArguments,
+          type: "builtin" as const,
+        })),
+      ),
   ])
 
   const commands = createMemo<ComposerSuggestion[]>(() => [

@@ -1,10 +1,11 @@
-import { Component, Show, createMemo } from "solid-js"
+import { Component, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
-import { DEFAULT_ANTIGRAVITY_SETTINGS } from "@/providers/antigravity/account-rpc"
+import { TextInput } from "@opencode/ui/text-input"
+import { DEFAULT_ANTIGRAVITY_SETTINGS } from "@opencode/schema/antigravity"
 import { Icon } from "@opencode/ui/icon"
 import { TimelineDetailControl } from "@/settings/timeline-detail"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -124,11 +125,13 @@ export const CompactionModelSetting: Component<{
   controller: CompactionModelSettingsController
   action?: string
 }> = (props) => {
+  const language = useLanguage()
+
   const options = createMemo(() => {
     const current = props.controller.current()
 
     const base = [
-      { id: "active", value: "", name: "Active model (default)" },
+      { id: "active", value: "", name: language.t("settings.compactionModel.activeDefault") },
       ...props.controller.models().map((m) => ({ id: m.id, value: m.id, name: m.name })),
     ]
 
@@ -141,8 +144,8 @@ export const CompactionModelSetting: Component<{
 
   return (
     <SettingsRow
-      title="Compaction model"
-      description="LLM used for conversation compaction; returns to the session's active model once compaction completes."
+      title={language.t("settings.compactionModel.title")}
+      description={language.t("settings.compactionModel.description")}
     >
       <Select
         data-action={props.action ?? "settings-compaction-model"}
@@ -161,93 +164,141 @@ export const CompactionModelSetting: Component<{
 export const ObjectivesProtocolSection: Component<{
   controller: ObjectivesSettingsController
 }> = (props) => {
+  const language = useLanguage()
+
+  const defaultSuffix = () => ` ${language.t("settings.objectives.defaultBadge")}`
+
   const numSelectOptions = (values: number[], defaultVal: number, suffix = "") =>
     values.map((v) => ({
       value: v,
-      label: `${v}${suffix}${v === defaultVal ? " (por defecto)" : ""}`,
+      label: `${v}${suffix}${v === defaultVal ? defaultSuffix() : ""}`,
     }))
 
-  const maxActionsOptions = numSelectOptions(
-    [5, 10, 15, 20, 25, 30, 50],
-    DEFAULT_OBJECTIVES_UI_CONFIG.max_actions_without_sync,
-    " acciones",
+  const maxActionsOptions = createMemo(() =>
+    numSelectOptions(
+      [5, 10, 15, 20, 25, 30, 50],
+      DEFAULT_OBJECTIVES_UI_CONFIG.max_actions_without_sync,
+      ` ${language.t("settings.objectives.suffix.actions")}`,
+    ),
   )
 
-  const repeatedOptions = numSelectOptions(
-    [1, 2, 3, 4, 5],
-    DEFAULT_OBJECTIVES_UI_CONFIG.repeated_action_warning_threshold,
-    " repeticiones",
+  const repeatedOptions = createMemo(() =>
+    numSelectOptions(
+      [1, 2, 3, 4, 5],
+      DEFAULT_OBJECTIVES_UI_CONFIG.repeated_action_warning_threshold,
+      ` ${language.t("settings.objectives.suffix.repetitions")}`,
+    ),
   )
 
-  const attachThresholdOptions = [0.55, 0.6, 0.65, 0.68, 0.72, 0.75, 0.8, 0.85].map((v) => ({
-    value: v,
-    label: `${v.toFixed(2)}${v === DEFAULT_OBJECTIVES_UI_CONFIG.search_attach_threshold ? " (por defecto)" : ""}`,
-  }))
-
-  const novelThresholdOptions = [0.4, 0.45, 0.5, 0.55, 0.6, 0.65].map((v) => ({
-    value: v,
-    label: `${v.toFixed(2)}${v === DEFAULT_OBJECTIVES_UI_CONFIG.search_novel_threshold ? " (por defecto)" : ""}`,
-  }))
-
-  const findingCharsOptions = numSelectOptions(
-    [5, 10, 15, 20, 30],
-    DEFAULT_OBJECTIVES_UI_CONFIG.finding_min_chars,
-    " caracteres",
+  const attachThresholdOptions = createMemo(() =>
+    [0.55, 0.6, 0.65, 0.68, 0.72, 0.75, 0.8, 0.85].map((v) => ({
+      value: v,
+      label: `${v.toFixed(2)}${v === DEFAULT_OBJECTIVES_UI_CONFIG.search_attach_threshold ? defaultSuffix() : ""}`,
+    })),
   )
 
-  const delegationCharsOptions = numSelectOptions(
-    [5, 10, 15, 20, 30],
-    DEFAULT_OBJECTIVES_UI_CONFIG.delegation_justification_min_chars,
-    " caracteres",
+  const novelThresholdOptions = createMemo(() =>
+    [0.4, 0.45, 0.5, 0.55, 0.6, 0.65].map((v) => ({
+      value: v,
+      label: `${v.toFixed(2)}${v === DEFAULT_OBJECTIVES_UI_CONFIG.search_novel_threshold ? defaultSuffix() : ""}`,
+    })),
   )
 
-  const freshPercentOptions = numSelectOptions(
-    [20, 25, 30, 35, 40, 50, 60],
-    DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_percent_threshold,
-    "%",
+  const findingCharsOptions = createMemo(() =>
+    numSelectOptions(
+      [5, 10, 15, 20, 30],
+      DEFAULT_OBJECTIVES_UI_CONFIG.finding_min_chars,
+      ` ${language.t("settings.objectives.suffix.chars")}`,
+    ),
   )
 
-  const freshTokensOptions = [15000, 20000, 30000, 45000, 60000, 100000].map((v) => ({
-    value: v,
-    label: `${v.toLocaleString()} tokens${v === DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_tokens_threshold ? " (por defecto)" : ""}`,
-  }))
-
-  const cooldownOptions = [0, 1000, 2000, 3000, 5000, 10000].map((v) => ({
-    value: v,
-    label: `${v} ms${v === DEFAULT_OBJECTIVES_UI_CONFIG.relevance_cooldown_ms ? " (por defecto)" : ""}`,
-  }))
-
-  const primaryCompactionOptions = numSelectOptions(
-    [70, 75, 80, 85, 90, 95],
-    DEFAULT_OBJECTIVES_UI_CONFIG.primary_pre_compaction_threshold,
-    "%",
+  const delegationCharsOptions = createMemo(() =>
+    numSelectOptions(
+      [5, 10, 15, 20, 30],
+      DEFAULT_OBJECTIVES_UI_CONFIG.delegation_justification_min_chars,
+      ` ${language.t("settings.objectives.suffix.chars")}`,
+    ),
   )
 
-  const subagentCompactionOptions = numSelectOptions(
-    [75, 80, 85, 90, 95],
-    DEFAULT_OBJECTIVES_UI_CONFIG.subagent_pre_compaction_threshold,
-    "%",
+  const freshPercentOptions = createMemo(() =>
+    numSelectOptions([20, 25, 30, 35, 40, 50, 60], DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_percent_threshold, "%"),
   )
 
-  const minSubagentBudgetOptions = [8000, 12000, 16000, 24000, 32000, 48000].map((v) => ({
-    value: v,
-    label: `${v.toLocaleString()} tokens${v === DEFAULT_OBJECTIVES_UI_CONFIG.min_subagent_budget ? " (por defecto)" : ""}`,
-  }))
+  const freshTokensOptions = createMemo(() =>
+    [15000, 20000, 30000, 45000, 60000, 100000].map((v) => ({
+      value: v,
+      label: `${v.toLocaleString(language.intl())} ${language.t("settings.objectives.suffix.tokens")}${v === DEFAULT_OBJECTIVES_UI_CONFIG.fresh_session_tokens_threshold ? defaultSuffix() : ""}`,
+    })),
+  )
+
+  const cooldownOptions = createMemo(() =>
+    [0, 1000, 2000, 3000, 5000, 10000].map((v) => ({
+      value: v,
+      label: `${v} ${language.t("settings.objectives.suffix.ms")}${v === DEFAULT_OBJECTIVES_UI_CONFIG.relevance_cooldown_ms ? defaultSuffix() : ""}`,
+    })),
+  )
+
+  const primaryCompactionOptions = createMemo(() =>
+    numSelectOptions([70, 75, 80, 85, 90, 95], DEFAULT_OBJECTIVES_UI_CONFIG.primary_pre_compaction_threshold, "%"),
+  )
+
+  const subagentCompactionOptions = createMemo(() =>
+    numSelectOptions([75, 80, 85, 90, 95], DEFAULT_OBJECTIVES_UI_CONFIG.subagent_pre_compaction_threshold, "%"),
+  )
+
+  const minSubagentBudgetOptions = createMemo(() =>
+    [8000, 12000, 16000, 24000, 32000, 48000].map((v) => ({
+      value: v,
+      label: `${v.toLocaleString(language.intl())} ${language.t("settings.objectives.suffix.tokens")}${v === DEFAULT_OBJECTIVES_UI_CONFIG.min_subagent_budget ? defaultSuffix() : ""}`,
+    })),
+  )
+
+  const subagentModelOptions = createMemo(() => {
+    const current = props.controller.current().subagent_model ?? ""
+
+    const base = [
+      { id: "default", value: "", name: language.t("settings.objectives.row.subagentModel.default") },
+      ...props.controller.models().map((m) => ({ id: m.id, value: m.id, name: m.name })),
+    ]
+
+    if (current && !base.some((opt) => opt.value === current)) {
+      return [...base, { id: current, value: current, name: current }]
+    }
+
+    return base
+  })
+
+  const [slotSavePath, setSlotSavePath] = createSignal(props.controller.current().llamacpp_slot_save_path ?? "")
+
+  createEffect(() => {
+    setSlotSavePath(props.controller.current().llamacpp_slot_save_path ?? "")
+  })
+
+  const saveSlotPath = () => {
+    const trimmed = slotSavePath().trim()
+
+    props.controller.update("llamacpp_slot_save_path", trimmed)
+  }
 
   return (
-    <section class="settings-section" aria-label="Protocolo de Objetivos">
-      <h3 class="settings-section-title">Protocolo de Objetivos</h3>
+    <section class="settings-section" aria-label={language.t("settings.objectives.section.title")}>
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="settings-section-title">{language.t("settings.objectives.section.title")}</h3>
+        <Button size="small" variant="ghost" onClick={() => props.controller.resetDefaults()}>
+          {language.t("settings.objectives.resetDefaults")}
+        </Button>
+      </div>
       <SettingsList>
         <SettingsRow
-          title="Acciones máximas sin sincronizar objetivos (max_actions_without_sync)"
-          description="Número máximo de operaciones consecutivas (lecturas, búsquedas, comandos o ediciones) permitidas sin actualizar el árbol de objetivos en objective_manage antes de emitir ⚠️ [Objective Sync Warning]. Valor por defecto: 15."
+          title={language.t("settings.objectives.row.maxActions.title")}
+          description={language.t("settings.objectives.row.maxActions.description")}
         >
           <Select
             data-action="settings-objectives-max-actions-without-sync"
-            options={maxActionsOptions}
+            options={maxActionsOptions()}
             current={
-              maxActionsOptions.find((o) => o.value === props.controller.current().max_actions_without_sync) ??
-              maxActionsOptions[2]
+              maxActionsOptions().find((o) => o.value === props.controller.current().max_actions_without_sync) ??
+              maxActionsOptions()[2]
             }
             placement="bottom-end"
             gutter={6}
@@ -258,15 +309,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de advertencia por acción repetida (repeated_action_warning_threshold)"
-          description="Cantidad de lecturas normalizadas idénticas sobre el mismo Objetivo Secundario activo antes de emitir advertencia anti-bucle. Valor por defecto: 2."
+          title={language.t("settings.objectives.row.repeatedAction.title")}
+          description={language.t("settings.objectives.row.repeatedAction.description")}
         >
           <Select
             data-action="settings-objectives-repeated-action-threshold"
-            options={repeatedOptions}
+            options={repeatedOptions()}
             current={
-              repeatedOptions.find((o) => o.value === props.controller.current().repeated_action_warning_threshold) ??
-              repeatedOptions[1]
+              repeatedOptions().find((o) => o.value === props.controller.current().repeated_action_warning_threshold) ??
+              repeatedOptions()[1]
             }
             placement="bottom-end"
             gutter={6}
@@ -277,15 +328,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de similitud para bloqueo de duplicados (search_attach_threshold)"
-          description="Puntaje de similitud (0.0–1.0) a partir del cual add_finding rechaza un hallazgo por ser duplicado y exige extender el existente con update_finding. Valor por defecto: 0.68."
+          title={language.t("settings.objectives.row.searchAttach.title")}
+          description={language.t("settings.objectives.row.searchAttach.description")}
         >
           <Select
             data-action="settings-objectives-search-attach-threshold"
-            options={attachThresholdOptions}
+            options={attachThresholdOptions()}
             current={
-              attachThresholdOptions.find((o) => o.value === props.controller.current().search_attach_threshold) ??
-              attachThresholdOptions[3]
+              attachThresholdOptions().find((o) => o.value === props.controller.current().search_attach_threshold) ??
+              attachThresholdOptions()[3]
             }
             placement="bottom-end"
             gutter={6}
@@ -296,15 +347,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de similitud para advertencia y enlace seeAlso (search_novel_threshold)"
-          description="Puntaje de similitud (0.0–1.0) a partir del cual add_finding emite advertencia de similitud y enlaza automáticamente seeAlso. Valor por defecto: 0.55."
+          title={language.t("settings.objectives.row.searchNovel.title")}
+          description={language.t("settings.objectives.row.searchNovel.description")}
         >
           <Select
             data-action="settings-objectives-search-novel-threshold"
-            options={novelThresholdOptions}
+            options={novelThresholdOptions()}
             current={
-              novelThresholdOptions.find((o) => o.value === props.controller.current().search_novel_threshold) ??
-              novelThresholdOptions[3]
+              novelThresholdOptions().find((o) => o.value === props.controller.current().search_novel_threshold) ??
+              novelThresholdOptions()[3]
             }
             placement="bottom-end"
             gutter={6}
@@ -315,15 +366,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Longitud mínima de campos de hallazgo (finding_min_chars)"
-          description="Mínimo de caracteres exigidos en title, result y nextAction al registrar hallazgos (validación anti-placeholder). Valor por defecto: 15."
+          title={language.t("settings.objectives.row.findingMinChars.title")}
+          description={language.t("settings.objectives.row.findingMinChars.description")}
         >
           <Select
             data-action="settings-objectives-finding-min-chars"
-            options={findingCharsOptions}
+            options={findingCharsOptions()}
             current={
-              findingCharsOptions.find((o) => o.value === props.controller.current().finding_min_chars) ??
-              findingCharsOptions[2]
+              findingCharsOptions().find((o) => o.value === props.controller.current().finding_min_chars) ??
+              findingCharsOptions()[2]
             }
             placement="bottom-end"
             gutter={6}
@@ -334,16 +385,16 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Longitud mínima de justificación de delegación (delegation_justification_min_chars)"
-          description="Mínimo de caracteres exigidos en delegation.justification (main vs subagent) para objetivos y hallazgos. Valor por defecto: 10."
+          title={language.t("settings.objectives.row.delegationMinChars.title")}
+          description={language.t("settings.objectives.row.delegationMinChars.description")}
         >
           <Select
             data-action="settings-objectives-delegation-min-chars"
-            options={delegationCharsOptions}
+            options={delegationCharsOptions()}
             current={
-              delegationCharsOptions.find(
+              delegationCharsOptions().find(
                 (o) => o.value === props.controller.current().delegation_justification_min_chars,
-              ) ?? delegationCharsOptions[1]
+              ) ?? delegationCharsOptions()[1]
             }
             placement="bottom-end"
             gutter={6}
@@ -354,15 +405,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de porcentaje para recomendar Fresh Session (fresh_session_percent_threshold)"
-          description="Porcentaje de ventana de contexto consumido durante la exploración/planificación a partir del cual present_plan recomienda iniciar ejecución en una Fresh Session. Valor por defecto: 35%."
+          title={language.t("settings.objectives.row.freshPercent.title")}
+          description={language.t("settings.objectives.row.freshPercent.description")}
         >
           <Select
             data-action="settings-objectives-fresh-session-percent"
-            options={freshPercentOptions}
+            options={freshPercentOptions()}
             current={
-              freshPercentOptions.find((o) => o.value === props.controller.current().fresh_session_percent_threshold) ??
-              freshPercentOptions[3]
+              freshPercentOptions().find((o) => o.value === props.controller.current().fresh_session_percent_threshold) ??
+              freshPercentOptions()[3]
             }
             placement="bottom-end"
             gutter={6}
@@ -373,15 +424,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de tokens para recomendar Fresh Session (fresh_session_tokens_threshold)"
-          description="Tokens consumidos durante la exploración/planificación a partir de los cuales present_plan recomienda iniciar ejecución en una Fresh Session. Valor por defecto: 30,000 tokens."
+          title={language.t("settings.objectives.row.freshTokens.title")}
+          description={language.t("settings.objectives.row.freshTokens.description")}
         >
           <Select
             data-action="settings-objectives-fresh-session-tokens"
-            options={freshTokensOptions}
+            options={freshTokensOptions()}
             current={
-              freshTokensOptions.find((o) => o.value === props.controller.current().fresh_session_tokens_threshold) ??
-              freshTokensOptions[2]
+              freshTokensOptions().find((o) => o.value === props.controller.current().fresh_session_tokens_threshold) ??
+              freshTokensOptions()[2]
             }
             placement="bottom-end"
             gutter={6}
@@ -392,15 +443,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Cooldown de evaluación de relevancia documental (relevance_cooldown_ms)"
-          description="Tiempo mínimo en milisegundos entre evaluaciones one-shot aisladas de relevancia documental sobre llama.cpp (id_slot: 1). Valor por defecto: 3000 ms."
+          title={language.t("settings.objectives.row.relevanceCooldown.title")}
+          description={language.t("settings.objectives.row.relevanceCooldown.description")}
         >
           <Select
             data-action="settings-objectives-relevance-cooldown-ms"
-            options={cooldownOptions}
+            options={cooldownOptions()}
             current={
-              cooldownOptions.find((o) => o.value === props.controller.current().relevance_cooldown_ms) ??
-              cooldownOptions[3]
+              cooldownOptions().find((o) => o.value === props.controller.current().relevance_cooldown_ms) ??
+              cooldownOptions()[3]
             }
             placement="bottom-end"
             gutter={6}
@@ -411,16 +462,16 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de aviso pre-compactación en hilo principal (primary_pre_compaction_threshold)"
-          description="Porcentaje del techo de contexto en el que la sesión principal recibe el aviso CRITICAL PRE-COMPACTION ADVISORY para consolidar objetivos e invocar session_compact. Valor por defecto: 85%."
+          title={language.t("settings.objectives.row.primaryCompaction.title")}
+          description={language.t("settings.objectives.row.primaryCompaction.description")}
         >
           <Select
             data-action="settings-objectives-primary-compaction-threshold"
-            options={primaryCompactionOptions}
+            options={primaryCompactionOptions()}
             current={
-              primaryCompactionOptions.find(
+              primaryCompactionOptions().find(
                 (o) => o.value === props.controller.current().primary_pre_compaction_threshold,
-              ) ?? primaryCompactionOptions[3]
+              ) ?? primaryCompactionOptions()[3]
             }
             placement="bottom-end"
             gutter={6}
@@ -431,16 +482,16 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Umbral de aviso pre-compactación en subagentes (subagent_pre_compaction_threshold)"
-          description="Porcentaje del techo de contexto en el que un subagente recibe el aviso CRITICAL PRE-COMPACTION ADVISORY para detener exploración y devolver <OUTPUT>. Valor por defecto: 90%."
+          title={language.t("settings.objectives.row.subagentCompaction.title")}
+          description={language.t("settings.objectives.row.subagentCompaction.description")}
         >
           <Select
             data-action="settings-objectives-subagent-compaction-threshold"
-            options={subagentCompactionOptions}
+            options={subagentCompactionOptions()}
             current={
-              subagentCompactionOptions.find(
+              subagentCompactionOptions().find(
                 (o) => o.value === props.controller.current().subagent_pre_compaction_threshold,
-              ) ?? subagentCompactionOptions[3]
+              ) ?? subagentCompactionOptions()[3]
             }
             placement="bottom-end"
             gutter={6}
@@ -451,15 +502,15 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Presupuesto mínimo de tokens para subagentes (min_subagent_budget)"
-          description="Margen mínimo de tokens libres requerido en context_budget para autorizar delegación a subagentes (canDelegate: true). Valor por defecto: 16,000 tokens."
+          title={language.t("settings.objectives.row.minSubagentBudget.title")}
+          description={language.t("settings.objectives.row.minSubagentBudget.description")}
         >
           <Select
             data-action="settings-objectives-min-subagent-budget"
-            options={minSubagentBudgetOptions}
+            options={minSubagentBudgetOptions()}
             current={
-              minSubagentBudgetOptions.find((o) => o.value === props.controller.current().min_subagent_budget) ??
-              minSubagentBudgetOptions[2]
+              minSubagentBudgetOptions().find((o) => o.value === props.controller.current().min_subagent_budget) ??
+              minSubagentBudgetOptions()[2]
             }
             placement="bottom-end"
             gutter={6}
@@ -470,8 +521,27 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Embeddings semánticos para hallazgos (embeddings_enabled)"
-          description="Habilita el cálculo de similitud semántica mediante LM Studio local para add_finding y search_findings. Valor por defecto: activado (true)."
+          title={language.t("settings.objectives.row.subagentModel.title")}
+          description={language.t("settings.objectives.row.subagentModel.description")}
+        >
+          <Select
+            data-action="settings-objectives-subagent-model"
+            options={subagentModelOptions()}
+            current={
+              subagentModelOptions().find((o) => o.value === (props.controller.current().subagent_model ?? "")) ??
+              subagentModelOptions()[0]
+            }
+            placement="bottom-end"
+            gutter={6}
+            value={(o) => o.id}
+            label={(o) => o.name}
+            onSelect={(o) => o && props.controller.update("subagent_model", o.value)}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.objectives.row.embeddingsEnabled.title")}
+          description={language.t("settings.objectives.row.embeddingsEnabled.description")}
         >
           <div data-action="settings-objectives-embeddings-enabled">
             <Switch
@@ -482,8 +552,8 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="Modo desatendido / autónomo (unattended)"
-          description="Aprueba automáticamente los planes presentados sin congelar el árbol en presented_awaiting_confirmation esperando confirmación humana. Valor por defecto: desactivado (false)."
+          title={language.t("settings.objectives.row.unattended.title")}
+          description={language.t("settings.objectives.row.unattended.description")}
         >
           <div data-action="settings-objectives-unattended">
             <Switch
@@ -494,14 +564,37 @@ export const ObjectivesProtocolSection: Component<{
         </SettingsRow>
 
         <SettingsRow
-          title="KV cache offloading a disco (llama.cpp)"
-          description="Vuelca la memoria KV cache a disco y limpia el slot al despachar subagentes cuando parallel=2 para evitar OOM de VRAM y re-tokenizaciones lentas. Valor por defecto: activado (true)."
+          title={language.t("settings.objectives.row.kvOffload.title")}
+          description={language.t("settings.objectives.row.kvOffload.description")}
         >
           <div data-action="settings-objectives-llamacpp-kv-offload">
             <Switch
               checked={props.controller.current().llamacpp_kv_offload}
               onChange={(checked) => props.controller.update("llamacpp_kv_offload", checked)}
             />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.objectives.row.slotSavePath.title")}
+          description={language.t("settings.objectives.row.slotSavePath.description")}
+        >
+          <div class="flex items-center gap-1.5">
+            <TextInput
+              data-action="settings-objectives-slot-save-path"
+              value={slotSavePath()}
+              placeholder={language.t("settings.objectives.row.slotSavePath.placeholder")}
+              onInput={(e) => setSlotSavePath(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.isComposing) {
+                  e.preventDefault()
+                  saveSlotPath()
+                }
+              }}
+            />
+            <Button size="small" variant="outline" onClick={saveSlotPath}>
+              {language.t("settings.objectives.row.slotSavePath.save")}
+            </Button>
           </div>
         </SettingsRow>
       </SettingsList>

@@ -1,4 +1,5 @@
 import { Plugin as OpenCodePlugin } from "@opencode/plugin"
+import { DynamicContextRpc, type DynamicContextEntry } from "@opencode/schema/dynamic-context"
 import fs from "fs"
 import path from "path"
 import os from "os"
@@ -843,6 +844,16 @@ export const Plugin = OpenCodePlugin.define({
       return Number.isFinite(num) && num > 0 ? num : undefined
     }
 
+    const applyManualContextLimit = async (targetKey: string, parsedLimit: number) => {
+      dynamicStore.set(targetKey, { limit: parsedLimit, manualOverride: true })
+      dynamicContexts.set(targetKey, parsedLimit)
+      const existingCache = cache.get(targetKey)
+      if (existingCache) {
+        cache.set(targetKey, { ...existingCache, nCtx: parsedLimit, checkedAt: Date.now() })
+      }
+      await ctx.model.reload()
+    }
+
     const handleSetContextLimit = async (invocation: { sessionID: string; prompt?: { text?: string } }) => {
       const rawText = (invocation.prompt?.text ?? "").trim()
       const parts = rawText ? rawText.split(/\s+/) : []
@@ -862,14 +873,41 @@ export const Plugin = OpenCodePlugin.define({
 
       if (!targetKey || !parsedLimit) return
 
-      dynamicStore.set(targetKey, { limit: parsedLimit, manualOverride: true })
-      dynamicContexts.set(targetKey, parsedLimit)
-      const existingCache = cache.get(targetKey)
-      if (existingCache) {
-        cache.set(targetKey, { ...existingCache, nCtx: parsedLimit, checkedAt: Date.now() })
-      }
-      await ctx.model.reload()
+      await applyManualContextLimit(targetKey, parsedLimit)
     }
+
+    await (ctx as { rpc?: { register?: (def: unknown, handlers: unknown) => Promise<unknown> | unknown } }).rpc?.register?.(
+      DynamicContextRpc,
+      {
+        async getSnapshot() {
+          const entries: Record<string, DynamicContextEntry> = {}
+          for (const [k, v] of dynamicStore.entries) {
+            if (!k.includes("/")) continue
+            entries[k] = {
+              ...(v.limit !== undefined ? { limit: v.limit } : {}),
+              ...(v.used !== undefined ? { used: v.used } : {}),
+              ...(v.totalSlots !== undefined ? { totalSlots: v.totalSlots } : {}),
+              ...(v.maxSubagents !== undefined ? { maxSubagents: v.maxSubagents } : {}),
+            }
+          }
+          return { entries }
+        },
+        async setLimit({ modelKey, limit }: { modelKey: string; limit: number }) {
+          if (modelKey && Number.isFinite(limit) && limit > 0) {
+            await applyManualContextLimit(modelKey, Math.round(limit))
+          }
+          return { modelKey, limit }
+        },
+        async refresh({ providerID, modelID }: { providerID?: string; modelID?: string }) {
+          const fallbackProvider = [...targetProviders][0] ?? "llamacpp"
+          return checkModelContext({
+            providerID: providerID ?? fallbackProvider,
+            modelID: modelID ?? "default",
+            force: true,
+          })
+        },
+      },
+    )
 
     await ctx.command.transform((editor) => {
       editor.add({

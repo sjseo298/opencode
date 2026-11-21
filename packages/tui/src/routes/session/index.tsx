@@ -32,6 +32,7 @@ import {
   RGBA,
   MouseEvent,
 } from "@opentui/core"
+import { DynamicContextRpc } from "@opencode/schema/dynamic-context"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import {
   mediaHashFromUri,
@@ -1169,6 +1170,20 @@ export function Session(props: {
       },
     },
     {
+      title: "Open Objectives view",
+      id: "session.objectives",
+      group: "Plan",
+      slash: { name: "objectives" },
+      run: () => {
+        const objectives = session()?.metadata?.objectives as { title?: string } | undefined
+        if (objectives?.title) {
+          dialog.replace(() => <DialogPlanApproval sessionID={route.sessionID} po={objectives} />)
+          return
+        }
+        toast.show({ message: "No active objective plan in this session.", variant: "info", duration: 3000 })
+      },
+    },
+    {
       title: "Review active or pending plan",
       id: "session.plan.review",
       group: "Plan",
@@ -1251,58 +1266,23 @@ export function Session(props: {
         arguments: true as const,
       },
       run: (args?: string) => {
-        const ensureStore = () => {
-          const g = globalThis as any
-          if (!g.__OPENCODE_DYNAMIC_CONTEXT__) {
-            g.__OPENCODE_DYNAMIC_CONTEXT__ = {
-              entries: new Map(),
-              listeners: new Set(),
-              get(key: string) { return this.entries.get(key) },
-              getLimit(key: string) {
-                const direct = this.entries.get(key)?.limit
-                if (direct) return direct
-                const slashIdx = key.indexOf("/")
-                if (slashIdx !== -1) {
-                  const mId = key.slice(slashIdx + 1)
-                  for (const [k, v] of this.entries) {
-                    if ((k === mId || k.endsWith("/" + mId) || mId.endsWith(k)) && v.limit) return v.limit
-                  }
-                }
-                return undefined
-              },
-              set(key: string, data: any) {
-                const existing = this.entries.get(key)
-                const updated = { ...existing, ...data, timestamp: Date.now() }
-                this.entries.set(key, updated)
-                const slashIdx = key.indexOf("/")
-                if (slashIdx !== -1) this.entries.set(key.slice(slashIdx + 1), updated)
-                for (const fn of this.listeners) {
-                  try { fn() } catch {}
-                }
-              },
-              subscribe(fn: () => void) {
-                this.listeners.add(fn)
-                return () => this.listeners.delete(fn)
-              },
-            }
-          }
-          return g.__OPENCODE_DYNAMIC_CONTEXT__
-        }
-
         const applyLimit = (targetKey: string, newLimit: number) => {
-          const store = ensureStore()
-          store.set(targetKey, { limit: newLimit, manualOverride: true })
-          void client.api.session
-            .command({
-              sessionID,
-              name: "setContextLimit",
-              text: `${targetKey} ${newLimit}`,
+          void (async () => {
+            await client.api
+              .rpc(DynamicContextRpc)
+              .setLimit({ modelKey: targetKey, limit: newLimit }, { location: location() })
+            await data.location.model.sync(location()).catch(() => undefined)
+            toast.show({
+              message: `Context limit for ${targetKey} set to ${Locale.number(newLimit)} tokens`,
+              variant: "success",
+              duration: 4000,
             })
-            .catch(() => undefined)
-          toast.show({
-            message: `Context limit for ${targetKey} set to ${Locale.number(newLimit)} tokens (session only)`,
-            variant: "success",
-            duration: 4000,
+          })().catch((error) => {
+            toast.show({
+              message: errorMessage(error),
+              variant: "error",
+              duration: 5000,
+            })
           })
           dialog.clear()
         }
@@ -1386,8 +1366,7 @@ export function Session(props: {
             options={modelOptions}
             onSelect={(option) => {
               const selectedModel = allModels.find((m) => `${m.providerID}/${m.id}` === option.value)
-              const existingDynamic = ensureStore().getLimit(option.value)
-              openLimitPrompt(option.value, existingDynamic ?? selectedModel?.limit?.context)
+              openLimitPrompt(option.value, selectedModel?.limit?.context)
             }}
           />
         ))

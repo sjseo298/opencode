@@ -1,4 +1,4 @@
-import type { AccountSummary, QuotaAccountReport } from "./account-rpc"
+import type { AccountSummary, QuotaAccountReport } from "@opencode/schema/antigravity"
 
 export const ANTIGRAVITY_TIMEOUT_MS = 45_000
 

@@ -1,20 +1,13 @@
-import { describe, expect, it, afterEach } from "bun:test"
+import { describe, expect, it } from "bun:test"
 import { contextUsage, formatContextUsage } from "../../src/util/session"
 
-describe("contextUsage with dynamic context store", () => {
-  const originalStore = (globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__
-
-  afterEach(() => {
-    ;(globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__ = originalStore
-  })
-
+describe("contextUsage with dynamic context overrides", () => {
   it("formats tokens and percentages correctly", () => {
     expect(formatContextUsage(1000)).toBe("1.0K")
     expect(formatContextUsage(1000, 25)).toBe("1.0K (25%)")
   })
 
-  it("uses static model context limit when no dynamic store is present", () => {
-    delete (globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__
+  it("uses static model context limit when no dynamic override is provided", () => {
     const messages: any[] = [
       {
         type: "assistant",
@@ -42,12 +35,7 @@ describe("contextUsage with dynamic context store", () => {
     expect(usage?.percent).toBe(1) // 1500 / 262144 ≈ 0.57% -> 1%
   })
 
-  it("overrides context limit dynamically when store provides effective limit", () => {
-    ;(globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__ = {
-      getLimit: (key: string) => (key === "llamacpp/default" ? 186368 : undefined),
-      get: () => undefined,
-    }
-
+  it("overrides context limit dynamically when dynamic override provides effective limit", () => {
     const messages: any[] = [
       {
         type: "assistant",
@@ -68,7 +56,7 @@ describe("contextUsage with dynamic context store", () => {
       },
     ]
 
-    const usage = contextUsage(messages, models)
+    const usage = contextUsage(messages, models, undefined, { limit: 186368 })
     expect(usage).toBeDefined()
     expect(usage?.tokens).toBe(73700)
     expect(usage?.contextLimit).toBe(186368)
@@ -76,15 +64,7 @@ describe("contextUsage with dynamic context store", () => {
     expect(usage?.percent).toBe(40)
   })
 
-  it("updates tokens dynamically when store reports live used tokens greater than last assistant message", () => {
-    ;(globalThis as any).__OPENCODE_DYNAMIC_CONTEXT__ = {
-      getLimit: () => 186368,
-      get: (key: string) =>
-        key === "llamacpp/default"
-          ? { limit: 186368, used: 95000, total: 186368 }
-          : undefined,
-    }
-
+  it("updates tokens dynamically when dynamic override reports live used tokens greater than last assistant message", () => {
     const messages: any[] = [
       {
         type: "assistant",
@@ -105,7 +85,7 @@ describe("contextUsage with dynamic context store", () => {
       },
     ]
 
-    const usage = contextUsage(messages, models)
+    const usage = contextUsage(messages, models, undefined, { limit: 186368, used: 95000 })
     expect(usage).toBeDefined()
     expect(usage?.tokens).toBe(95000)
     expect(usage?.contextLimit).toBe(186368)

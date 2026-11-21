@@ -159,6 +159,12 @@ plugin TUI context, opencode config.
 - **CLEAN (fork-modified):** `packages/ai/src/provider-error.ts` + test, `packages/server/src/handlers/rpc.ts`, `packages/plugin/src/tui/context.ts`, `packages/opencode/config.json`, `bun.lock` (GUARANTEED — see §4.2)
 - **Anchor commits:** `1cb635264d` (context-overflow classification) · `c65ac7d371` (provider config)
 
+### A15. Cross-Surface Coherence (TUI ↔ Web/Desktop) & Shared Contracts
+Single-source contracts (`AntigravityAccountsRpc`, `DynamicContextRpc`, `ObjectivesView`, `SurfaceParity`), automated surface-parity checker, aligned slash commands/aliases, and settings UI & i18n parity.
+
+- **FORK-NEW:** `packages/schema/src/{antigravity.ts,dynamic-context.ts,objectives.ts,surface-parity.ts}`, `packages/schema/test/surface-parity.test.ts`, `script/check-surface-parity.ts`
+- **CLEAN (fork-modified):** `AGENTS.md`, `packages/{tui,cli,app,gui-plugins,desktop}/AGENTS.md`, `packages/app/src/shell/commands/command.tsx`, `packages/app/src/composer/model.ts`, `packages/app/src/session/commands/{use-session-commands.tsx,session-control-dialogs.tsx}`, `packages/app/src/settings/general/{controllers.ts,general.tsx}`, `packages/app/src/runtime/i18n/en.ts`, `packages/gui-plugins/src/objectives/tab.tsx`
+
 ---
 
 ## 3. Sync procedure

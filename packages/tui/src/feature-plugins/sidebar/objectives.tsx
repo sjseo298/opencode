@@ -1,160 +1,35 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { createMemo, For, Show } from "solid-js"
+import {
+  normalizePrimaryObjectiveView,
+  type FindingLifecycle,
+  type ObjectiveStatus,
+  type OptionStatusView,
+  type PrimaryObjectiveView,
+} from "@opencode/schema/objectives"
 
-export type ObjectiveStatus =
-  | "pending"
-  | "exploring"
-  | "blocked"
-  | "resolved"
-  | "discarded"
-  | "cancelled"
-
-export interface DelegationView {
-  mode: "main" | "subagent"
-  justification?: string
-}
-
-export interface TertiaryObjectiveView {
-  id: string // "SO-1-T2" etc. — child of its parent Secondary Objective
-  title: string
-  status: ObjectiveStatus
-  rationale: string
-  delegation?: DelegationView
-  blocker?: string
-  validationProof?: string
-}
-
-export interface SecondaryObjectiveView {
-  id: string
-  title: string
-  status: ObjectiveStatus
-  rationale: string
-  delegation?: DelegationView
-  blocker?: string
-  validationProof?: string
-  affectedResources?: { files?: string[]; services?: string[]; envs?: string[]; dbSchemas?: string[] }
-  children?: TertiaryObjectiveView[] // Nested tertiary sub-objectives; present only when the SO was decomposed because it proved too large
-}
-
-export type PrimaryObjectiveStatus =
-  | "pending"
-  | "investigating"
-  | "exploring"
-  | "resolved"
-  | "presented_awaiting_confirmation"
-
-export type FindingLifecycle = "NEW" | "EXTENDED" | "SUBSUMED"
-
-export type OptionStatusView = "PENDING" | "EXPLORING" | "DISCARDED" | "SUCCESSFUL" | "CANCELLED"
-
-export interface DoDCriterionView {
-  id: string
-  statement: string
-  proofRef?: string
-}
-
-export interface FindingView {
-  id: string // "F-001"
-  title: string
-  lifecycle: FindingLifecycle
-  result: string
-  soRef?: string
-  evidenceType?: string
-  delegation?: DelegationView
-}
-
-export interface OptionView {
-  id: string // "OPT-1"
-  statement: string
-  status: OptionStatusView
-  result?: string
-  reason?: string
-}
-
-export interface FingerprintView {
-  key: string
-  symptom: string
-  soRef?: string
-  status?: string
-  fixRef?: string
-}
-
-export interface PrimaryObjectiveView {
-  title: string
-  status: PrimaryObjectiveStatus
-  definitionOfDone: string
-  secondaries: SecondaryObjectiveView[]
-  dodCriteria?: DoDCriterionView[]
-  findings?: FindingView[]
-  options?: OptionView[]
-  fingerprints?: FingerprintView[]
-  checkpointNote?: string
-}
-
-export function normalizePrimaryObjectiveView(raw: any): PrimaryObjectiveView | undefined {
-  if (!raw || typeof raw.title !== "string") return undefined
-  let status: PrimaryObjectiveStatus =
-    raw.status === "pending" ||
-    raw.status === "investigating" ||
-    raw.status === "resolved" ||
-    raw.status === "presented_awaiting_confirmation"
-      ? raw.status
-      : "exploring"
-
-  // Invariante jerárquico estricto en memoria viva:
-  // Si el PO dice 'resolved' pero alguno de sus SOs o TOs está abierto,
-  // la UI debe auto-repararlo inmediatamente a 'exploring' para nunca mostrar
-  // un PO cerrado con tareas abiertas.
-  const secondaries: SecondaryObjectiveView[] = Array.isArray(raw.secondaries) ? [...raw.secondaries] : []
-  const isClosed = (s: string) => s === "resolved" || s === "discarded" || s === "cancelled"
-  const hasOpenChild = secondaries.some(
-    (s) => !isClosed(s.status) || (s.children ?? []).some((t) => !isClosed(t.status)),
-  )
-  if (status === "resolved" && hasOpenChild) {
-    status = "exploring"
-  }
-
-  // Auto-cierre de seguridad en la UI:
-  // Si todos los objetivos secundarios y terciarios ya están cerrados ('resolved', 'discarded', 'cancelled')
-  // el PO no debe permanecer abierto en la barra lateral aunque el agente haya omitido llamar a complete_primary.
-  if (status !== "resolved" && status !== "investigating" && status !== "presented_awaiting_confirmation") {
-    const allChildrenClosed =
-      secondaries.length > 0 &&
-      secondaries.every(
-        (s) => isClosed(s.status) && (s.children ?? []).every((t) => isClosed(t.status)),
-      )
-    if (allChildrenClosed) {
-      status = "resolved"
-    }
-  }
-
-  const rawDod = Array.isArray(raw.dodCriteria)
-    ? raw.dodCriteria
-    : Array.isArray(raw.dod)
-      ? raw.dod
-      : undefined
-  return {
-    title: raw.title,
-    status,
-    definitionOfDone: raw.definitionOfDone ?? "",
-    secondaries,
-    dodCriteria: rawDod ? [...rawDod] : undefined,
-    findings: Array.isArray(raw.findings) ? [...raw.findings] : undefined,
-    options: Array.isArray(raw.options) ? [...raw.options] : undefined,
-    fingerprints: Array.isArray(raw.fingerprints) ? [...raw.fingerprints] : undefined,
-    checkpointNote: typeof raw.checkpointNote === "string" ? raw.checkpointNote : undefined,
-  }
-}
+export {
+  normalizePrimaryObjectiveView,
+  type DelegationView,
+  type DoDCriterionView,
+  type FindingLifecycle,
+  type FindingView,
+  type FingerprintView,
+  type ObjectiveStatus,
+  type OptionStatusView,
+  type OptionView,
+  type PrimaryObjectiveStatus,
+  type PrimaryObjectiveView,
+  type SecondaryObjectiveView,
+  type TertiaryObjectiveView,
+} from "@opencode/schema/objectives"
 
 export function extractObjectivesFromMessages(
   _sessionID: string,
-  _messages?: any[],
-  metadataObjectives?: any,
+  _messages?: unknown[],
+  metadataObjectives?: unknown,
 ): PrimaryObjectiveView | undefined {
-  if (metadataObjectives && typeof metadataObjectives.title === "string") {
-    return normalizePrimaryObjectiveView(metadataObjectives)
-  }
-  return undefined
+  return normalizePrimaryObjectiveView(metadataObjectives)
 }
 
 export function SidebarObjectives(props: { context: Plugin.Context; sessionID: string }) {

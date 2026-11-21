@@ -1,11 +1,16 @@
-import { Schema } from "effect"
-import { Rpc } from "@opencode/schema/rpc"
+export * as Antigravity from "./antigravity.js"
 
-const QuotaSummarySchema = Schema.Struct({
+import { Schema } from "effect"
+import { Rpc } from "./rpc.js"
+import { optional } from "./schema.js"
+
+export const QuotaSummarySchema = Schema.Struct({
   remainingFraction: Schema.Number,
-  resetTime: Schema.optional(Schema.String),
-  updatedAt: Schema.optional(Schema.Number),
-})
+  resetTime: optional(Schema.String),
+  updatedAt: optional(Schema.Number),
+}).annotate({ identifier: "Antigravity.QuotaSummary" })
+
+export type QuotaSummary = typeof QuotaSummarySchema.Type
 
 export const AccountSummarySchema = Schema.Struct({
   id: Schema.String,
@@ -14,8 +19,8 @@ export const AccountSummarySchema = Schema.Struct({
   current: Schema.Boolean,
   verificationRequired: Schema.Boolean,
   lastUsed: Schema.Number,
-  quota: Schema.optional(QuotaSummarySchema),
-})
+  quota: optional(QuotaSummarySchema),
+}).annotate({ identifier: "Antigravity.AccountSummary" })
 
 export type AccountSummary = typeof AccountSummarySchema.Type
 
@@ -25,17 +30,17 @@ export const AntigravitySettingsSchema = Schema.Struct({
   max_capacity_retries: Schema.Number,
   max_capacity_delay_seconds: Schema.Number,
   split_system_instruction: Schema.Boolean,
-})
+}).annotate({ identifier: "Antigravity.Settings" })
 
 export type AntigravitySettings = typeof AntigravitySettingsSchema.Type
 
 export const AntigravitySettingsUpdateSchema = Schema.Struct({
-  connection_timeout_seconds: Schema.optional(Schema.Number),
-  stream_idle_timeout_seconds: Schema.optional(Schema.Number),
-  max_capacity_retries: Schema.optional(Schema.Number),
-  max_capacity_delay_seconds: Schema.optional(Schema.Number),
-  split_system_instruction: Schema.optional(Schema.Boolean),
-})
+  connection_timeout_seconds: optional(Schema.Number),
+  stream_idle_timeout_seconds: optional(Schema.Number),
+  max_capacity_retries: optional(Schema.Number),
+  max_capacity_delay_seconds: optional(Schema.Number),
+  split_system_instruction: optional(Schema.Boolean),
+}).annotate({ identifier: "Antigravity.SettingsUpdate" })
 
 export type AntigravitySettingsUpdate = typeof AntigravitySettingsUpdateSchema.Type
 
@@ -47,16 +52,16 @@ export const DEFAULT_ANTIGRAVITY_SETTINGS: AntigravitySettings = {
   split_system_instruction: true,
 }
 
-const EmptyInput = Schema.toStandardSchemaV1(Schema.Struct({}))
-
-const QuotaAccountReportSchema = Schema.Struct({
+export const QuotaAccountReportSchema = Schema.Struct({
   id: Schema.String,
   email: Schema.String,
   disabled: Schema.Boolean,
   report: Schema.String,
-})
+}).annotate({ identifier: "Antigravity.QuotaAccountReport" })
 
 export type QuotaAccountReport = typeof QuotaAccountReportSchema.Type
+
+const EmptyInput = Schema.toStandardSchemaV1(Schema.Struct({}))
 
 export const AntigravityAccountsRpc = Rpc.define({
   id: "antigravity.accounts",
@@ -70,7 +75,7 @@ export const AntigravityAccountsRpc = Rpc.define({
       output: Schema.toStandardSchemaV1(Schema.Struct({ ids: Schema.Array(Schema.String) })),
     },
     quotas: {
-      input: Schema.toStandardSchemaV1(Schema.Struct({ id: Schema.optional(Schema.String) })),
+      input: Schema.toStandardSchemaV1(Schema.Struct({ id: optional(Schema.String) })),
       output: Schema.toStandardSchemaV1(
         Schema.Struct({
           report: Schema.String,
@@ -125,6 +130,5 @@ export function formatQuotaSummary(quota: AccountSummary["quota"], now = Date.no
 }
 
 export function stripAnsiCodes(text: string): string {
-  // Strips terminal ANSI escape sequences from RPC quota reports so they render cleanly in Web UI.
   return text.replace(/\x1b\[[0-9;]*m/g, "")
 }

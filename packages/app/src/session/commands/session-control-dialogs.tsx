@@ -7,8 +7,13 @@ import { Dialog, DialogBody, DialogHeader, DialogTitle } from "@opencode/ui/dial
 import { MenuScroll } from "@opencode/ui/menu-scroll"
 import { Select } from "@opencode/ui/select"
 import { TextInput } from "@opencode/ui/text-input"
+import { DynamicContextRpc } from "@opencode/schema/dynamic-context"
 import type { ModelSelection } from "@/providers/models/selection"
-import { getDynamicModelContextLimit, setDynamicModelContextLimit } from "@/providers/models/context-limit"
+import {
+  clearDynamicModelContextLimit,
+  getDynamicModelContextLimit,
+  setDynamicModelContextLimit,
+} from "@/providers/models/context-limit"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useServerSDK } from "@/runtime/server/client"
 import { useData, useServer } from "@/runtime/server/current"
@@ -50,6 +55,7 @@ export async function executeRewindSteps(input: {
   try {
     await input.sdk.api.session.interrupt({ sessionID: input.sessionID })
     await input.sdk.api.experimental.session.wait({ sessionID: input.sessionID })
+    await input.data.session.message.sync(input.sessionID).catch(() => undefined)
     const allMessages = input.data.session.message.list(input.sessionID) ?? []
     const revertID = input.data.session.get(input.sessionID)?.revert?.messageID
 
@@ -162,31 +168,42 @@ export async function applyModelContextLimit(input: {
   modelKey: string
   limit: number
   sessionID?: string
+  location?: { directory: string }
   sdk: ReturnType<typeof useServerSDK>
   data?: ReturnType<typeof useData>
   language: ReturnType<typeof useLanguage>
 }) {
   setDynamicModelContextLimit(input.modelKey, input.limit)
 
-  const targetSessionID = input.sessionID ?? input.data?.session.list()[0]?.id
+  const targetLocation =
+    input.location ??
+    (input.sessionID ? input.data?.session.get(input.sessionID)?.location : undefined) ??
+    input.data?.location.default()
 
-  if (targetSessionID) {
-    await input.sdk.api.session
-      .command({
-        sessionID: targetSessionID,
-        name: "setContextLimit",
-        text: `${input.modelKey} ${input.limit}`,
-      })
-      .catch(() => undefined)
+  try {
+    await input.sdk.api
+      .rpc(DynamicContextRpc)
+      .setLimit({ modelKey: input.modelKey, limit: input.limit }, targetLocation ? { location: targetLocation } : undefined)
+
+    if (targetLocation && input.data) {
+      await input.data.location.model.sync(targetLocation).catch(() => undefined)
+      clearDynamicModelContextLimit(input.modelKey)
+    }
+
+    showToast({
+      variant: "success",
+      title: input.language.t("dialog.contextLimit.toast.applied", {
+        model: input.modelKey,
+        limit: input.limit.toLocaleString(),
+      }),
+    })
+  } catch (cause: unknown) {
+    clearDynamicModelContextLimit(input.modelKey)
+    showToast({
+      variant: "error",
+      title: formatServerError(cause, input.language.t, input.language.t("common.requestFailed")),
+    })
   }
-
-  showToast({
-    variant: "success",
-    title: input.language.t("dialog.contextLimit.toast.applied", {
-      model: input.modelKey,
-      limit: input.limit.toLocaleString(),
-    }),
-  })
 }
 
 export function DialogSetContextLimit(props: { activeModelKey?: string; sessionID?: string }) {
@@ -246,6 +263,7 @@ export function DialogSetContextLimit(props: { activeModelKey?: string; sessionI
       modelKey: targetModel,
       limit: parsed,
       sessionID: props.sessionID,
+      location: workspace().ref,
       sdk,
       data,
       language,

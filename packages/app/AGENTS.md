@@ -1,6 +1,7 @@
 ## Priorities
 
 - Prioritise, in this order: stability, simplicity, performance.
+- Follow the `Cross-Surface Coherence (TUI ↔ Web/Desktop)` section in the root `AGENTS.md`: align slash commands (`slashAliases`), server settings, and shared schemas/RPCs with `packages/schema/src/surface-parity.ts` and `@opencode/schema/*`, never duplicate `Rpc.define` or `normalizePrimaryObjectiveView` here, and verify with `bun script/check-surface-parity.ts`.
 - Before changing session or timeline code, benchmark it against `origin/dev` with strobe (`packages/app/perf/README.md`): `strobe bench packages/app/perf/<area>.bench.ts --base origin/dev --head .`.
 
 ## Debugging

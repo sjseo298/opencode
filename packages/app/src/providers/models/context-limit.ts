@@ -17,6 +17,16 @@ export function setDynamicModelContextLimit(key: string, limit: number) {
   })
 }
 
+export function clearDynamicModelContextLimit(key: string) {
+  const slashIdx = key.indexOf("/")
+
+  batch(() => {
+    setDynamicContextStore("limits", key, undefined)
+
+    if (slashIdx !== -1) setDynamicContextStore("limits", key.slice(slashIdx + 1), undefined)
+  })
+}
+
 export function getDynamicModelContextLimit(key: string): number | undefined {
   const direct = dynamicContextStore.limits[key]
 
@@ -37,7 +47,7 @@ export function getDynamicModelContextLimit(key: string): number | undefined {
 }
 
 export function resolveModelContextLimit(
-  model: { providerID?: string; provider?: { id: string }; id: string; limit?: { context?: number } } | undefined,
+  model: { providerID?: string; provider?: { id?: string }; id: string; limit?: { context?: number } } | undefined,
 ): number | undefined {
   if (!model) return undefined
   const providerID = model.provider?.id ?? model.providerID

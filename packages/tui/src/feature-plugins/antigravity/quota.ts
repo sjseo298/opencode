@@ -1,4 +1,4 @@
-import type { AccountSummary } from "./account-rpc.js"
+import type { AccountSummary } from "@opencode/schema/antigravity"
 
 /** ANSI color helpers */
 const ANSI = {

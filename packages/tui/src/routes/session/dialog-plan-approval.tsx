@@ -7,38 +7,12 @@ import { useClient } from "../../context/client"
 import { useTheme } from "../../context/theme"
 import { useSessionTabs } from "../../context/session-tabs"
 import { Keymap } from "../../context/keymap"
+import { formatTreeSummary } from "@opencode/schema/objectives"
 import { DialogHeader, DialogLayout, useDialog } from "../../ui/dialog"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 
 export type PlanApprovalAction = "fresh_session" | "same_session" | "refine_plan" | "revoke_approval" | "close"
-
-function formatTreeSummary(po: any): string {
-  if (!po || typeof po.title !== "string") return ""
-  const lines: string[] = [
-    `### Árbol de Objetivos Activo`,
-    `**Objetivo Primario:** ${po.title}`,
-  ]
-  if (po.definitionOfDone) {
-    lines.push(`**Definición de Hecho (DoD):** ${po.definitionOfDone}`)
-  }
-  if (Array.isArray(po.secondaries) && po.secondaries.length > 0) {
-    lines.push(``, `**Objetivos Secundarios:**`)
-    for (const so of po.secondaries) {
-      const del = so.delegation?.mode ? ` [${so.delegation.mode}]` : ""
-      lines.push(`- **${so.id}** [${(so.status ?? "pending").toUpperCase()}]${del} ${so.title}`)
-      if (so.rationale) lines.push(`  - *Rationale:* ${so.rationale}`)
-    }
-  }
-  if (Array.isArray(po.findings) && po.findings.length > 0) {
-    lines.push(``, `**Hallazgos de Exploración:**`)
-    for (const f of po.findings) {
-      lines.push(`- **${f.id}**: ${f.title}`)
-      if (f.result) lines.push(`  - *Resultado:* ${f.result}`)
-    }
-  }
-  return lines.join("\n")
-}
 
 export function DialogPlanApproval(props: {
   sessionID: string

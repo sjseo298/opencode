@@ -161,7 +161,7 @@ export function ModelDetails(props: {
               notation: "compact",
               maximumFractionDigits: 0,
               roundingMode: "trunc",
-            }).format(props.model.limit.context),
+            }).format(resolveModelContextLimit(props.model) ?? props.model.limit.context),
           })}
         </bdi>
         <Show when={summary()}>{(value) => <div>{value()}</div>}</Show>

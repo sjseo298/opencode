@@ -20,3 +20,7 @@
   1. An event-driven one-shot trigger in `packages/tui/src/routes/session/index.tsx` detects the state transition on `session().metadata.objectives.status`.
   2. The application automatically renders `DialogPlanApproval` (`packages/tui/src/routes/session/dialog-plan-approval.tsx`) as a native modal popup without requiring agent text intervention.
   3. When the user selects "Sesión Fresca", a completely standalone top-level session (`parentID: undefined`) is created, the objective tree is imported, and `route.navigate` switches the active session immediately to the fresh session with 100% token headroom.
+
+## Cross-Surface Coherence (TUI ↔ Web/Desktop)
+
+- Follow the `Cross-Surface Coherence (TUI ↔ Web/Desktop)` rules in the root `AGENTS.md`: register every new slash command/alias and server setting in `packages/schema/src/surface-parity.ts` and implement its Web/Desktop counterpart (or document a platform exception), import shared RPCs/view normalizers from `@opencode/schema/*`, and never read `globalThis.__OPENCODE_*` from TUI components. Verify with `bun script/check-surface-parity.ts` and `bun run check`.
