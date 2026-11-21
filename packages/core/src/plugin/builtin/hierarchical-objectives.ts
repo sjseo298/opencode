@@ -401,9 +401,37 @@ export async function syncSessionObjectivesMetadata(sessionID: string, po: Prima
         ...currentMetadata,
         objectives: po,
         objectivesUpdatedAt: Date.now(),
+        planRefinementRequested: false,
       },
     }).catch(() => {})
   } catch {}
+}
+
+async function reconcilePendingRefinementFromMetadata(
+  sessionID: string,
+  po: PrimaryObjective | undefined,
+): Promise<boolean> {
+  if (!po || !activePluginContext?.session?.get || !sessionID || sessionID === "default-session") return false
+  try {
+    const sess = await activePluginContext.session.get({ sessionID }).catch(() => undefined)
+    if (!sess?.metadata?.planRefinementRequested) return false
+    po.status = "investigating"
+    po.approvedByUser = false
+    po.planPresentedAt = undefined
+    authenticatedApprovalSessions.delete(sessionID)
+    pendingPlanApprovalSessions.delete(sessionID)
+    if (po.phase) {
+      po.phase.paused = false
+      po.phase.reason = "Ajustes solicitados por el usuario"
+    } else {
+      po.phase = { paused: false, since: Date.now(), reason: "Ajustes solicitados por el usuario" }
+    }
+    po.updatedAt = Date.now()
+    persistSessionObjectives(sessionID)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function persistSessionObjectives(sessionID: string): void {
@@ -509,7 +537,7 @@ export const PROTOCOLO_OBJETIVOS_INSTRUCTIONS = [
   "ORDER OF OPERATIONS (PLAN FIRST, EXECUTE SECOND): You MUST construct the objective plan FIRST via `objective_manage` before executing code modifications, running mutating tasks, or attempting fixes. Never execute first and document objectives after the fact. READ-ONLY RECONNAISSANCE PERMITTED (RECON PHASE): You ARE permitted and encouraged to perform read-only reconnaissance (reading files, directory listings, searching code, checking configuration, or running a read-only scout subagent) BEFORE calling `set_primary`. Gathering structural facts to establish a grounded, accurate plan does NOT violate planning-first; only mutating operations (edits, writes, mutating commands, builds) are prohibited prior to plan creation and approval.",
   "1. Identify and establish the **Primary Objective** and its concrete, verifiable **Definition of Done**.",
   "2. Decompose the task into initial **Secondary Objectives (SO-N)** with the **Rationale** explaining why each subtask or blocker resolution is necessary.",
-  "3. Incremental Plan Construction & Mandatory Plan Presentation: Construct the plan incrementally to avoid oversized monolithic payloads that risk token cutoff (stop reason: length) or long generation hangs. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, `dodCriteria`, and `plannedSecondaryCount: N` declaring the intended number of subtasks. Then register initial secondary objectives strictly ONE BY ONE via `add_secondary` and initial reconnaissance findings strictly ONE BY ONE via `add_finding` (batch addition is disallowed to prevent generation lag and token cutoff). Before presenting the plan, all declared planned secondaries must be registered. Once the draft is complete, call `action: 'present_plan'` to transition the tree to `presented_awaiting_confirmation`. Draft planning actions (`add_secondary` in pending, `add_finding`, `update_dod`) are automatically permitted during planning and review without requiring 'draft: true'. MANDATORY USER PLAN APPROVAL GUARD: You CANNOT start working on any objective (setting status to 'exploring' or 'resolved') or modify project files until the user explicitly reviews and approves the plan. The internal state 'approvedByUser' strictly guards execution: present the plan and wait for the user's explicit confirmation before beginning execution. MANDATORY PLAN PRESENTATION & STRICT ANTI-SIMULATION DIRECTIVE: Whenever the user requests planning ('presentame un plan', 'haz un plan', 'diseña un plan', etc.) or whenever a task requires planning/implementation, you MUST strictly use `objective_manage` to construct and present the plan. You MUST NEVER simulate informal proposals in markdown text, present numbered phase lists in chat, or ask conversational questions like '¿Deseas que implemente?' or '¿Cómo deseas proceder?'. Doing so bypasses the protocol and prevents OpenCode's native UI dialog (`DialogPlanApproval`) from appearing. Present the plan clearly in your response, pause your turn, and wait for confirmation via the native modal dialog (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves or adjusts, call `action: 'resume_plan'` with their instructions to begin execution.",
+  "3. Incremental Plan Construction & Mandatory Plan Presentation: Construct the plan incrementally to avoid oversized monolithic payloads that risk token cutoff (stop reason: length) or long generation hangs. Call `objective_manage` with `action: 'set_primary'`, `title`, `definitionOfDone`, `dodCriteria`, and `plannedSecondaryCount: N` declaring the intended number of subtasks. Then register initial secondary objectives strictly ONE BY ONE via `add_secondary` and initial reconnaissance findings strictly ONE BY ONE via `add_finding` (batch addition is disallowed to prevent generation lag and token cutoff). Before presenting the plan, all declared planned secondaries must be registered. Once the draft is complete, call `action: 'present_plan'` to transition the tree to `presented_awaiting_confirmation`. Draft planning actions (`add_secondary` in pending, `add_finding`, `update_dod`) are automatically permitted during planning and review without requiring 'draft: true'. MANDATORY USER PLAN APPROVAL GUARD: You CANNOT start working on any objective (setting status to 'exploring' or 'resolved') or modify project files until the user explicitly reviews and approves the plan. The internal state 'approvedByUser' strictly guards execution: present the plan and wait for the user's explicit confirmation before beginning execution. MANDATORY PLAN PRESENTATION & STRICT ANTI-SIMULATION DIRECTIVE: Whenever the user requests planning ('presentame un plan', 'haz un plan', 'diseña un plan', etc.) or whenever a task requires planning/implementation, you MUST strictly use `objective_manage` to construct and present the plan. You MUST NEVER simulate informal proposals in markdown text, present numbered phase lists in chat, or ask conversational questions like '¿Deseas que implemente?' or '¿Cómo deseas proceder?'. Doing so bypasses the protocol and prevents OpenCode's native UI dialog (`DialogPlanApproval`) from appearing. Present the plan clearly in your response, pause your turn, and wait for confirmation via the native modal dialog (this paused state is explicitly exempt from the rule against ending turns with unresolved work). Once the user approves, call `action: 'resume_plan'` with their instructions to begin execution. If the user selects plan refinement/adjustments, modify the plan (`update_primary`, `set_primary`, `add_secondary`, `update_secondary`, `update_dod`) while in `investigating` mode and then call `action: 'present_plan'` again so the user can review and approve the updated plan.",
   "4. Dynamic Secondary Objective Discovery & Immediate Re-Planning: As you analyze, research, or execute secondary objectives, whenever you discover unforeseen subtasks, blockers, edge cases, or dependencies that were not anticipated in the initial plan, smoothly add them to the plan via `objective_manage` (`action: 'add_secondary'`). The plan evolves dynamically as findings emerge. This obligation holds even AFTER execution has started: whenever you discover new secondary or tertiary objectives, WHENEVER the user intervenes to refine or correct direction, scope, or approach of the CURRENT topic, OR when you yourself realize a required step is missing from the plan, IMMEDIATELY update the objective list via `objective_manage` (`action: 'add_secondary'` / `action: 'update_secondary'`) before continuing work. A stale plan is prohibited.",
   "4b. Unrelated Topic Pivot & Mandatory New Objective Tree: If the user introduces a new request, task, or topic that is NOT causally or functionally related to the current Primary Objective, or if the previous Primary Objective was already resolved/completed, you MUST NOT append it as a Secondary Objective to the old tree. Instead, you MUST strictly initiate a clean, new objective tree by calling `objective_manage` with `action: 'set_primary'`, defining the new topic, its own Definition of Done, and declaring its own planned secondary count. Creating a frankenstein tree by piling unrelated tasks under a previous objective is strictly prohibited.",
   "5. Subtasks / Level-3 Decomposition (Cardinality Note): A Secondary Objective may be decomposed into Level-3 subtasks (TO-N) ONLY when it proves too large to execute as a single unit (broad scope, multiple independent steps, or high context cost). CARDINALITY RULE: 'Tertiary' refers strictly to the 3rd hierarchical depth level (PO [1] -> SO [2] -> TO [3]), NEVER a fixed quantity of 3. You may and should create as many subtasks (`SO-N-T1`, `SO-N-T2` ... `SO-N-TN`, e.g. 2, 4, 7, 10...) as needed so each fits safely within the subagent budget. Do NOT pre-create subtasks for small secondaries. They are FIRST-CLASS children of their parent SO: register them with `objective_manage` (`action: 'add_tertiary'`, passing the parent SO id in `id`, e.g. `SO-2`, plus title and rationale) and manage them with `action: 'update_tertiary'` using each tertiary's own id (e.g. `SO-2-T1`). They inherit every protocol rule: rationale, Done-means-Done validation proof, reconciliation, and subagent candidacy. CLOSURE RULE (NO SHORTCUTS): a secondary objective can only be resolved when ALL of its tertiary objectives are closed (resolved/discarded/cancelled), and the Primary Objective can only be completed when EVERY secondary objective — including all of their tertiary objectives — is closed; the tool rejects both shortcuts.",
@@ -701,10 +729,13 @@ export function updatePrimaryObjective(
   }
 
   // Apply non-status updates first so closure gates see the fresh proof/criteria.
-  if (updates.title !== undefined) po.title = updates.title.trim()
-  if (updates.definitionOfDone !== undefined) po.definitionOfDone = updates.definitionOfDone.trim()
+  if (updates.title !== undefined && updates.title.trim()) po.title = updates.title.trim()
+  if (updates.definitionOfDone !== undefined && updates.definitionOfDone.trim()) po.definitionOfDone = updates.definitionOfDone.trim()
   if (updates.validationProof !== undefined) po.validationProof = updates.validationProof?.trim() || undefined
   if (updates.dod !== undefined) po.dod = updates.dod
+  if (updates.status !== "resolved" && !isPlanApprovedForExecution(po, sessionID)) {
+    po.planPresentedAt = undefined
+  }
 
   // Absolute non-bypassable invariant: NEVER close or finalize the PO without user plan approval.
   if (updates.status === "resolved" && !isPlanApprovedForExecution(po, sessionID)) {
@@ -3967,6 +3998,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
   }
 
+  // Reconcile explicit user refinement request persisted in session metadata by DialogPlanApproval
+  if (po && (po.status === "presented_awaiting_confirmation" || po.approvedByUser)) {
+    await reconcilePendingRefinementFromMetadata(sessionID, po)
+  }
+
   // F-6: the plan-pause state machine freezes execution mutations until the user confirms.
   // Planning draft actions (adding secondary definitions in pending status, recording findings, or refining DoD)
   // are allowed during presented_awaiting_confirmation in test environments,
@@ -4245,7 +4281,7 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
 
     const targetStatus = isComplete
       ? "resolved"
-      : ((input.status as PrimaryObjectiveStatus) || "resolved")
+      : (input.status as PrimaryObjectiveStatus | undefined)
 
     const approvalError = checkPlanApprovalGuard(current, targetStatus, sessionID, rawAction)
     if (approvalError) {
@@ -4305,13 +4341,17 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     }
 
     const tree = treeOf(sessionID)
+    const refinementNotice =
+      !isComplete && current.status === "investigating" && !current.approvedByUser
+        ? " Plan updated in draft/refinement mode (status: 'investigating'). Once all adjustments are complete, call objective_manage(action: 'present_plan') to present the updated plan for user approval."
+        : ""
     return {
       output: {
         success: true,
-        message: `Primary Objective successfully marked as ${current.status.toUpperCase()}.`,
+        message: `Primary Objective successfully ${isComplete || targetStatus === "resolved" ? `marked as ${current.status.toUpperCase()}` : "updated"}.${refinementNotice}`,
         tree,
       },
-      content: tree,
+      content: tree + refinementNotice,
     }
   }
 
@@ -4381,6 +4421,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
     const tree = treeOf(sessionID)
     const compactTree = compactTreeOf(sessionID, { focusSOId: so.id })
     const current = sessionObjectives.get(sessionID)
+    if (current && current.status === "investigating" && !current.approvedByUser && current.planPresentedAt !== undefined) {
+      current.planPresentedAt = undefined
+      persistSessionObjectives(sessionID)
+    }
     let reopenNotice = current?.status === "exploring"
       ? " ⚠️ HIERARCHICAL REOPENING: Primary Objective is EXPLORING because new/open sub-objectives exist."
       : ""
@@ -4472,6 +4516,11 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
         output: { success: false, message: result.error || `Update failed for ${id}.`, tree },
         content: `Error updating ${id}: ${result.error}`,
       }
+    }
+
+    if (current.status === "investigating" && !current.approvedByUser && current.planPresentedAt !== undefined) {
+      current.planPresentedAt = undefined
+      persistSessionObjectives(sessionID)
     }
 
     const tree = treeOf(sessionID)
@@ -4856,6 +4905,10 @@ async function executeObjectiveAction(input: any, sessionID: string): Promise<To
       return { output: { success: false, message: result.error || "Failed to update DoD.", tree: "" }, content: result.error || "Failed to update DoD." }
     }
     const currentPo = sessionObjectives.get(sessionID)
+    if (currentPo && currentPo.status === "investigating" && !currentPo.approvedByUser && currentPo.planPresentedAt !== undefined) {
+      currentPo.planPresentedAt = undefined
+      persistSessionObjectives(sessionID)
+    }
     const tree = treeOf(sessionID)
     const compactTree = compactTreeOf(sessionID)
     const unsatisfiedCriteria = (currentPo?.dod || []).filter((c) => !c.proofRef || !c.proofRef.trim())
@@ -5321,8 +5374,17 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         const isCasualApprovalText =
           /^(plan\s+aprobado|aprobado|aprobar|proceder|adelante|approved|proceed)\b/i.test(promptText)
 
-        const isRefinementRequest =
-          /refin|ajust|cambi|modific|corri|esper|pregunt|\bno\b/i.test(promptText) &&
+        const sess =
+          typeof (ctx.session as any)?.get === "function"
+            ? await (ctx.session as any).get({ sessionID }).catch(() => undefined)
+            : undefined
+        const isExplicitRefinementMetadata = Boolean(
+          event?.metadata?.planRefinement || sess?.metadata?.planRefinementRequested,
+        )
+        const isExplicitRefinementText =
+          /(?:refin|ajust|cambi|modific|corri|actualiz|edita|revisa)[a-záéíóúñ]*\s+(?:el\s+|este\s+|tu\s+)?plan\b|(?:refine|adjust|modify|change|update|edit|revise)\s+(?:the\s+|this\s+|your\s+)?plan\b/i.test(
+            promptText,
+          ) &&
           !isExplicitDialogApprovalText &&
           !isCasualApprovalText
 
@@ -5330,7 +5392,7 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
         if (
           isExplicitApprovalMetadata ||
           isExplicitDialogApprovalText ||
-          (isPresentedForApproval && isCasualApprovalText && !isRefinementRequest)
+          (isPresentedForApproval && isCasualApprovalText && !isExplicitRefinementMetadata && !isExplicitRefinementText)
         ) {
           po.approvedByUser = true
           authenticatedApprovalSessions.add(sessionID)
@@ -5343,15 +5405,23 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
             }
             persistSessionObjectives(sessionID)
           }
-        } else if (isRefinementRequest && po.status === "presented_awaiting_confirmation") {
-          // User requested adjustments/refinement: unfreeze back to investigating so agent can refine
+        } else if (
+          isExplicitRefinementMetadata ||
+          (isExplicitRefinementText && po.status === "presented_awaiting_confirmation")
+        ) {
+          // User explicitly selected refine_plan (or requested plan adjustments):
+          // unfreeze / revoke execution approval back to investigating so agent can refine PO/SO/DoD
+          // and re-present via present_plan for approval.
           po.status = "investigating"
           po.approvedByUser = false
+          po.planPresentedAt = undefined
           authenticatedApprovalSessions.delete(sessionID)
           pendingPlanApprovalSessions.delete(sessionID)
           if (po.phase) {
             po.phase.paused = false
             po.phase.reason = "Ajustes solicitados por el usuario"
+          } else {
+            po.phase = { paused: false, since: Date.now(), reason: "Ajustes solicitados por el usuario" }
           }
           persistSessionObjectives(sessionID)
         }
@@ -5479,6 +5549,9 @@ export const HierarchicalObjectivesPlugin: OpenCodePlugin.Plugin = OpenCodePlugi
       // Hydrate from persistent store / session metadata if not yet in memory so guards
       // and sync messages never fall back to the !po branch when an objective tree exists.
       const po = sessionObjectives.get(sessionID) ?? (await hydrateSessionObjectives(sessionID))
+      if (po && (po.status === "presented_awaiting_confirmation" || po.approvedByUser)) {
+        await reconcilePendingRefinementFromMetadata(sessionID, po)
+      }
       const cfg = getObjectivesConfig(sessionID)
 
       if (event.tool === "todowrite") {

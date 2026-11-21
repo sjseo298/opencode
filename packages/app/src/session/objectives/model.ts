@@ -1,5 +1,9 @@
 import type { SessionCreateInput, SessionInfo } from "@opencode/client/promise"
-import { cloneObjectivesForFreshSession as cloneRawObjectives, normalizeSessionObjectives } from "@opencode/schema/objectives"
+import {
+  cloneObjectivesForFreshSession as cloneRawObjectives,
+  normalizeSessionObjectives,
+  prepareObjectivesRefinementMetadata,
+} from "@opencode/schema/objectives"
 
 type SessionMetadataValue = NonNullable<SessionCreateInput["metadata"]>[string]
 
@@ -33,4 +37,9 @@ export function cloneObjectivesForFreshSession(
 ): SessionMetadataValue {
   // SAFETY: cloned value from @opencode/schema/objectives is JSON-serializable SessionMetadata.
   return cloneRawObjectives(metadata, originSessionID) as SessionMetadataValue
+}
+
+export function prepareRefinementMetadata(metadata: SessionInfo["metadata"]): NonNullable<SessionCreateInput["metadata"]> {
+  // SAFETY: prepareObjectivesRefinementMetadata returns JSON-serializable SessionMetadata compatible with SessionUpdateInput.
+  return prepareObjectivesRefinementMetadata(metadata) as NonNullable<SessionCreateInput["metadata"]>
 }

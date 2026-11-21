@@ -16,6 +16,7 @@ import {
   cloneObjectivesForFreshSession,
   formatTreeSummary,
   normalizePrimaryObjectiveView,
+  prepareRefinementMetadata,
   type PrimaryObjectiveView,
 } from "./model"
 import {
@@ -174,6 +175,12 @@ export function DialogPlanApproval(props: {
         return
       }
 
+      if (effect.kind === "refine") {
+        showToast({ variant: "default", title: language.t("dialog.planApproval.toast.refining") })
+
+        return
+      }
+
       showToast({ variant: "default", title: language.t("dialog.planApproval.toast.revoked") })
 
       return
@@ -260,6 +267,33 @@ export function DialogPlanApproval(props: {
           () => {
             settle(effect.attempt)
             dispatch({ type: "revoke.succeeded", attempt: effect.attempt })
+          },
+          (cause: unknown) => {
+            settle(effect.attempt)
+            dispatch({
+              type: "action.failed",
+              attempt: effect.attempt,
+              message: cause instanceof Error ? cause.message : String(cause),
+            })
+          },
+        )
+
+      return
+    }
+
+    if (effect.type === "refine.run") {
+      await serverSDK.api.session
+        .update(
+          {
+            sessionID: effect.sessionID,
+            metadata: prepareRefinementMetadata(sessionInfo()?.metadata),
+          },
+          { signal: controller.signal },
+        )
+        .then(
+          () => {
+            settle(effect.attempt)
+            dispatch({ type: "refine.succeeded", attempt: effect.attempt })
           },
           (cause: unknown) => {
             settle(effect.attempt)

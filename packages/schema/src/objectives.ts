@@ -407,3 +407,33 @@ export function cloneObjectivesForFreshSession(
     phase: { paused: false, reason: "Transferred to fresh session" },
   }
 }
+
+export function prepareObjectivesRefinementMetadata(metadata: SessionMetadata | undefined): Record<string, unknown> {
+  const base: Record<string, unknown> = metadata ? { ...metadata } : {}
+  const raw = metadata?.objectives
+
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const cloned = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>
+    delete cloned.planPresentedAt
+
+    const prevPhase =
+      cloned.phase && typeof cloned.phase === "object" && !Array.isArray(cloned.phase)
+        ? (cloned.phase as Record<string, unknown>)
+        : {}
+
+    base.objectives = {
+      ...cloned,
+      status: "investigating",
+      approvedByUser: false,
+      phase: {
+        ...prevPhase,
+        paused: false,
+        reason: "Ajustes solicitados por el usuario",
+      },
+    }
+  }
+
+  base.planRefinementRequested = true
+
+  return base
+}

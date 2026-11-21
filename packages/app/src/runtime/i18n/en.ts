@@ -1589,6 +1589,7 @@ export const dict = {
   "dialog.planApproval.toast.approvedSame": "Plan approved. Executing in current session.",
   "dialog.planApproval.toast.approvedFresh": "Fresh execution session started.",
   "dialog.planApproval.toast.revoked": "Plan approval revoked. Execution paused.",
+  "dialog.planApproval.toast.refining": "Refinement mode enabled. Describe your adjustments to the plan.",
   "dialog.planApproval.toast.noPlan": "No active objective plan in this session.",
   "dialog.planApproval.defaultModel": "current model",
 

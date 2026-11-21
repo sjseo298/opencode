@@ -4618,6 +4618,139 @@ describe("hierarchical-objectives plugin", () => {
       expect(getObjectives(sid)!.approvedByUser).toBe(false)
       expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
     })
+
+    test("plan refinement: blocked when user did NOT choose refine_plan, permitted (including PO updates) when user chose refine_plan, and requires re-presentation", async () => {
+      const { getRegisteredTool, triggerPromptHook, triggerToolBefore, sessionStore } = await setupPluginInstanceLocal()
+      const tool = getRegisteredTool()
+      const sid = uniqueSessionID("refine-flow-guard")
+
+      await tool.execute(
+        {
+          action: "set_primary",
+          title: "Original Primary Objective",
+          definitionOfDone: "Original DoD",
+          plannedSecondaryCount: 1,
+        },
+        { sessionID: sid },
+      )
+      await tool.execute(
+        { action: "add_secondary", id: "SO-1", title: "Original Task 1", rationale: "Original rationale" },
+        { sessionID: sid },
+      )
+      await tool.execute({ action: "present_plan" }, { sessionID: sid })
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+
+      // 1. User sends an arbitrary message/question without selecting refine_plan -> stays frozen in interactive mode
+      await triggerPromptHook(sid, "tengo una pregunta: ¿no falta validar el token?")
+      expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+      expect(getObjectives(sid)!.approvedByUser).toBe(false)
+
+      const origNodeEnv = process.env.NODE_ENV
+      const origBunEnv = process.env.BUN_ENV
+      try {
+        delete (process.env as any).NODE_ENV
+        delete (process.env as any).BUN_ENV
+
+        await expect(triggerToolBefore("objective_manage", { action: "update_primary", title: "Unauthorized Edit" }, sid)).rejects.toThrow(
+          "🛑 [TURNO DETENIDO - PLAN EN ESPERA DE APROBACIÓN]",
+        )
+        const frozenModify = await tool.execute(
+          { action: "update_primary", title: "Unauthorized Edit" },
+          { sessionID: sid },
+        )
+        expect(frozenModify.output.success).toBe(false)
+        expect(frozenModify.output.message).toContain("ACTION BLOCKED - TREE FROZEN")
+
+        // 2. User selects refine_plan in DialogPlanApproval -> sets planRefinementRequested in session metadata
+        sessionStore[sid] = {
+          id: sid,
+          metadata: {
+            ...(sessionStore[sid]?.metadata ?? {}),
+            planRefinementRequested: true,
+          },
+        }
+        // User writes modification instructions WITHOUT magic keywords like "ajusta el plan"
+        await triggerPromptHook(sid, "El objetivo primario debe enfocarse en OAuth2 y agrega una tarea de pruebas.")
+        expect(getObjectives(sid)!.status).toBe("investigating")
+        expect(getObjectives(sid)!.approvedByUser).toBe(false)
+
+        // Now objective_manage (including update_primary without status) and read-only tools are permitted
+        await expect(triggerToolBefore("objective_manage", { action: "update_primary", title: "OAuth2 Migration" }, sid)).resolves.toBeUndefined()
+        const poUpdate = await tool.execute(
+          {
+            action: "update_primary",
+            title: "OAuth2 Migration",
+            definitionOfDone: "OAuth2 auth and unit tests pass",
+          },
+          { sessionID: sid },
+        )
+        expect(poUpdate.output.success).toBe(true)
+        expect(getObjectives(sid)!.title).toBe("OAuth2 Migration")
+        expect(getObjectives(sid)!.status).toBe("investigating")
+        expect(getObjectives(sid)!.approvedByUser).toBe(false)
+
+        const soUpdate = await tool.execute(
+          { action: "update_secondary", id: "SO-1", title: "Implement OAuth2 flow", rationale: "Core requirement" },
+          { sessionID: sid },
+        )
+        expect(soUpdate.output.success).toBe(true)
+
+        const soAdd = await tool.execute(
+          { action: "add_secondary", id: "SO-2", title: "Add OAuth2 tests", rationale: "Verify flow" },
+          { sessionID: sid },
+        )
+        expect(soAdd.output.success).toBe(true)
+
+        // Execution and mutating tools remain blocked until the modified plan is re-presented and approved
+        const tryExploreBeforeRepresent = await tool.execute(
+          {
+            action: "update_secondary",
+            id: "SO-1",
+            status: "exploring",
+            delegation: { mode: "main", justification: "Attempt premature execution" },
+          },
+          { sessionID: sid },
+        )
+        expect(tryExploreBeforeRepresent.output.success).toBe(false)
+        expect(tryExploreBeforeRepresent.output.message).toContain("Plan Presentation Required")
+
+        await expect(triggerToolBefore("edit", { path: "src/auth.ts" }, sid)).rejects.toThrow(
+          "Plan Approval Required",
+        )
+
+        // 3. Re-present the modified plan to the user for approval
+        const representRes = await tool.execute({ action: "present_plan" }, { sessionID: sid })
+        expect(representRes.output.success).toBe(true)
+        expect(getObjectives(sid)!.status).toBe("presented_awaiting_confirmation")
+        expect(getObjectives(sid)!.approvedByUser).toBe(false)
+
+        // Blocked again until user approves the updated plan
+        await expect(triggerToolBefore("read", { path: "src/auth.ts" }, sid)).rejects.toThrow(
+          "🛑 [TURNO DETENIDO - PLAN EN ESPERA DE APROBACIÓN]",
+        )
+
+        // 4. User approves updated plan -> execution proceeds
+        await triggerPromptHook(sid, "Plan aprobado explícitamente por el usuario.", { planApproval: true })
+        expect(getObjectives(sid)!.status).toBe("exploring")
+        expect(getObjectives(sid)!.approvedByUser).toBe(true)
+        await expect(triggerToolBefore("edit", { path: "src/auth.ts" }, sid)).resolves.toBeUndefined()
+
+        // 5. Selecting refine_plan while already approved revokes approval and returns to investigating
+        sessionStore[sid] = {
+          id: sid,
+          metadata: {
+            ...(sessionStore[sid]?.metadata ?? {}),
+            planRefinementRequested: true,
+          },
+        }
+        await triggerPromptHook(sid, "Cambia el alcance para incluir refresh tokens.")
+        expect(getObjectives(sid)!.approvedByUser).toBe(false)
+        expect(getObjectives(sid)!.status).toBe("investigating")
+      } finally {
+        process.env.NODE_ENV = origNodeEnv
+        process.env.BUN_ENV = origBunEnv
+      }
+    })
   })
 
   describe("Sync Gate Improvements (Mode-Aware 2-Tier, Code Mode, note_progress, Stagnation, Configure Cap)", () => {

@@ -7,7 +7,7 @@ import { useClient } from "../../context/client"
 import { useTheme } from "../../context/theme"
 import { useSessionTabs } from "../../context/session-tabs"
 import { Keymap } from "../../context/keymap"
-import { formatTreeSummary } from "@opencode/schema/objectives"
+import { formatTreeSummary, prepareObjectivesRefinementMetadata } from "@opencode/schema/objectives"
 import { DialogHeader, DialogLayout, useDialog } from "../../ui/dialog"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
@@ -144,8 +144,29 @@ export function DialogPlanApproval(props: {
     }
 
     if (choice === "refine_plan") {
-      dialog.clear()
-      props.onRefine?.()
+      try {
+        const session = data.session.get(props.sessionID)
+
+        // SAFETY: prepareObjectivesRefinementMetadata produces JSON-serializable SessionMetadata compatible with session.update.
+        const metadata = prepareObjectivesRefinementMetadata(session?.metadata) as NonNullable<
+          Parameters<typeof client.api.session.update>[0]["metadata"]
+        >
+
+        await client.api.session.update({
+          sessionID: props.sessionID,
+          metadata,
+        })
+        dialog.clear()
+        props.onRefine?.()
+        toast.show({
+          message: "✏️ Modo refinamiento activo. Escribe tus ajustes al plan.",
+          variant: "info",
+          duration: 4000,
+        })
+      } catch (err) {
+        setPending(false)
+        toast.show({ message: errorMessage(err), variant: "error", duration: 5000 })
+      }
       return
     }
 
@@ -295,9 +316,6 @@ export function DialogPlanApproval(props: {
         group: "Dialog",
         run: () => {
           dialog.clear()
-          if (!isAlreadyApproved()) {
-            props.onRefine?.()
-          }
         },
       },
     ],
@@ -313,9 +331,6 @@ export function DialogPlanApproval(props: {
           title={isAlreadyApproved() ? "📋 Plan de Trabajo - Ejecución Activa" : "📋 Plan de Trabajo - Aprobación Requerida"}
           onClose={() => {
             dialog.clear()
-            if (!isAlreadyApproved()) {
-              props.onRefine?.()
-            }
           }}
         />
       }

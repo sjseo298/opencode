@@ -51,6 +51,10 @@ export type PlanApprovalEvent =
       readonly attempt: number
     }
   | {
+      readonly type: "refine.succeeded"
+      readonly attempt: number
+    }
+  | {
       readonly type: "action.failed"
       readonly attempt: number
       readonly message: string
@@ -82,6 +86,12 @@ export type PlanApprovalEffect =
       readonly timeoutMs: number
     }
   | {
+      readonly type: "refine.run"
+      readonly attempt: number
+      readonly sessionID: string
+      readonly timeoutMs: number
+    }
+  | {
       readonly type: "fresh.open"
       readonly attempt: number
       readonly oldSessionID: string
@@ -89,7 +99,7 @@ export type PlanApprovalEffect =
     }
   | { readonly type: "cancel"; readonly attempt: number }
   | { readonly type: "dialog.close"; readonly refine?: boolean }
-  | { readonly type: "toast.show"; readonly kind: "same" | "fresh" | "revoked" }
+  | { readonly type: "toast.show"; readonly kind: "same" | "fresh" | "revoked" | "refine" }
   | { readonly type: "toast.error"; readonly message?: string }
 
 export type PlanApprovalTransition = {
@@ -162,13 +172,6 @@ export function transitionPlanApproval(
       }
     }
 
-    if (event.action === "refine_plan") {
-      return {
-        state: { status: "closed", attempt: state.attempt, activeIndex: state.activeIndex },
-        effects: [{ type: "dialog.close", refine: true }],
-      }
-    }
-
     const attempt = state.attempt + 1
 
     const next: PlanApprovalState = {
@@ -177,6 +180,13 @@ export function transitionPlanApproval(
       activeIndex: state.activeIndex,
       action: event.action,
       sessionID: event.sessionID,
+    }
+
+    if (event.action === "refine_plan") {
+      return {
+        state: next,
+        effects: [{ type: "refine.run", attempt, sessionID: event.sessionID, timeoutMs: PLAN_APPROVAL_TIMEOUT_MS }],
+      }
     }
 
     if (event.action === "fresh_session") {
@@ -230,6 +240,16 @@ export function transitionPlanApproval(
       effects: [
         { type: "dialog.close" },
         { type: "toast.show", kind: "revoked" },
+      ],
+    }
+  }
+
+  if (event.type === "refine.succeeded") {
+    return {
+      state: { status: "closed", attempt: state.attempt, activeIndex: state.activeIndex },
+      effects: [
+        { type: "dialog.close", refine: true },
+        { type: "toast.show", kind: "refine" },
       ],
     }
   }

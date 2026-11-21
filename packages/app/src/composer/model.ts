@@ -35,7 +35,7 @@ import { createComposerSubmit } from "./submit"
 import { composerSubmitView } from "./machine"
 import { isComposerPopoverOpen } from "./suggestions/machine"
 import { useAttachmentDestination } from "./attachments/destination"
-import { parseClientSlashCommand } from "./client-slash-command"
+import { buildSlashCommandEntries, parseClientSlashCommand } from "./client-slash-command"
 
 export type ComposerModel = ComposerEditorModel & {
   readonly model: ComposerControls["model"]
@@ -262,31 +262,13 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     })),
   ])
 
-  const slashCommands = createMemo(() => [
-    ...(data.location.command.list({ directory: sdk().directory }) ?? []).map((item) => ({
-      id: `custom.${item.name}`,
-      trigger: item.name,
-      title: item.name,
-      description: item.description,
-      type: "custom" as const,
-    })),
-    ...command.options
-      .filter((item) => !item.disabled && !item.id.startsWith("suggested.") && item.slash)
-      .flatMap((item) =>
-        [item.slash!, ...(item.slashAliases ?? [])].map((trigger) => ({
-          id: item.id,
-          trigger,
-          title: item.title,
-          description: item.description,
-          arguments: item.slashArguments,
-          type: "builtin" as const,
-        })),
-      ),
-  ])
+  const slashCommands = createMemo(() =>
+    buildSlashCommandEntries(data.location.command.list({ directory: sdk().directory }) ?? [], command.options),
+  )
 
   const commands = createMemo<ComposerSuggestion[]>(() => [
     ...slashCommands().map((item) => ({
-      id: item.id,
+      id: item.suggestionId,
       kind: "command" as const,
       label: `/${item.trigger}`,
       trigger: item.trigger,
@@ -469,7 +451,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     },
     onSuggestionSelect(item) {
       if (item.kind !== "command") return
-      const selected = slashCommands().find((entry) => entry.id === item.id)
+      const selected = slashCommands().find((entry) => entry.suggestionId === item.id)
 
       if (!selected || selected.type === "custom") return
 
