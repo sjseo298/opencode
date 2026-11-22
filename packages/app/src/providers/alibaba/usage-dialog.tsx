@@ -216,6 +216,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
                       <span class="text-13-medium text-text-base">
                         Day {c().elapsedDays} / {c().cycleDays}
                       </span>
+                      <span class="text-text-muted">Started {c().startLabel}</span>
                       <span class="text-text-muted">Expected pace ~{c().expectedPercent.toFixed(1)}%</span>
                     </div>
                     <div class="flex flex-col gap-0.5">

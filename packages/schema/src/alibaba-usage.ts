@@ -68,13 +68,41 @@ export interface CycleProgress {
   readonly remainingDays: number
   readonly expectedPercent: number
   readonly countdownLabel: string
+  readonly startLabel: string
   readonly resetLabel: string
 }
 
-const CYCLE_DAYS = 30
 const DAY_MS = 86_400_000
 
-/** Computes where the current moment sits inside the 30-day billing cycle ending at `resetAt`. */
+function subtractOneCalendarMonth(date: Date): Date {
+  const targetYear = date.getMonth() === 0 ? date.getFullYear() - 1 : date.getFullYear()
+  const targetMonth = date.getMonth() === 0 ? 11 : date.getMonth() - 1
+  const lastDayOfTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate()
+  const clampedDay = Math.min(date.getDate(), lastDayOfTargetMonth)
+  return new Date(
+    targetYear,
+    targetMonth,
+    clampedDay,
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+  )
+}
+
+function formatDateTime(date: Date): string {
+  return Number.isNaN(date.getTime())
+    ? "Unknown"
+    : date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+}
+
+/** Computes where the current moment sits inside the calendar-month billing cycle ending at `resetAt`. */
 export function formatCycleProgress(resetAt: number, now = Date.now()): CycleProgress {
   const remainingMs = Math.max(0, resetAt - now)
   const totalMinutes = Math.floor(remainingMs / 60_000)
@@ -83,30 +111,25 @@ export function formatCycleProgress(resetAt: number, now = Date.now()): CyclePro
   const minutes = totalMinutes % 60
   const countdownLabel = remainingMs <= 0 ? "reset due" : `${days}d ${hours}h ${minutes}m`
 
-  const cycleStart = resetAt - CYCLE_DAYS * DAY_MS
-  const elapsedMs = Math.min(CYCLE_DAYS * DAY_MS, Math.max(0, now - cycleStart))
-  const elapsedDays = Math.min(CYCLE_DAYS, Math.max(1, Math.floor(elapsedMs / DAY_MS) + 1))
-  const remainingDays = Math.max(0, Math.ceil(remainingMs / DAY_MS))
-  const expectedPercent = Math.min(100, Math.max(0, (elapsedMs / (CYCLE_DAYS * DAY_MS)) * 100))
+  const cycleEnd = new Date(resetAt)
+  const cycleStartDate = subtractOneCalendarMonth(cycleEnd)
+  const cycleStart = cycleStartDate.getTime()
+  const totalCycleMs = Math.max(DAY_MS, resetAt - cycleStart)
+  const cycleDays = Math.max(1, Math.round(totalCycleMs / DAY_MS))
 
-  const resetDate = new Date(resetAt)
-  const resetLabel = Number.isNaN(resetDate.getTime())
-    ? "Unknown"
-    : resetDate.toLocaleString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
+  const elapsedMs = Math.min(totalCycleMs, Math.max(0, now - cycleStart))
+  const elapsedDays = Math.min(cycleDays, Math.max(1, Math.floor(elapsedMs / DAY_MS) + 1))
+  const remainingDays = Math.max(0, Math.ceil(remainingMs / DAY_MS))
+  const expectedPercent = Math.min(100, Math.max(0, (elapsedMs / totalCycleMs) * 100))
 
   return {
-    cycleDays: CYCLE_DAYS,
+    cycleDays,
     elapsedDays,
     remainingDays,
     expectedPercent,
     countdownLabel,
-    resetLabel,
+    startLabel: formatDateTime(cycleStartDate),
+    resetLabel: formatDateTime(cycleEnd),
   }
 }
 

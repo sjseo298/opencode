@@ -349,6 +349,9 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
                         Cycle position: <b>Day {c().elapsedDays} of {c().cycleDays}</b> ({c().remainingDays}d remaining)
                       </text>
                       <text fg={theme.text.muted}>
+                        Period: {c().startLabel} → {c().resetLabel}
+                      </text>
+                      <text fg={theme.text.muted}>
                         Expected pace by today: ~{c().expectedPercent.toFixed(1)}%
                         <Show when={paceLabel()}>
                           {(pace) => <span style={{ fg: pace().color }}> · {pace().text}</span>}

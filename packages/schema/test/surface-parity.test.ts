@@ -23,12 +23,22 @@ describe("cross-surface shared contracts", () => {
     expect(formatQuotaPercent(0)).toBe("0%")
     expect(formatQuotaPercent(0.000025)).toBe("<0.01%")
     expect(formatQuotaPercent(42.5)).toBe("42.50%")
-    const now = Date.UTC(2026, 10, 22, 14, 0, 0)
-    const resetAt = now + 30 * 86_400_000
-    const cycle = formatCycleProgress(resetAt, now)
-    expect(cycle.elapsedDays).toBe(1)
-    expect(cycle.remainingDays).toBe(30)
-    expect(cycle.countdownLabel).toBe("30d 0h 0m")
+    const nov22 = new Date(2026, 10, 22, 11, 0, 0).getTime()
+    const dec22 = new Date(2026, 11, 22, 11, 0, 0).getTime()
+    const jan22 = new Date(2027, 0, 22, 11, 0, 0).getTime()
+    const mar22 = new Date(2027, 2, 22, 11, 0, 0).getTime()
+
+    const cycle30 = formatCycleProgress(dec22, nov22)
+    expect(cycle30.cycleDays).toBe(30)
+    expect(cycle30.elapsedDays).toBe(1)
+    expect(cycle30.remainingDays).toBe(30)
+    expect(cycle30.countdownLabel).toBe("30d 0h 0m")
+
+    const cycle31 = formatCycleProgress(jan22, dec22)
+    expect(cycle31.cycleDays).toBe(31)
+
+    const cycle28 = formatCycleProgress(mar22, new Date(2027, 1, 22, 11, 0, 0).getTime())
+    expect(cycle28.cycleDays).toBe(28)
   })
 
   test("DynamicContextRpc exposes canonical snapshot, setLimit, and refresh methods", () => {
