@@ -142,13 +142,15 @@ export interface ParsedCallbackInput {
   readonly state?: string
 }
 
+const NumberOrStringSchema = Schema.Union([Schema.Number, Schema.String])
+
 const JsonCallbackSchema = Schema.Struct({
   access_token: Schema.optionalKey(Schema.String),
   accessToken: Schema.optionalKey(Schema.String),
   console_region: Schema.optionalKey(Schema.String),
   consoleRegion: Schema.optionalKey(Schema.String),
-  console_switch_agent: Schema.optionalKey(Schema.Number),
-  switchAgent: Schema.optionalKey(Schema.Number),
+  console_switch_agent: Schema.optionalKey(NumberOrStringSchema),
+  switchAgent: Schema.optionalKey(NumberOrStringSchema),
   state: Schema.optionalKey(Schema.String),
   data: Schema.optionalKey(
     Schema.Struct({
@@ -156,20 +158,25 @@ const JsonCallbackSchema = Schema.Struct({
       accessToken: Schema.optionalKey(Schema.String),
       console_region: Schema.optionalKey(Schema.String),
       consoleRegion: Schema.optionalKey(Schema.String),
-      console_switch_agent: Schema.optionalKey(Schema.Number),
-      switchAgent: Schema.optionalKey(Schema.Number),
+      console_switch_agent: Schema.optionalKey(NumberOrStringSchema),
+      switchAgent: Schema.optionalKey(NumberOrStringSchema),
     }),
   ),
 })
 
 const decodeJsonCallback = Schema.decodeUnknownOption(Schema.fromJsonString(JsonCallbackSchema))
 
+function parseAgentNumber(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const num = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(num) && num > 0 ? num : undefined
+}
+
 function parseSearchParamsCallback(params: URLSearchParams): ParsedCallbackInput | undefined {
   const token = (params.get("access_token") ?? params.get("accessToken") ?? "").trim()
   if (!token) return undefined
   const region = (params.get("console_region") ?? params.get("consoleRegion") ?? "").trim() || undefined
-  const agentRaw = params.get("console_switch_agent") ?? params.get("switchAgent")
-  const switchAgent = agentRaw && Number.isFinite(Number(agentRaw)) ? Number(agentRaw) : undefined
+  const switchAgent = parseAgentNumber(params.get("console_switch_agent") ?? params.get("switchAgent") ?? undefined)
   const state = params.get("state")?.trim() || undefined
   return { accessToken: token, region, switchAgent, state }
 }
@@ -209,7 +216,12 @@ export function parseManualLoginInput(raw: string): ParsedCallbackInput | undefi
       return {
         accessToken: token,
         region: fromJson.console_region ?? fromJson.consoleRegion ?? fromJson.data?.console_region ?? fromJson.data?.consoleRegion,
-        switchAgent: fromJson.console_switch_agent ?? fromJson.switchAgent ?? fromJson.data?.console_switch_agent ?? fromJson.data?.switchAgent,
+        switchAgent: parseAgentNumber(
+          fromJson.console_switch_agent ??
+            fromJson.switchAgent ??
+            fromJson.data?.console_switch_agent ??
+            fromJson.data?.switchAgent,
+        ),
         state: fromJson.state,
       }
     }
@@ -364,22 +376,26 @@ export const Plugin = define({
       pendingLogins.clear()
 
       const state = randomBytes(16).toString("hex")
-      let latestCallbackSession: StoredSession | undefined
+
+      const isAllowedOrigin = (origin: string | undefined) => {
+        if (!origin) return true
+        return origin === CONSOLE_ORIGIN || /^https:\/\/[a-z0-9-]+\.alibabacloud\.com$/i.test(origin)
+      }
 
       const server = http.createServer(async (req, res) => {
         res.setHeader("Cache-Control", "no-store")
         res.setHeader("Vary", "Origin, Access-Control-Request-Private-Network")
         const origin = req.headers.origin
-        if (origin !== undefined && origin !== CONSOLE_ORIGIN) {
+        if (!isAllowedOrigin(origin)) {
           res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" })
           res.end("Origin not allowed")
           return
         }
-        if (origin === CONSOLE_ORIGIN) {
-          res.setHeader("Access-Control-Allow-Origin", CONSOLE_ORIGIN)
+        if (origin) {
+          res.setHeader("Access-Control-Allow-Origin", origin)
         }
         if (req.method === "OPTIONS") {
-          if (origin === CONSOLE_ORIGIN && req.headers["access-control-request-private-network"] === "true") {
+          if (origin && req.headers["access-control-request-private-network"] === "true") {
             res.setHeader("Access-Control-Allow-Private-Network", "true")
           }
           res.writeHead(204, {
@@ -397,7 +413,10 @@ export const Plugin = define({
           return
         }
 
-        const rawBody = await readRequestBody(req).catch(() => "")
+        const rawBody =
+          req.method === "POST" || req.method === "PUT" || req.method === "PATCH"
+            ? await readRequestBody(req).catch(() => "")
+            : ""
         const contentType = String(req.headers["content-type"] ?? "")
         const parsed =
           parseSearchParamsCallback(url.searchParams) ??
@@ -415,7 +434,7 @@ export const Plugin = define({
               region:
                 parseMultipartField(rawBody, contentType, "console_region") ??
                 parseMultipartField(rawBody, contentType, "consoleRegion"),
-              switchAgent: mpAgent && Number.isFinite(Number(mpAgent)) ? Number(mpAgent) : undefined,
+              switchAgent: parseAgentNumber(mpAgent),
             }
           })()
 
@@ -425,21 +444,25 @@ export const Plugin = define({
           return
         }
 
-        latestCallbackSession = {
+        const sessionToSave: StoredSession = {
           accessToken: parsed.accessToken,
           region: parsed.region || GATEWAY_REGION,
           ...(parsed.switchAgent !== undefined ? { switchAgent: parsed.switchAgent } : {}),
         }
+        await Effect.runPromise(saveSession(sessionToSave))
+
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+        res.end("<html><body><h3>Alibaba Cloud connected to OpenCode. You can close this window.</h3></body></html>")
+
         const entry = pendingLogins.get(state)
         if (entry) {
           entry.status = "complete"
           clearTimeout(entry.timer)
-          server.close()
-          server.closeAllConnections()
+          setTimeout(() => {
+            server.close()
+            server.closeAllConnections()
+          }, 250)
         }
-
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
-        res.end("<html><body><h3>Alibaba Cloud connected to OpenCode. You can close this window.</h3></body></html>")
       })
 
       const port = yield* Effect.tryPromise({
@@ -472,12 +495,6 @@ export const Plugin = define({
           server.closeAllConnections()
         },
       }
-      // Persist when the auto-callback completes
-      server.on("close", () => {
-        if (latestCallbackSession && entry.status === "complete") {
-          void Effect.runPromise(saveSession(latestCallbackSession))
-        }
-      })
       pendingLogins.set(state, entry)
 
       const url = `${CONSOLE_ORIGIN}/console-login?notice=127.0.0.1:${port}?state=${encodeURIComponent(state)}`
