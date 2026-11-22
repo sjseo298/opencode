@@ -149,6 +149,21 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     }
   }
 
+  async function connectAgent() {
+    const route = props.context.ui.router.current()
+    if (route.type !== "session") {
+      props.context.ui.toast.show({ message: "Open a session first", variant: "warning" })
+      return
+    }
+    dialog.clear()
+    try {
+      // The server command starts the callback login and hands the agent browse-driven instructions.
+      await props.context.client.session.command({ sessionID: route.sessionID, name: "alibabaLogin", text: "" })
+    } catch (error) {
+      props.context.ui.toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
+    }
+  }
+
   async function cancelConnect() {
     stopPolling()
     const active = loginSession()
@@ -185,6 +200,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     }
     return [
       { id: "browser", label: "Connect with Browser", primary: true, run: () => void startConnect() },
+      { id: "agent", label: "Connect via Agent Browser", run: () => void connectAgent() },
       { id: "manual", label: "Paste URL / Token (Manual)", run: () => void promptManualComplete() },
       { id: "close", label: "Close", run: () => dialog.clear() },
     ]
@@ -603,6 +619,21 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
     }
   }
 
+  async function connectAgent() {
+    const route = props.context.ui.router.current()
+    if (route.type !== "session") {
+      props.context.ui.toast.show({ message: "Open a session first", variant: "warning" })
+      return
+    }
+    dialog.clear()
+    try {
+      // The server command starts the callback login and hands the agent browse-driven instructions.
+      await props.context.client.session.command({ sessionID: route.sessionID, name: "alibabaLogin", text: "" })
+    } catch (error) {
+      props.context.ui.toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
+    }
+  }
+
   async function cancelConnect() {
     stopPolling()
     const active = loginSession()
@@ -639,6 +670,7 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
     }
     return [
       { id: "browser", label: "Connect with Browser", primary: true, run: () => void startConnect() },
+      { id: "agent", label: "Connect via Agent Browser", run: () => void connectAgent() },
       { id: "manual", label: "Paste URL / Token (Manual)", run: () => void promptManualComplete() },
       { id: "close", label: "Close", run: () => dialog.clear() },
     ]

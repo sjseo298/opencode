@@ -49,15 +49,19 @@ export function resolveMachineBadge(input: {
   if (input.conn?.displayName?.trim()) return input.conn.displayName.trim()
 
   const worktrees = input.worktrees ?? []
+
   for (const wt of worktrees) {
     const match = /^\/workspaces\/([^/]+)/.exec(wt.trim())
+
     if (match?.[1]) {
       const formatted = formatWorkspaceTag(match[1])
+
       if (formatted) return formatted
     }
   }
 
   const rawHost = (input.hostname ?? "").trim()
+
   if (!rawHost) {
     if (input.isLocal && worktrees.some((wt) => /^\/Users\//.test(wt.trim()))) {
       return "Local"
@@ -67,6 +71,7 @@ export function resolveMachineBadge(input: {
   }
 
   const wsMatch = /^\/workspaces\/([^/]+)/.exec(rawHost)
+
   if (wsMatch?.[1]) {
     return formatWorkspaceTag(wsMatch[1])
   }

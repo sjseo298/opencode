@@ -44,12 +44,12 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
 
   const openAlibabaUsage = async () => {
     const { DialogAlibabaUsage } = await import("@/providers/alibaba/usage-dialog")
-    void dialog.show(() => <DialogAlibabaUsage directory={workspace().directory} />)
+    void dialog.show(() => <DialogAlibabaUsage directory={workspace().directory} sessionID={params.id} />)
   }
 
   const openAlibabaDiscounts = async () => {
     const { DialogAlibabaDiscounts } = await import("@/providers/alibaba/discounts-dialog")
-    void dialog.show(() => <DialogAlibabaDiscounts directory={workspace().directory} />)
+    void dialog.show(() => <DialogAlibabaDiscounts directory={workspace().directory} sessionID={params.id} />)
   }
 
   // Mirrors the TUI's `/reload`. The server rebuilds every loaded location and announces the changed agents,

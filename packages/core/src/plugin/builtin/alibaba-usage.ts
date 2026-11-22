@@ -5,10 +5,19 @@
  * - `/alibabaUsage` — monthly quota usage with estimated daily/weekly consumption and
  *   pace verdicts derived statelessly from the monthly percentage, and cutoff date.
  * - `/alibabaDiscounts` — the Token Plan models currently running a promotion.
+ * - `/alibabaLogin` — agent-driven console login through the user's real browser (browse
+ *   tools). It starts the same local callback login, then hands the session precise
+ *   instructions (see `alibaba-login.txt`): open the console-login URL, have the user
+ *   authorize, and — when this server is remote and the browser's loopback POST cannot
+ *   reach it — read the captured token from the page and submit it via `completeLogin`.
+ *   In that remote mode the token transits the agent's tool calls (browse eval results are
+ *   not redacted), unlike local mode where it goes straight to the callback server; the
+ *   instructions require keeping it out of visible responses.
  *
  * Data is read natively from the console gateway (`IntlBroadScopeAspnGateway`, product
  * `sfm_bailian`) with the OAuth console session token captured by the local `console-login`
- * callback and stored under `console-session`. No browser automation or `bl` CLI is required.
+ * callback and stored under `console-session`. The usage/discounts reads themselves need no
+ * browser automation or `bl` CLI.
  *
  * Discounts come from `listTokenPlanModels` with `edition: "PERSONAL"`; each promoted model
  * carries `badgeLabel`/`badgeDescription`. `AlibabaUsage.parseBadgeDiscount` derives the real
@@ -22,6 +31,7 @@ import http from "node:http"
 import { define } from "@opencode/plugin/effect/plugin"
 import { AlibabaUsage, AlibabaUsageRpc } from "@opencode/schema/alibaba-usage"
 import { Clock, Effect, Option, Schema } from "effect"
+import PROMPT_ALIBABA_LOGIN from "./alibaba-login.txt"
 
 export const CONSOLE_ORIGIN = "https://modelstudio.console.alibabacloud.com"
 export const GATEWAY_BASE = "https://bailian-singapore-cs.alibabacloud.com"
@@ -884,5 +894,32 @@ export const Plugin = define({
           ),
       })
       .pipe(Effect.orDie)
+
+    yield* ctx.command.transform((editor) => {
+      editor.add({
+        name: "alibabaLogin",
+        description: "connect Alibaba Cloud Token Plan via agent-driven browser login",
+        execute: (input) =>
+          Effect.gen(function* () {
+            // Fresh attempt: startLogin closes any pending callback server and mints a new state.
+            const started = yield* startLogin()
+            yield* ctx.session.prompt({
+              ...input.prompt,
+              sessionID: input.sessionID,
+              text: buildAgentLoginPrompt(started, input.prompt.text),
+              delivery: input.delivery,
+            })
+          }).pipe(Effect.asVoid),
+      })
+    })
   }),
 })
+
+export function buildAgentLoginPrompt(started: { url: string; state: string }, userText: string) {
+  const template = PROMPT_ALIBABA_LOGIN.replaceAll("${url}", () => started.url).replaceAll(
+    "${state}",
+    () => started.state,
+  )
+  const extra = userText.trim()
+  return extra ? `${template}\n\nAdditional instruction from the user: ${extra}` : template
+}

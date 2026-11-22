@@ -1624,6 +1624,7 @@ export const dict = {
   "dialog.alibabaUsage.connectDescription":
     "Sign in to your Alibaba Cloud International account (ap-southeast-1) to view your monthly quota, cycle pace, and cutoff date.",
   "dialog.alibabaUsage.connectBrowser": "Connect with Browser (Automatic)",
+  "dialog.alibabaUsage.connectAgent": "Connect via Agent Browser (Guided)",
   "dialog.alibabaUsage.connectManual": "Paste Redirect URL / Token (Manual)",
   "dialog.alibabaUsage.waitingBrowser": "Waiting for Alibaba Cloud sign-in…",
   "dialog.alibabaUsage.reconnect": "Reconnect",

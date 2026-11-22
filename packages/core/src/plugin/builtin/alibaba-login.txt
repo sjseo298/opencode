@@ -1,0 +1,74 @@
+You are completing the Alibaba Cloud Model Studio (Token Plan) console login for OpenCode by driving the user's real browser with the browse tools (navigate, snapshot, click, eval, handoff, tabs).
+
+A fresh login attempt is already active on the OpenCode server:
+- Login URL: ${url}
+- Login state: ${state}
+
+How completion works: after the user authorizes, the console page exchanges the browser session for an access token (POST /cli/authorize) and then POSTs the token to the loopback callback address embedded in the login URL. When the OpenCode server runs on the same machine as the browser (local mode) the server receives that POST and the login completes by itself. When the server runs on another machine (remote mode) the POST never reaches it; you must then read the captured token from the page with browse eval and submit it to the server yourself. Follow the same steps in both cases; Step 4 decides which mode you are in.
+
+Security rules:
+- Never print the access token or the server password in your visible responses; keep them inside tool calls only.
+- Always inline the credential in shell commands exactly as $(opencode service get password) so it is never echoed.
+
+Step 1 - Open the login page.
+Call browse navigate with url "${url}" and group "alibaba-login". Keep the returned tab id and pass it to every later browse call. If browse reports that no browser is connected, stop and tell the user to use the manual "Paste Redirect URL / Token" option in the /alibabaUsage dialog instead.
+
+Step 2 - Install the token interceptor BEFORE any authorization happens.
+Call browse eval on the tab with world "main" and this exact expression:
+
+(() => {
+  if (window.__ocAlibabaLogin) return "already-installed";
+  const cap = (window.__ocAlibabaLogin = { authorize: null, callback: [] });
+  const record = (url, body) => {
+    if (typeof url !== "string" || typeof body !== "string" || !body) return;
+    if (url.includes("/cli/authorize")) { if (!cap.authorize) cap.authorize = body; return; }
+    if (/^https?:\/\/(127\.0\.0\.1|localhost)([\/:?#]|$)/.test(url)) cap.callback.push({ url, body });
+  };
+  const nativeFetch = window.fetch;
+  window.fetch = async function (input, init) {
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    if (init && init.body != null) record(url, String(init.body));
+    const res = await nativeFetch.apply(this, arguments);
+    if (url.includes("/cli/authorize")) { try { record(url, await res.clone().text()); } catch (e) {} }
+    return res;
+  };
+  const nativeOpen = XMLHttpRequest.prototype.open;
+  const nativeSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url) { this.__ocUrl = String(url); return nativeOpen.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function (body) { if (body != null) record(this.__ocUrl, String(body)); return nativeSend.apply(this, arguments); };
+  return "installed";
+})()
+
+It must return "installed" (or "already-installed" if you are retrying).
+
+Step 3 - Get the user's authorization.
+Call browse snapshot on the tab.
+- If the page shows an "Authorize CLI Login" button: ask the user for confirmation before clicking it, unless they already told you to authorize. With their approval, browse click the button's ref.
+- If the page shows a login form, QR code or 2FA challenge: call browse handoff with the message "Sign in to your Alibaba Cloud account, click 'Authorize CLI Login', then press Continue." and wait for the user.
+Then browse snapshot again: the page should say "CLI Login successful!". If it shows an error, report it and continue to Step 4 anyway.
+
+Step 4 - Check whether the server received the callback (local mode).
+On the server machine, resolve the OpenCode server base URL:
+  SERVER=$(opencode service status)
+If that prints nothing, the server is not running as a managed service; tell the user and stop (they can use the manual dialog option).
+Then poll every ~2 seconds, up to ~15 seconds:
+  curl -s -X POST "$SERVER/api/rpc/alibaba.usage/loginStatus" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"state":"${state}"}}'
+On {"output":{"status":"complete"}} the callback arrived: skip to Step 6.
+
+Step 5 - Remote mode: extract the captured token and complete the login.
+Call browse eval on the tab with world "main" and expression: JSON.stringify(window.__ocAlibabaLogin)
+Extract the access token from the first source that has it:
+1. the "authorize" field: a JSON string whose data.access_token holds the token;
+2. the "callback" entries: body JSON containing access_token/accessToken, or a query string containing access_token=...
+If a captured payload carries its own state value that differs from ${state}, stop and report the mismatch.
+If nothing was captured (the user authorized before the interceptor was installed), restart once from Step 1; if it is still empty, ask the user to paste the token manually via the /alibabaUsage dialog.
+Submit the token (replace TOKEN; never show it in your reply):
+  curl -s -X POST "$SERVER/api/rpc/alibaba.usage/completeLogin" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"state":"${state}","input":"{\"access_token\":\"TOKEN\"}"}}'
+Expect {"output":{"ok":true}} - the server validates the token against the Alibaba gateway before saving it. On ok:false, report the server message.
+
+Step 6 - Verify and clean up.
+  curl -s -X POST "$SERVER/api/rpc/alibaba.usage/tokenPlan" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"refresh":true}}'
+Expect ok:true with quota data. Then close the browser tab group: browse tabs with action "close" and group "alibaba-login".
+Report success (quota numbers are fine to show; the token is not).
+If you abandon the flow before it completes, release the pending login:
+  curl -s -X POST "$SERVER/api/rpc/alibaba.usage/cancelLogin" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"state":"${state}"}}'

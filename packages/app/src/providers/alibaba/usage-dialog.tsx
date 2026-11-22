@@ -17,7 +17,7 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useServerSDK } from "@/runtime/server/client"
 
-export function DialogAlibabaUsage(props: { directory?: string }) {
+export function DialogAlibabaUsage(props: { directory?: string; sessionID?: string }) {
   const sdk = useServerSDK()
   const dialog = useDialog()
   const language = useLanguage()
@@ -45,12 +45,14 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
   onCleanup(() => {
     stopPolling()
     const active = loginSession()
+
     if (active) void rpc().cancelLogin({ state: active.state }, callOpts()).catch(() => {})
   })
 
   const load = async (refresh = false) => {
     setLoading(true)
     setError(undefined)
+
     try {
       const result = await rpc().tokenPlan({ refresh }, callOpts())
       setData(result)
@@ -65,14 +67,17 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
     stopPolling()
     setError(undefined)
     setCopiedUrl(false)
+
     try {
       const started = await rpc().startLogin({}, callOpts())
       setLoginSession({ url: started.url, state: started.state })
+
       if (openBrowser) platform.openExternal(started.url)
 
       pollTimer = setInterval(async () => {
         try {
           const status = await rpc().loginStatus({ state: started.state }, callOpts())
+
           if (status.status === "complete") {
             stopPolling()
             setLoginSession(undefined)
@@ -92,10 +97,27 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
     }
   }
 
+  const connectAgent = async () => {
+    const sessionID = props.sessionID
+
+    if (!sessionID) return
+    stopPolling()
+    setError(undefined)
+
+    try {
+      // The server command starts the callback login and hands the agent browse-driven instructions.
+      await sdk.api.session.command({ sessionID, name: "alibabaLogin", text: "" })
+      dialog.close()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const copyUrl = async (url: string) => {
     const ok = await (
       platform.writeClipboardText ? platform.writeClipboardText(url).then(() => true) : writeClipboard(url)
     ).catch(() => false)
+
     if (ok) {
       setCopiedUrl(true)
       setTimeout(() => setCopiedUrl(false), 2000)
@@ -105,15 +127,20 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
   const submitManual = async () => {
     const active = loginSession()
     const raw = manualInput().trim()
+
     if (!active || !raw) return
     setSubmitting(true)
     setError(undefined)
+
     try {
       const result = await rpc().completeLogin({ state: active.state, input: raw }, callOpts())
+
       if (!result.ok) {
         setError(result.message ?? "Could not complete login")
+
         return
       }
+
       stopPolling()
       setLoginSession(undefined)
       setManualInput("")
@@ -130,6 +157,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
     const active = loginSession()
     setLoginSession(undefined)
     setManualInput("")
+
     if (active) await rpc().cancelLogin({ state: active.state }, callOpts()).catch(() => {})
   }
 
@@ -146,7 +174,9 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
 
   const budget = createMemo(() => {
     const item = data()
+
     if (!item?.ok || item.resetAt === undefined) return undefined
+
     return computeBudgetBreakdown(item.usedPercent, item.resetAt)
   })
 
@@ -158,6 +188,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
         pill: "bg-v2-state-bg-danger/15 text-v2-state-fg-danger",
       }
     }
+
     if (health === "caution") {
       return {
         label: language.t("dialog.alibabaUsage.health.caution"),
@@ -165,6 +196,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
         pill: "bg-v2-state-bg-warning/15 text-v2-state-fg-warning",
       }
     }
+
     return {
       label: language.t("dialog.alibabaUsage.health.healthy"),
       bar: "bg-v2-state-bg-success",
@@ -433,6 +465,11 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
               <Button variant="contrast" size="large" class="w-full" onClick={() => void beginLogin(true)}>
                 {language.t("dialog.alibabaUsage.connectBrowser")}
               </Button>
+              <Show when={props.sessionID}>
+                <Button variant="outline" size="large" class="w-full" onClick={() => void connectAgent()}>
+                  {language.t("dialog.alibabaUsage.connectAgent")}
+                </Button>
+              </Show>
               <Button variant="outline" size="large" class="w-full" onClick={() => void beginLogin(false)}>
                 {language.t("dialog.alibabaUsage.connectManual")}
               </Button>

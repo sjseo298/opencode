@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   GATEWAY_REGION,
   GATEWAY_SITE,
+  buildAgentLoginPrompt,
   buildGatewayEndpoint,
   buildGatewayParams,
   buildModelsGatewayEndpoint,
@@ -173,5 +174,26 @@ describe("AlibabaUsagePlugin discounted models gateway helpers", () => {
     expect(result.ok).toBe(false)
     expect(result.models).toEqual([])
     expect(result.error).toContain("No Token Plan model list")
+  })
+})
+
+describe("AlibabaUsagePlugin agent login prompt", () => {
+  const started = {
+    url: "https://modelstudio.console.alibabacloud.com/console-login?notice=127.0.0.1:53548?state=abc123",
+    state: "abc123",
+  }
+
+  test("embeds the real login URL and state and leaves no placeholders", () => {
+    const prompt = buildAgentLoginPrompt(started, "")
+    expect(prompt).toContain(started.url)
+    expect(prompt).toContain(`"state":"${started.state}"`)
+    expect(prompt).not.toContain("${url}")
+    expect(prompt).not.toContain("${state}")
+    expect(prompt).not.toContain("Additional instruction from the user")
+  })
+
+  test("appends non-empty user text as an additional instruction", () => {
+    const prompt = buildAgentLoginPrompt(started, "  click it for me  ")
+    expect(prompt.endsWith("Additional instruction from the user: click it for me")).toBe(true)
   })
 })
