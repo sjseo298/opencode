@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { AlibabaUsageRpc, formatCycleProgress, formatQuotaPercent } from "../src/alibaba-usage.js"
 import { DynamicContextRpc } from "../src/dynamic-context.js"
 import {
   cloneObjectivesForFreshSession,
@@ -9,6 +10,20 @@ import {
 import { SHARED_SERVER_SETTINGS, SLASH_COMMAND_PARITY } from "../src/surface-parity.js"
 
 describe("cross-surface shared contracts", () => {
+  test("AlibabaUsageRpc exposes tokenPlan method and cycle helpers", () => {
+    expect(AlibabaUsageRpc.id).toBe("alibaba.usage")
+    expect(Object.keys(AlibabaUsageRpc.methods)).toEqual(["tokenPlan"])
+    expect(formatQuotaPercent(0)).toBe("0%")
+    expect(formatQuotaPercent(0.000025)).toBe("<0.01%")
+    expect(formatQuotaPercent(42.5)).toBe("42.50%")
+    const now = Date.UTC(2026, 10, 22, 14, 0, 0)
+    const resetAt = now + 30 * 86_400_000
+    const cycle = formatCycleProgress(resetAt, now)
+    expect(cycle.elapsedDays).toBe(1)
+    expect(cycle.remainingDays).toBe(30)
+    expect(cycle.countdownLabel).toBe("30d 0h 0m")
+  })
+
   test("DynamicContextRpc exposes canonical snapshot, setLimit, and refresh methods", () => {
     expect(DynamicContextRpc.id).toBe("llamacpp.context")
     expect(Object.keys(DynamicContextRpc.methods).sort()).toEqual(["getSnapshot", "refresh", "setLimit"])

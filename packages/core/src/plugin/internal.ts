@@ -130,6 +130,7 @@ import { WarmingPlugin } from "./warming.js"
 import { WellKnownPlugin } from "../wellknown/plugin.js"
 import { fromPromise } from "./promise.js"
 import {
+  AlibabaUsagePlugin,
   HierarchicalObjectivesPlugin,
   CompactionTodoPlugin,
   SubagentMandatoryInstructionPlugin,
@@ -280,6 +281,7 @@ const pre = [
   PlanPlugin.Plugin,
   CommandPlugin.Plugin,
   GoalPlugin.Plugin,
+  AlibabaUsagePlugin.Plugin,
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
   ModelsDevPlugin,

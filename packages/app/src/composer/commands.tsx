@@ -42,6 +42,11 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
     void dialog.show(() => <DialogConnectProvider directory={workspace().directory} selection={model} />)
   }
 
+  const openAlibabaUsage = async () => {
+    const { DialogAlibabaUsage } = await import("@/providers/alibaba/usage-dialog")
+    void dialog.show(() => <DialogAlibabaUsage directory={workspace().directory} />)
+  }
+
   // Mirrors the TUI's `/reload`. The server rebuilds every loaded location and announces the changed agents,
   // commands, models and skills, so the data layer refreshes them without restarting the app.
   // The result still reports after this composer unmounts: toasts are app-wide.
@@ -158,6 +163,14 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
       description: language.t("command.provider.connect.description"),
       slash: "connect",
       onSelect: connectProvider,
+    }),
+    providerCommand({
+      id: "alibaba.usage",
+      title: language.t("command.alibaba.usage"),
+      description: language.t("command.alibaba.usage.description"),
+      keywords: "alibaba token plan quota usage",
+      slash: "alibabaUsage",
+      onSelect: () => void openAlibabaUsage(),
     }),
     serverCommand({
       id: "config.reload",

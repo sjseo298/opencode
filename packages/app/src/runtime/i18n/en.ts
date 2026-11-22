@@ -1593,6 +1593,18 @@ export const dict = {
   "dialog.planApproval.toast.noPlan": "No active objective plan in this session.",
   "dialog.planApproval.defaultModel": "current model",
 
+  "command.alibaba.usage": "Alibaba Token Plan usage",
+  "command.alibaba.usage.description": "Inspect Alibaba Token Plan monthly quota, cycle pace, and cutoff date",
+
+  "dialog.alibabaUsage.title": "Alibaba Token Plan",
+  "dialog.alibabaUsage.loading": "Querying Alibaba Token Plan usage…",
+  "dialog.alibabaUsage.monthlyQuota": "Monthly Subscription Quota",
+  "dialog.alibabaUsage.used": "used",
+  "dialog.alibabaUsage.left": "left",
+  "dialog.alibabaUsage.cyclePosition": "Cycle position",
+  "dialog.alibabaUsage.cutoff": "Cutoff / Reset",
+  "dialog.alibabaUsage.refresh": "Refresh",
+
   "command.session.rewind": "Undo last agent steps and repeat",
   "command.session.rewind.description": "Undo the last N LLM steps in this turn and repeat them",
   "command.session.setContextLimit": "Set session context limit",
