@@ -1,12 +1,19 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { AlibabaUsageRpc, formatCycleProgress, formatQuotaPercent, type AlibabaUsage } from "@opencode/schema/alibaba-usage"
-import { TextAttributes } from "@opentui/core"
-import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { RGBA, TextAttributes } from "@opentui/core"
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { Spinner } from "../../component/spinner"
 import { useTheme } from "../../context/theme"
 import { DialogHeader, DialogLayout, useDialog } from "../../ui/dialog"
 
 const BAR_WIDTH = 36
+
+type ButtonAction = {
+  readonly id: string
+  readonly label: string
+  readonly primary?: boolean
+  readonly run: () => void
+}
 
 function buildBar(percent: number): { filled: string; empty: string } {
   const clamped = Math.min(100, Math.max(0, percent))
@@ -28,6 +35,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
   const [rpcError, setRpcError] = createSignal<string>()
   const [loginSession, setLoginSession] = createSignal<{ url: string; state: string }>()
   const [loginStatusText, setLoginStatusText] = createSignal<string>()
+  const [selectedAction, setSelectedAction] = createSignal<string>("browser")
 
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -50,6 +58,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     try {
       const result = await rpc.tokenPlan({ refresh }, location())
       setData(result)
+      setSelectedAction(result.ok ? "refresh" : "browser")
     } catch (error) {
       setRpcError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -57,21 +66,30 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     }
   }
 
+  async function ensureLoginSession() {
+    const existing = loginSession()
+    if (existing) return existing
+    const started = await rpc.startLogin({}, location())
+    const session = { url: started.url, state: started.state }
+    setLoginSession(session)
+    return session
+  }
+
   async function startConnect() {
     stopPolling()
     setRpcError(undefined)
-    setLoginStatusText("Starting Alibaba Cloud International login…")
+    setLoginStatusText("Opening Alibaba Cloud International login in browser…")
     try {
-      const started = await rpc.startLogin({}, location())
-      setLoginSession({ url: started.url, state: started.state })
-      setLoginStatusText("Waiting for browser login (or press m to paste redirect URL manually)…")
+      const session = await ensureLoginSession()
+      setLoginStatusText("Waiting for browser authorization…")
+      setSelectedAction("manual")
 
       const { openUrl } = await import("@opencode/util/open")
-      openUrl(started.url).catch(() => {})
+      openUrl(session.url).catch(() => {})
 
       pollTimer = setInterval(async () => {
         try {
-          const status = await rpc.loginStatus({ state: started.state }, location())
+          const status = await rpc.loginStatus({ state: session.state }, location())
           if (status.status === "complete") {
             stopPolling()
             setLoginSession(undefined)
@@ -81,7 +99,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
           } else if (status.status === "expired" || status.status === "error") {
             stopPolling()
             setLoginSession(undefined)
-            setLoginStatusText(status.message ?? "Login expired; press l to retry.")
+            setLoginStatusText(status.message ?? "Login expired. Try connecting again.")
           }
         } catch {
           // keep polling briefly
@@ -94,27 +112,35 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
   }
 
   async function promptManualComplete() {
-    let active = loginSession()
-    if (!active) {
-      const started = await rpc.startLogin({}, location())
-      active = { url: started.url, state: started.state }
-      setLoginSession(active)
+    try {
+      const active = await ensureLoginSession()
+      const pasted = await props.context.ui.dialog.prompt({
+        title: "Paste Redirect URL or Access Token",
+        description: `Open this URL in any browser (including on another machine):\n${active.url}\n\nAfter signing in, copy the redirected 127.0.0.1 URL (or access_token) and paste it below:`,
+      })
+      if (!pasted?.trim()) return
+      const result = await rpc.completeLogin({ state: active.state, input: pasted.trim() }, location())
+      if (!result.ok) {
+        setRpcError(result.message ?? "Could not complete login")
+        return
+      }
+      stopPolling()
+      setLoginSession(undefined)
+      setLoginStatusText(undefined)
+      props.context.ui.toast.show({ message: "Alibaba Cloud connected!", variant: "success" })
+      await load(true)
+    } catch (error) {
+      setRpcError(error instanceof Error ? error.message : String(error))
     }
-    const pasted = await props.context.ui.dialog.prompt({
-      title: "Manual Alibaba Cloud Login",
-      description: `Open this URL in any browser (even on another machine):\n${active.url}\n\nAfter signing in, paste the redirected 127.0.0.1 URL (or access_token):`,
-    })
-    if (!pasted?.trim()) return
-    const result = await rpc.completeLogin({ state: active.state, input: pasted.trim() }, location())
-    if (!result.ok) {
-      setRpcError(result.message ?? "Could not complete login")
-      return
-    }
+  }
+
+  async function cancelConnect() {
     stopPolling()
+    const active = loginSession()
     setLoginSession(undefined)
     setLoginStatusText(undefined)
-    props.context.ui.toast.show({ message: "Alibaba Cloud connected!", variant: "success" })
-    await load(true)
+    if (active) await rpc.cancelLogin({ state: active.state }, location()).catch(() => {})
+    setSelectedAction(data()?.ok ? "refresh" : "browser")
   }
 
   async function disconnect() {
@@ -126,6 +152,43 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     await load(true)
   }
 
+  const actions = createMemo<readonly ButtonAction[]>(() => {
+    if (loginSession()) {
+      return [
+        { id: "manual", label: "Paste URL / Token", primary: true, run: () => void promptManualComplete() },
+        { id: "reopen", label: "Reopen Browser", run: () => void startConnect() },
+        { id: "cancel", label: "Cancel", run: () => void cancelConnect() },
+      ]
+    }
+    if (data()?.ok) {
+      return [
+        { id: "refresh", label: "Refresh", primary: true, run: () => void load(true) },
+        { id: "browser", label: "Reconnect", run: () => void startConnect() },
+        { id: "logout", label: "Disconnect", run: () => void disconnect() },
+        { id: "close", label: "Close", run: () => dialog.clear() },
+      ]
+    }
+    return [
+      { id: "browser", label: "Connect with Browser", primary: true, run: () => void startConnect() },
+      { id: "manual", label: "Paste URL / Token (Manual)", run: () => void promptManualComplete() },
+      { id: "close", label: "Close", run: () => dialog.clear() },
+    ]
+  })
+
+  function stepAction(by: number) {
+    const list = actions()
+    if (!list.length) return
+    const idx = Math.max(0, list.findIndex((item) => item.id === selectedAction()))
+    const next = list[(idx + by + list.length) % list.length]
+    if (next) setSelectedAction(next.id)
+  }
+
+  function runSelected() {
+    const list = actions()
+    const target = list.find((item) => item.id === selectedAction()) ?? list[0]
+    target?.run()
+  }
+
   onMount(() => {
     dialog.setSize("large")
     void load(false)
@@ -133,10 +196,14 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
 
   props.context.keymap.layer(() => ({
     commands: [
+      { bind: "return", title: "Confirm", run: runSelected },
+      { bind: "left", title: "Previous button", run: () => stepAction(-1) },
+      { bind: "up", title: "Previous button", run: () => stepAction(-1) },
+      { bind: "shift+tab", title: "Previous button", run: () => stepAction(-1) },
+      { bind: "right", title: "Next button", run: () => stepAction(1) },
+      { bind: "down", title: "Next button", run: () => stepAction(1) },
+      { bind: "tab", title: "Next button", run: () => stepAction(1) },
       { bind: "r", title: "Refresh", run: () => void load(true) },
-      { bind: "l", title: "Login", run: () => void startConnect() },
-      { bind: "m", title: "Manual paste", run: () => void promptManualComplete() },
-      { bind: "x", title: "Logout", run: () => void disconnect() },
     ],
   }))
 
@@ -164,12 +231,40 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     return { text: "Ahead of expected pace", color: theme.text.feedback.warning.base }
   })
 
+  const renderButton = (action: ButtonAction) => {
+    const active = () => selectedAction() === action.id
+    return (
+      <box
+        paddingLeft={2}
+        paddingRight={2}
+        paddingTop={0}
+        paddingBottom={0}
+        backgroundColor={active() ? theme.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)}
+        onMouseOver={() => setSelectedAction(action.id)}
+        onMouseUp={action.run}
+      >
+        <text
+          fg={
+            active()
+              ? theme.text.action.primary.focused
+              : action.primary
+                ? theme.text.base
+                : theme.text.muted
+          }
+          attributes={active() ? TextAttributes.BOLD : undefined}
+        >
+          {action.label}
+        </text>
+      </box>
+    )
+  }
+
   return (
     <DialogLayout
       header={
         <DialogHeader
-          title="Alibaba Token Plan (International)"
-          closeLabel="esc close · r refresh · l login · m manual"
+          title="Alibaba Token Plan · International"
+          closeLabel="esc close"
           onClose={() => dialog.clear()}
         />
       }
@@ -184,15 +279,23 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
 
         <Show when={loginSession()}>
           {(session) => (
-            <box flexDirection="column" gap={0}>
+            <box flexDirection="column" gap={1}>
               <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-                Login URL (open locally or on another machine):
+                Sign in to Alibaba Cloud Model Studio
               </text>
               <text fg={theme.text.muted} wrapMode="word">
+                Open this URL locally or on another machine, then paste the redirected URL if needed:
+              </text>
+              <text fg={theme.text.base} wrapMode="word">
                 {session().url}
               </text>
               <Show when={loginStatusText()}>
-                {(msg) => <text fg={theme.text.base}>{msg()}</text>}
+                {(msg) => (
+                  <box flexDirection="row" gap={1}>
+                    <Spinner />
+                    <text fg={theme.text.muted}>{msg()}</text>
+                  </box>
+                )}
               </Show>
             </box>
           )}
@@ -202,18 +305,20 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
           {(err) => <text fg={theme.text.feedback.error.base}>{err()}</text>}
         </Show>
 
-        <Show when={!loading() && !rpcError() && data()}>
+        <Show when={!loading() && !loginSession() && !rpcError() && data()}>
           {(item) => (
             <Show
               when={item().ok}
               fallback={
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.text.feedback.error.base}>{item().error ?? "Unable to read Token Plan usage"}</text>
-                  <Show when={item().hint}>{(hint) => <text fg={theme.text.muted}>{hint()}</text>}</Show>
-                  <Show when={item().needsAuth}>
-                    <text fg={theme.text.base}>
-                      Press <b>l</b> to open browser login, or <b>m</b> to paste a redirected URL from another machine.
-                    </text>
+                  <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
+                    Connect your Alibaba Cloud account
+                  </text>
+                  <text fg={theme.text.muted} wrapMode="word">
+                    Sign in once to inspect your Token Plan monthly quota, billing cycle pace, and exact cutoff date.
+                  </text>
+                  <Show when={item().error && !item().needsAuth}>
+                    <text fg={theme.text.feedback.error.base}>{item().error}</text>
                   </Show>
                 </box>
               }
@@ -258,11 +363,17 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
                 </Show>
 
                 <text fg={theme.text.muted}>
-                  Checked at {new Date(item().checkedAt).toLocaleTimeString()} · r refresh · l re-login · x logout
+                  Checked at {new Date(item().checkedAt).toLocaleTimeString()}
                 </text>
               </box>
             </Show>
           )}
+        </Show>
+
+        <Show when={!loading()}>
+          <box flexDirection="row" gap={1} paddingTop={1}>
+            <For each={actions()}>{(action) => renderButton(action)}</For>
+          </box>
         </Show>
       </box>
     </DialogLayout>
