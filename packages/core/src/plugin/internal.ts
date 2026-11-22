@@ -135,7 +135,6 @@ import {
   SubagentMandatoryInstructionPlugin,
   LlamaCppContextPlugin,
   LoopGuardPlugin,
-  AntigravityPlugin,
 } from "./builtin/index.js"
 
 const services = [
@@ -284,7 +283,6 @@ const pre = [
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
   ModelsDevPlugin,
-  fromPromise(AntigravityPlugin.Plugin),
   ...ProviderPlugins,
   ...WebSearchPlugins,
   PatchTool.Plugin,
@@ -354,7 +352,6 @@ export const guarded: ReadonlySet<string> = new Set([
   SubagentMandatoryInstructionPlugin.Plugin.id,
   LlamaCppContextPlugin.Plugin.id,
   LoopGuardPlugin.Plugin.id,
-  AntigravityPlugin.Plugin.id,
 ])
 
 export const list = Effect.fn("PluginInternal.list")(function* () {

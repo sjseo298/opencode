@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { DateTime, Schema } from "effect"
 import { Agent } from "../src/agent.js"
-import { Antigravity } from "../src/antigravity.js"
 import { ConfigAgent } from "../src/config/agent.js"
 import { ConfigProvider } from "../src/config/provider.js"
 import { DynamicContext } from "../src/dynamic-context.js"
@@ -174,11 +173,6 @@ describe("contract hygiene", () => {
   test("reusable public identifiers are stable and unique", () => {
     const identifiers = [
       Agent.Color,
-      Antigravity.AccountSummarySchema,
-      Antigravity.QuotaAccountReportSchema,
-      Antigravity.QuotaSummarySchema,
-      Antigravity.AntigravitySettingsSchema,
-      Antigravity.AntigravitySettingsUpdateSchema,
       ConfigProvider.ModelSettings,
       ConfigProvider.Settings,
       DynamicContext.DynamicContextEntrySchema,

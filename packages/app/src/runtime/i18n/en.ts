@@ -1593,57 +1593,6 @@ export const dict = {
   "dialog.planApproval.toast.noPlan": "No active objective plan in this session.",
   "dialog.planApproval.defaultModel": "current model",
 
-  "command.antigravity.accounts": "Antigravity accounts and quotas",
-  "command.antigravity.accounts.description": "Manage Google Antigravity accounts, check quotas, and refresh models",
-
-  "dialog.antigravity.title": "Google Accounts (Antigravity)",
-  "dialog.antigravity.back": "Back",
-  "dialog.antigravity.addAuto": "Add account (Browser)",
-  "dialog.antigravity.addManual": "Add account (Manual code)",
-  "dialog.antigravity.checkQuotas": "Check quotas",
-  "dialog.antigravity.refreshModels": "Refresh models",
-  "dialog.antigravity.reload": "Reload",
-  "dialog.antigravity.loading": "Loading Antigravity accounts…",
-  "dialog.antigravity.empty.title": "No Antigravity accounts connected",
-  "dialog.antigravity.empty.description":
-    "Connect a Google account above to access Antigravity models and rotate quotas across accounts.",
-  "dialog.antigravity.badge.current": "current",
-  "dialog.antigravity.badge.disabled": "disabled",
-  "dialog.antigravity.badge.verify": "needs verification",
-  "dialog.antigravity.quotaLabel": "Quota",
-  "dialog.antigravity.action.use": "Use account",
-  "dialog.antigravity.action.quotas": "Quotas",
-  "dialog.antigravity.action.enable": "Enable",
-  "dialog.antigravity.action.disable": "Disable",
-  "dialog.antigravity.action.delete": "Delete",
-  "dialog.antigravity.oauth.waiting": "Complete Google authorization in your browser…",
-  "dialog.antigravity.oauth.openBrowser": "Open authorization URL",
-  "dialog.antigravity.oauth.manualTitle": "Manual Google Authorization (Antigravity)",
-  "dialog.antigravity.oauth.pastePrompt": "Paste authorization code or full callback URL:",
-  "dialog.antigravity.oauth.codePlaceholder": "http://localhost:51121/... or code",
-  "dialog.antigravity.oauth.connect": "Connect",
-
-  "settings.antigravity.section.title": "Antigravity (Google API)",
-  "settings.antigravity.row.connectionTimeout.title": "Initial connection timeout (connection_timeout_seconds)",
-  "settings.antigravity.row.connectionTimeout.description":
-    "Maximum time in seconds to wait for HTTP headers from Google after sending a prompt (default: 120s for long contexts).",
-  "settings.antigravity.row.streamIdleTimeout.title": "SSE stream idle timeout (stream_idle_timeout_seconds)",
-  "settings.antigravity.row.streamIdleTimeout.description":
-    "Maximum silence in seconds during streaming before aborting the connection (default: 180s under high load).",
-  "settings.antigravity.row.maxCapacityRetries.title": "Capacity exhaustion retries (max_capacity_retries)",
-  "settings.antigravity.row.maxCapacityRetries.description":
-    "Maximum exponential-backoff retries when Google reports server overload or 503/529 capacity exhausted (default: 4).",
-  "settings.antigravity.row.maxCapacityDelay.title": "Max cumulative capacity wait (max_capacity_delay_seconds)",
-  "settings.antigravity.row.maxCapacityDelay.description":
-    "Maximum cumulative wait time in seconds across capacity retries before failing (default: 30s).",
-  "settings.antigravity.row.splitSystemInstruction.title": "Split large systemInstruction (split_system_instruction)",
-  "settings.antigravity.row.splitSystemInstruction.description":
-    "Splits systemInstruction >14,000 chars into contents to avoid 429 rate limits on Gemini (default: enabled).",
-  "settings.antigravity.row.accounts.title": "Antigravity accounts and quotas",
-  "settings.antigravity.row.accounts.description":
-    "Manage Google Antigravity accounts in the rotation pool, inspect per-model quotas, or refresh available models.",
-  "settings.antigravity.row.accounts.manage": "Manage accounts",
-
   "command.session.rewind": "Undo last agent steps and repeat",
   "command.session.rewind.description": "Undo the last N LLM steps in this turn and repeat them",
   "command.session.setContextLimit": "Set session context limit",

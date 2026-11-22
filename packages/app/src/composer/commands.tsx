@@ -42,11 +42,6 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
     void dialog.show(() => <DialogConnectProvider directory={workspace().directory} selection={model} />)
   }
 
-  const openAntigravity = async () => {
-    const { DialogAntigravity } = await import("@/providers/antigravity/dialog")
-    void dialog.show(() => <DialogAntigravity directory={workspace().directory} />)
-  }
-
   // Mirrors the TUI's `/reload`. The server rebuilds every loaded location and announces the changed agents,
   // commands, models and skills, so the data layer refreshes them without restarting the app.
   // The result still reports after this composer unmounts: toasts are app-wide.
@@ -163,15 +158,6 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
       description: language.t("command.provider.connect.description"),
       slash: "connect",
       onSelect: connectProvider,
-    }),
-    providerCommand({
-      id: "antigravity.accounts",
-      title: language.t("command.antigravity.accounts"),
-      description: language.t("command.antigravity.accounts.description"),
-      keywords: "ag antigravity google accounts quotas",
-      slash: "antigravity",
-      slashAliases: ["ag"],
-      onSelect: () => void openAntigravity(),
     }),
     serverCommand({
       id: "config.reload",

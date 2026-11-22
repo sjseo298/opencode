@@ -4,7 +4,6 @@
 //   bun script/check-surface-parity.ts
 import path from "node:path"
 import { SLASH_COMMAND_PARITY, SHARED_SERVER_SETTINGS } from "../packages/schema/src/surface-parity.ts"
-import { AntigravitySettingsSchema } from "../packages/schema/src/antigravity.ts"
 import { ConfigObjectives } from "../packages/schema/src/config/objectives.ts"
 
 const ROOT = path.resolve(import.meta.dir, "..")
@@ -122,14 +121,6 @@ for (const key of Object.keys(ConfigObjectives.Info.fields)) {
   }
 }
 
-// Verify all AntigravitySettingsSchema keys exist in SHARED_SERVER_SETTINGS
-for (const key of Object.keys(AntigravitySettingsSchema.fields)) {
-  const fullPath = `antigravity.${key}`
-  if (!SHARED_SERVER_SETTINGS.some((entry) => entry.path === fullPath)) {
-    errors.push(`[settings-parity] Antigravity.Settings key "${fullPath}" is missing from SHARED_SERVER_SETTINGS.`)
-  }
-}
-
 for (const entry of SHARED_SERVER_SETTINGS) {
   if (entry.surfaces.includes("tui") && !tuiSettingPaths.has(entry.path)) {
     errors.push(`[settings-parity] TUI DialogConfig is missing setting "${entry.path}".`)
@@ -144,8 +135,6 @@ for (const entry of SHARED_SERVER_SETTINGS) {
       errors.push(`[settings-parity] Web Settings is missing "${entry.path}".`)
     } else if (field && entry.path.startsWith("objectives.") && !webGeneralSource.includes(field)) {
       errors.push(`[settings-parity] Web ObjectivesProtocolSection UI is missing "${entry.path}".`)
-    } else if (field && entry.path.startsWith("antigravity.") && !webGeneralSource.includes(field)) {
-      errors.push(`[settings-parity] Web AntigravitySettingsSection UI is missing "${entry.path}".`)
     }
   }
 }

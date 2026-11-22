@@ -54,7 +54,6 @@ export const SLASH_COMMAND_PARITY: readonly SlashParityEntry[] = [
   { id: "model.variant.choose", names: ["variants", "thinking", "effort"], surfaces: ["tui", "web"] },
   { id: "usage.view", names: ["usage"], surfaces: ["tui", "web"] },
   { id: "provider.connect", names: ["connect"], surfaces: ["tui", "web"] },
-  { id: "antigravity.accounts", names: ["antigravity", "ag"], surfaces: ["tui", "web"] },
   { id: "config.reload", names: ["reload"], surfaces: ["tui", "web"] },
   { id: "agent.cycle", names: ["agent", "agents"], surfaces: ["tui", "web"] },
   { id: "settings.open", names: ["settings"], surfaces: ["tui", "web"] },
@@ -101,9 +100,4 @@ export const SHARED_SERVER_SETTINGS: readonly SettingParityEntry[] = [
   { path: "objectives.llamacpp_kv_offload", surfaces: ["tui", "web"] },
   { path: "objectives.llamacpp_slot_save_path", surfaces: ["tui", "web"] },
   { path: "objectives.subagent_model", surfaces: ["tui", "web"] },
-  { path: "antigravity.connection_timeout_seconds", surfaces: ["tui", "web"] },
-  { path: "antigravity.stream_idle_timeout_seconds", surfaces: ["tui", "web"] },
-  { path: "antigravity.max_capacity_retries", surfaces: ["tui", "web"] },
-  { path: "antigravity.max_capacity_delay_seconds", surfaces: ["tui", "web"] },
-  { path: "antigravity.split_system_instruction", surfaces: ["tui", "web"] },
 ]

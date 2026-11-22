@@ -1,11 +1,9 @@
 import { Component, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Button } from "@opencode/ui/button"
-import { useDialog } from "@opencode/ui/context/dialog"
 import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
 import { TextInput } from "@opencode/ui/text-input"
-import { DEFAULT_ANTIGRAVITY_SETTINGS } from "@opencode/schema/antigravity"
 import { Icon } from "@opencode/ui/icon"
 import { TimelineDetailControl } from "@/settings/timeline-detail"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -25,11 +23,9 @@ import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
 import {
   createOptimisticSetting,
-  createServerAntigravityController,
   createServerCompactionModelController,
   createServerObjectivesController,
   DEFAULT_OBJECTIVES_UI_CONFIG,
-  type AntigravitySettingsController,
   type CompactionModelSettingsController,
   type ObjectivesSettingsController,
   type ShellSettingsController,
@@ -602,152 +598,6 @@ export const ObjectivesProtocolSection: Component<{
   )
 }
 
-export const AntigravitySettingsSection: Component<{
-  controller: AntigravitySettingsController
-}> = (props) => {
-  const language = useLanguage()
-  const dialog = useDialog()
-
-  const numSelectOptions = (values: number[], defaultVal: number, suffix = "") =>
-    values.map((v) => ({
-      value: v,
-      label: `${v}${suffix}${v === defaultVal ? " (default)" : ""}`,
-    }))
-
-  const connTimeoutOptions = numSelectOptions(
-    [15, 30, 60, 90, 120, 180, 240, 300],
-    DEFAULT_ANTIGRAVITY_SETTINGS.connection_timeout_seconds,
-    " s",
-  )
-
-  const streamIdleOptions = numSelectOptions(
-    [30, 60, 120, 180, 240, 300, 450, 600],
-    DEFAULT_ANTIGRAVITY_SETTINGS.stream_idle_timeout_seconds,
-    " s",
-  )
-
-  const retriesOptions = numSelectOptions(
-    [0, 1, 2, 3, 4, 5],
-    DEFAULT_ANTIGRAVITY_SETTINGS.max_capacity_retries,
-    "",
-  )
-
-  const delayOptions = numSelectOptions(
-    [5, 10, 15, 20, 30, 45, 60],
-    DEFAULT_ANTIGRAVITY_SETTINGS.max_capacity_delay_seconds,
-    " s",
-  )
-
-  const openAccountsDialog = async () => {
-    const { DialogAntigravity } = await import("@/providers/antigravity/dialog")
-    void dialog.show(() => <DialogAntigravity />)
-  }
-
-  return (
-    <section class="settings-section" aria-label={language.t("settings.antigravity.section.title")}>
-      <h3 class="settings-section-title">{language.t("settings.antigravity.section.title")}</h3>
-      <SettingsList>
-        <SettingsRow
-          title={language.t("settings.antigravity.row.accounts.title")}
-          description={language.t("settings.antigravity.row.accounts.description")}
-        >
-          <Button size="small" variant="outline" onClick={() => void openAccountsDialog()}>
-            {language.t("settings.antigravity.row.accounts.manage")}
-          </Button>
-        </SettingsRow>
-
-        <SettingsRow
-          title={language.t("settings.antigravity.row.connectionTimeout.title")}
-          description={language.t("settings.antigravity.row.connectionTimeout.description")}
-        >
-          <Select
-            data-action="settings-antigravity-connection-timeout"
-            options={connTimeoutOptions}
-            current={
-              connTimeoutOptions.find((o) => o.value === props.controller.current().connection_timeout_seconds) ??
-              connTimeoutOptions[4]
-            }
-            placement="bottom-end"
-            gutter={6}
-            value={(o) => String(o.value)}
-            label={(o) => o.label}
-            onSelect={(o) => o && props.controller.update("connection_timeout_seconds", o.value)}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          title={language.t("settings.antigravity.row.streamIdleTimeout.title")}
-          description={language.t("settings.antigravity.row.streamIdleTimeout.description")}
-        >
-          <Select
-            data-action="settings-antigravity-stream-idle-timeout"
-            options={streamIdleOptions}
-            current={
-              streamIdleOptions.find((o) => o.value === props.controller.current().stream_idle_timeout_seconds) ??
-              streamIdleOptions[3]
-            }
-            placement="bottom-end"
-            gutter={6}
-            value={(o) => String(o.value)}
-            label={(o) => o.label}
-            onSelect={(o) => o && props.controller.update("stream_idle_timeout_seconds", o.value)}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          title={language.t("settings.antigravity.row.maxCapacityRetries.title")}
-          description={language.t("settings.antigravity.row.maxCapacityRetries.description")}
-        >
-          <Select
-            data-action="settings-antigravity-max-capacity-retries"
-            options={retriesOptions}
-            current={
-              retriesOptions.find((o) => o.value === props.controller.current().max_capacity_retries) ??
-              retriesOptions[4]
-            }
-            placement="bottom-end"
-            gutter={6}
-            value={(o) => String(o.value)}
-            label={(o) => o.label}
-            onSelect={(o) => o && props.controller.update("max_capacity_retries", o.value)}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          title={language.t("settings.antigravity.row.maxCapacityDelay.title")}
-          description={language.t("settings.antigravity.row.maxCapacityDelay.description")}
-        >
-          <Select
-            data-action="settings-antigravity-max-capacity-delay"
-            options={delayOptions}
-            current={
-              delayOptions.find((o) => o.value === props.controller.current().max_capacity_delay_seconds) ??
-              delayOptions[4]
-            }
-            placement="bottom-end"
-            gutter={6}
-            value={(o) => String(o.value)}
-            label={(o) => o.label}
-            onSelect={(o) => o && props.controller.update("max_capacity_delay_seconds", o.value)}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          title={language.t("settings.antigravity.row.splitSystemInstruction.title")}
-          description={language.t("settings.antigravity.row.splitSystemInstruction.description")}
-        >
-          <div data-action="settings-antigravity-split-system-instruction">
-            <Switch
-              checked={props.controller.current().split_system_instruction}
-              onChange={(checked) => props.controller.update("split_system_instruction", checked)}
-            />
-          </div>
-        </SettingsRow>
-      </SettingsList>
-    </section>
-  )
-}
-
 const FollowUpBehaviorSetting: Component = () => {
   const language = useLanguage()
   const settings = useSettings()
@@ -874,7 +724,6 @@ export const SettingsGeneral: Component = () => {
   const settings = useSettings()
   const surface = useSettingsSurface()
   const objectivesController = createServerObjectivesController(() => surface.server()?.connection)
-  const antigravityController = createServerAntigravityController(() => surface.server()?.connection)
   const compactionModelController = createServerCompactionModelController(() => surface.server()?.connection)
   const mobile = createMediaQuery("(max-width: 767px)")
   const desktop = createMemo(() => platform.platform === "desktop")
@@ -1045,7 +894,6 @@ export const SettingsGeneral: Component = () => {
         </section>
 
         <ObjectivesProtocolSection controller={objectivesController} />
-        <AntigravitySettingsSection controller={antigravityController} />
 
         <PluginSettingsSections page="general" />
       </div>

@@ -1,10 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import {
-  AntigravityAccountsRpc,
-  DEFAULT_ANTIGRAVITY_SETTINGS,
-  formatQuotaSummary,
-  stripAnsiCodes,
-} from "../src/antigravity.js"
 import { DynamicContextRpc } from "../src/dynamic-context.js"
 import {
   cloneObjectivesForFreshSession,
@@ -15,22 +9,6 @@ import {
 import { SHARED_SERVER_SETTINGS, SLASH_COMMAND_PARITY } from "../src/surface-parity.js"
 
 describe("cross-surface shared contracts", () => {
-  test("AntigravityAccountsRpc exposes canonical account and config methods", () => {
-    expect(AntigravityAccountsRpc.id).toBe("antigravity.accounts")
-    expect(Object.keys(AntigravityAccountsRpc.methods).sort()).toEqual([
-      "connections",
-      "getConfig",
-      "list",
-      "models",
-      "quotas",
-      "update",
-      "updateConfig",
-    ])
-    expect(DEFAULT_ANTIGRAVITY_SETTINGS.connection_timeout_seconds).toBe(120)
-    expect(stripAnsiCodes("\x1b[32mOK\x1b[0m")).toBe("OK")
-    expect(formatQuotaSummary({ remainingFraction: 0.75 })).toBe("75%")
-  })
-
   test("DynamicContextRpc exposes canonical snapshot, setLimit, and refresh methods", () => {
     expect(DynamicContextRpc.id).toBe("llamacpp.context")
     expect(Object.keys(DynamicContextRpc.methods).sort()).toEqual(["getSnapshot", "refresh", "setLimit"])

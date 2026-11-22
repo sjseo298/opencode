@@ -4,11 +4,6 @@ import type { ConfigShellOption } from "@opencode/client/promise"
 import type { ColorScheme } from "@opencode/ui/theme/context"
 import { useTheme } from "@opencode/ui/theme/context"
 import {
-  AntigravityAccountsRpc,
-  DEFAULT_ANTIGRAVITY_SETTINGS,
-  type AntigravitySettings,
-} from "@opencode/schema/antigravity"
-import {
   monoDefault,
   monoFontFamily,
   monoInput,
@@ -532,56 +527,11 @@ export function createServerObjectivesController(server: Accessor<ServerConnecti
   }
 }
 
-export function createServerAntigravityController(server: Accessor<ServerConnection.Any | undefined>) {
-  const language = useLanguage()
-
-  const setting = createOptimisticSetting({
-    source: useServerCtx(server),
-    initial: DEFAULT_ANTIGRAVITY_SETTINGS,
-    initialMeta: undefined,
-    load: async (context) => {
-      const cfg = await context.sdk.api
-        .rpc(AntigravityAccountsRpc)
-        .getConfig({})
-        .catch(() => DEFAULT_ANTIGRAVITY_SETTINGS)
-
-      return {
-        meta: undefined,
-        value: {
-          ...DEFAULT_ANTIGRAVITY_SETTINGS,
-          ...cfg,
-        },
-      }
-    },
-    write: async (value, context) => {
-      await context.sdk.api.rpc(AntigravityAccountsRpc).updateConfig(value)
-    },
-    onError: (failure) =>
-      showToast({
-        variant: "error",
-        title: language.t("common.requestFailed"),
-        description:
-          failure.kind === "timeout"
-            ? language.t("home.sessions.load.timeout")
-            : failure.message || language.t("common.requestFailed"),
-      }),
-  })
-
-  return {
-    current: setting.value,
-    update: <K extends keyof AntigravitySettings>(key: K, value: AntigravitySettings[K]) => {
-      setting.select({ ...setting.value(), [key]: value })
-    },
-  }
-}
-
 export type ShellSettingsController = ReturnType<typeof createServerShellController>
 
 export type CompactionModelSettingsController = ReturnType<typeof createServerCompactionModelController>
 
 export type ObjectivesSettingsController = ReturnType<typeof createServerObjectivesController>
-
-export type AntigravitySettingsController = ReturnType<typeof createServerAntigravityController>
 
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 
