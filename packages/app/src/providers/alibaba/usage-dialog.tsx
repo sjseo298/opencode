@@ -2,34 +2,113 @@ import { AlibabaUsageRpc, formatCycleProgress, formatQuotaPercent, type AlibabaU
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogTitle } from "@opencode/ui/dialog"
-import { Show, createMemo, createSignal, onMount } from "solid-js"
+import { TextInput } from "@opencode/ui/text-input"
+import { Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
+import { usePlatform } from "@/runtime/platform/platform"
 import { useServerSDK } from "@/runtime/server/client"
 
 export function DialogAlibabaUsage(props: { directory?: string }) {
   const sdk = useServerSDK()
   const dialog = useDialog()
   const language = useLanguage()
+  const platform = usePlatform()
   const rpc = () => sdk.api.rpc(AlibabaUsageRpc)
+  const callOpts = () => (props.directory ? { location: { directory: props.directory } } : undefined)
 
   const [loading, setLoading] = createSignal(true)
   const [data, setData] = createSignal<AlibabaUsage.TokenPlan>()
   const [error, setError] = createSignal<string>()
+  const [loginSession, setLoginSession] = createSignal<{ url: string; state: string }>()
+  const [manualInput, setManualInput] = createSignal("")
+  const [submitting, setSubmitting] = createSignal(false)
+
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = undefined
+    }
+  }
+
+  onCleanup(() => {
+    stopPolling()
+    const active = loginSession()
+    if (active) void rpc().cancelLogin({ state: active.state }, callOpts()).catch(() => {})
+  })
 
   const load = async (refresh = false) => {
     setLoading(true)
     setError(undefined)
     try {
-      const result = await rpc().tokenPlan(
-        { refresh },
-        props.directory ? { location: { directory: props.directory } } : undefined,
-      )
+      const result = await rpc().tokenPlan({ refresh }, callOpts())
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
+  }
+
+  const startLogin = async () => {
+    stopPolling()
+    setError(undefined)
+    try {
+      const started = await rpc().startLogin({}, callOpts())
+      setLoginSession({ url: started.url, state: started.state })
+      platform.openExternal(started.url)
+
+      pollTimer = setInterval(async () => {
+        try {
+          const status = await rpc().loginStatus({ state: started.state }, callOpts())
+          if (status.status === "complete") {
+            stopPolling()
+            setLoginSession(undefined)
+            setManualInput("")
+            await load(true)
+          } else if (status.status === "expired" || status.status === "error") {
+            stopPolling()
+            setLoginSession(undefined)
+            setError(status.message ?? "Login expired")
+          }
+        } catch {
+          // continue polling
+        }
+      }, 1200)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const submitManual = async () => {
+    const active = loginSession()
+    const raw = manualInput().trim()
+    if (!active || !raw) return
+    setSubmitting(true)
+    setError(undefined)
+    try {
+      const result = await rpc().completeLogin({ state: active.state, input: raw }, callOpts())
+      if (!result.ok) {
+        setError(result.message ?? "Could not complete login")
+        return
+      }
+      stopPolling()
+      setLoginSession(undefined)
+      setManualInput("")
+      await load(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const logout = async () => {
+    stopPolling()
+    await rpc().logout({}, callOpts())
+    setLoginSession(undefined)
+    await load(true)
   }
 
   onMount(() => {
@@ -55,7 +134,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
           {(err) => <div class="text-v2-state-fg-danger">{err()}</div>}
         </Show>
 
-        <Show when={!loading() && !error() && data()}>
+        <Show when={!loading() && data()}>
           {(item) => (
             <Show
               when={item().ok}
@@ -69,9 +148,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
               <div class="flex flex-col gap-3">
                 <div class="flex items-center justify-between text-12-regular text-text-muted">
                   <span>{language.t("dialog.alibabaUsage.monthlyQuota")}</span>
-                  <span>
-                    {[item().site, item().region, item().profile].filter(Boolean).join(" · ")}
-                  </span>
+                  <span>{[item().site, item().region].filter(Boolean).join(" · ")}</span>
                 </div>
 
                 <div class="h-2.5 w-full overflow-hidden rounded-full bg-surface-raised-base">
@@ -112,13 +189,51 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
           )}
         </Show>
 
-        <div class="flex items-center justify-end gap-2 pt-2">
-          <Button variant="outline" size="small" disabled={loading()} onClick={() => void load(true)}>
-            {language.t("dialog.alibabaUsage.refresh")}
-          </Button>
-          <Button variant="contrast" size="small" onClick={() => dialog.close()}>
-            {language.t("common.close")}
-          </Button>
+        <Show when={loginSession()}>
+          {(session) => (
+            <div class="flex flex-col gap-2 rounded-md border border-border-base bg-surface-base p-3 text-12-regular">
+              <div class="font-medium text-text-base">{language.t("dialog.alibabaUsage.loginUrlTitle")}</div>
+              <div class="break-all select-all text-text-muted">{session().url}</div>
+              <div class="text-text-muted">{language.t("dialog.alibabaUsage.manualHint")}</div>
+              <div class="flex items-center gap-2 pt-1">
+                <TextInput
+                  class="flex-1"
+                  value={manualInput()}
+                  onChange={setManualInput}
+                  placeholder={language.t("dialog.alibabaUsage.manualPlaceholder")}
+                />
+                <Button
+                  variant="contrast"
+                  size="small"
+                  disabled={submitting() || !manualInput().trim()}
+                  onClick={() => void submitManual()}
+                >
+                  {language.t("dialog.alibabaUsage.submitManual")}
+                </Button>
+              </div>
+            </div>
+          )}
+        </Show>
+
+        <div class="flex items-center justify-between gap-2 pt-2">
+          <div class="flex items-center gap-2">
+            <Button variant="outline" size="small" onClick={() => void startLogin()}>
+              {data()?.ok ? language.t("dialog.alibabaUsage.reconnect") : language.t("dialog.alibabaUsage.connect")}
+            </Button>
+            <Show when={data()?.ok}>
+              <Button variant="ghost-muted" size="small" onClick={() => void logout()}>
+                {language.t("dialog.alibabaUsage.disconnect")}
+              </Button>
+            </Show>
+          </div>
+          <div class="flex items-center gap-2">
+            <Button variant="outline" size="small" disabled={loading()} onClick={() => void load(true)}>
+              {language.t("dialog.alibabaUsage.refresh")}
+            </Button>
+            <Button variant="contrast" size="small" onClick={() => dialog.close()}>
+              {language.t("common.close")}
+            </Button>
+          </div>
         </div>
       </div>
     </Dialog>

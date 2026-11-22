@@ -1,68 +1,75 @@
 import { describe, expect, test } from "bun:test"
 import {
-  buildUsageCommandArgs,
-  parseAuthStatus,
-  parseTokenPlanResult,
+  GATEWAY_REGION,
+  GATEWAY_SITE,
+  buildGatewayEndpoint,
+  buildGatewayParams,
+  parseGatewayUsageResponse,
+  parseManualLoginInput,
 } from "../../../src/plugin/builtin/alibaba-usage.js"
 
-describe("AlibabaUsagePlugin helpers", () => {
-  test("parses bl auth status with console site and region", () => {
-    const status = parseAuthStatus(
-      JSON.stringify({
-        authenticated: true,
-        config: "token-plan",
-        console: { region: "ap-southeast-1", site: "international" },
-      }),
-    )
-    expect(status?.config).toBe("token-plan")
-    expect(status?.console?.site).toBe("international")
-    expect(status?.console?.region).toBe("ap-southeast-1")
-    expect(buildUsageCommandArgs(status)).toEqual([
-      "usage",
-      "token-plan",
-      "--output",
-      "json",
-      "--config",
-      "token-plan",
-      "--console-site",
-      "international",
-      "--console-region",
-      "ap-southeast-1",
-    ])
+describe("AlibabaUsagePlugin native gateway helpers", () => {
+  test("builds international Singapore gateway endpoint and params", () => {
+    const endpoint = buildGatewayEndpoint()
+    expect(endpoint).toContain("https://bailian-singapore-cs.alibabacloud.com/cli/api.json")
+    expect(endpoint).toContain("action=IntlBroadScopeAspnGateway")
+    expect(endpoint).toContain("product=sfm_bailian")
+
+    const params = JSON.parse(buildGatewayParams(97572))
+    expect(params.Api).toBe("zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage")
+    expect(params.V).toBe("1.0")
+    expect(params.Data.cornerstoneParam.switchAgent).toBe(97572)
   })
 
-  test("parses bl usage token-plan JSON payload", () => {
-    const result = parseTokenPlanResult(
+  test("parses gateway Token Plan usage payload", () => {
+    const result = parseGatewayUsageResponse(
       JSON.stringify({
-        per1MonthPercentage: 12.345,
-        per1MonthResetTime: 1797955200000,
-        hasQuotaData: true,
+        data: {
+          success: true,
+          per1MonthPercentage: 12.345,
+          per1MonthResetTime: 1797955200000,
+        },
       }),
       1000,
-      { config: "token-plan", console: { region: "ap-southeast-1", site: "international" } },
     )
     expect(result.ok).toBe(true)
     expect(result.hasQuotaData).toBe(true)
     expect(result.usedPercent).toBe(12.345)
     expect(result.remainingPercent).toBeCloseTo(87.655, 5)
     expect(result.resetAt).toBe(1797955200000)
-    expect(result.region).toBe("ap-southeast-1")
-    expect(result.site).toBe("international")
+    expect(result.region).toBe(GATEWAY_REGION)
+    expect(result.site).toBe(GATEWAY_SITE)
   })
 
-  test("parses bl CLI JSON error with hint", () => {
-    const result = parseTokenPlanResult(
+  test("detects NotLogined gateway error as needsAuth", () => {
+    const result = parseGatewayUsageResponse(
       JSON.stringify({
-        error: {
-          code: 3,
-          message: "No console access token found.",
-          hint: "Run `bl auth login --console --config token-plan`.",
+        data: {
+          success: false,
+          errorCode: "NotLogined",
+          errorMsg: "Session expired",
         },
       }),
       1000,
     )
     expect(result.ok).toBe(false)
-    expect(result.error).toBe("No console access token found.")
-    expect(result.hint).toContain("bl auth login --console")
+    expect(result.needsAuth).toBe(true)
+    expect(result.error).toContain("expired or is not connected")
+  })
+
+  test("parses manual login redirect URL, JSON, query string, and raw token", () => {
+    const fromUrl = parseManualLoginInput(
+      "http://127.0.0.1:54321/callback?access_token=tok_abc123456789&console_region=ap-southeast-1&console_switch_agent=97572&state=st1",
+    )
+    expect(fromUrl?.accessToken).toBe("tok_abc123456789")
+    expect(fromUrl?.region).toBe("ap-southeast-1")
+    expect(fromUrl?.switchAgent).toBe(97572)
+    expect(fromUrl?.state).toBe("st1")
+
+    const fromJson = parseManualLoginInput(JSON.stringify({ access_token: "tok_json123456" }))
+    expect(fromJson?.accessToken).toBe("tok_json123456")
+
+    const fromRaw = parseManualLoginInput("tok_raw_1234567890")
+    expect(fromRaw?.accessToken).toBe("tok_raw_1234567890")
   })
 })

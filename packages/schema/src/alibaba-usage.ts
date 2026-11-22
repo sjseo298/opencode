@@ -7,12 +7,12 @@ import { optional } from "./schema.js"
 export const TokenPlanSchema = Schema.Struct({
   ok: Schema.Boolean,
   hasQuotaData: Schema.Boolean,
+  needsAuth: optional(Schema.Boolean),
   usedPercent: Schema.Number,
   remainingPercent: Schema.Number,
   resetAt: optional(Schema.Number),
   region: optional(Schema.String),
   site: optional(Schema.String),
-  profile: optional(Schema.String),
   checkedAt: Schema.Number,
   error: optional(Schema.String),
   hint: optional(Schema.String),
@@ -20,12 +20,43 @@ export const TokenPlanSchema = Schema.Struct({
 
 export type TokenPlan = typeof TokenPlanSchema.Type
 
+export const LoginStartSchema = Schema.Struct({
+  url: Schema.String,
+  state: Schema.String,
+  port: Schema.Number,
+}).annotate({ identifier: "AlibabaUsage.LoginStart" })
+
+export const LoginStatusSchema = Schema.Struct({
+  status: Schema.Literals(["pending", "complete", "expired", "error"]),
+  message: optional(Schema.String),
+}).annotate({ identifier: "AlibabaUsage.LoginStatus" })
+
 export const AlibabaUsageRpc = Rpc.define({
   id: "alibaba.usage",
   methods: {
     tokenPlan: {
       input: Schema.toStandardSchemaV1(Schema.Struct({ refresh: optional(Schema.Boolean) })),
       output: Schema.toStandardSchemaV1(TokenPlanSchema),
+    },
+    startLogin: {
+      input: Schema.toStandardSchemaV1(Schema.Struct({})),
+      output: Schema.toStandardSchemaV1(LoginStartSchema),
+    },
+    loginStatus: {
+      input: Schema.toStandardSchemaV1(Schema.Struct({ state: Schema.String })),
+      output: Schema.toStandardSchemaV1(LoginStatusSchema),
+    },
+    completeLogin: {
+      input: Schema.toStandardSchemaV1(Schema.Struct({ state: Schema.String, input: Schema.String })),
+      output: Schema.toStandardSchemaV1(Schema.Struct({ ok: Schema.Boolean, message: optional(Schema.String) })),
+    },
+    cancelLogin: {
+      input: Schema.toStandardSchemaV1(Schema.Struct({ state: Schema.String })),
+      output: Schema.toStandardSchemaV1(Schema.Struct({ ok: Schema.Boolean })),
+    },
+    logout: {
+      input: Schema.toStandardSchemaV1(Schema.Struct({})),
+      output: Schema.toStandardSchemaV1(Schema.Struct({ ok: Schema.Boolean })),
     },
   },
   events: {},

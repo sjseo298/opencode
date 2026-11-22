@@ -10,9 +10,16 @@ import {
 import { SHARED_SERVER_SETTINGS, SLASH_COMMAND_PARITY } from "../src/surface-parity.js"
 
 describe("cross-surface shared contracts", () => {
-  test("AlibabaUsageRpc exposes tokenPlan method and cycle helpers", () => {
+  test("AlibabaUsageRpc exposes tokenPlan and login methods with cycle helpers", () => {
     expect(AlibabaUsageRpc.id).toBe("alibaba.usage")
-    expect(Object.keys(AlibabaUsageRpc.methods)).toEqual(["tokenPlan"])
+    expect(Object.keys(AlibabaUsageRpc.methods).sort()).toEqual([
+      "cancelLogin",
+      "completeLogin",
+      "loginStatus",
+      "logout",
+      "startLogin",
+      "tokenPlan",
+    ])
     expect(formatQuotaPercent(0)).toBe("0%")
     expect(formatQuotaPercent(0.000025)).toBe("<0.01%")
     expect(formatQuotaPercent(42.5)).toBe("42.50%")

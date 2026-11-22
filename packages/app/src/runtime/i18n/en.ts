@@ -1604,6 +1604,14 @@ export const dict = {
   "dialog.alibabaUsage.cyclePosition": "Cycle position",
   "dialog.alibabaUsage.cutoff": "Cutoff / Reset",
   "dialog.alibabaUsage.refresh": "Refresh",
+  "dialog.alibabaUsage.connect": "Connect Alibaba Cloud",
+  "dialog.alibabaUsage.reconnect": "Reconnect",
+  "dialog.alibabaUsage.disconnect": "Disconnect",
+  "dialog.alibabaUsage.loginUrlTitle": "Login URL (open here or on another machine):",
+  "dialog.alibabaUsage.manualHint":
+    "If you sign in on another machine, copy the redirected 127.0.0.1 URL (or access_token) and paste it below:",
+  "dialog.alibabaUsage.manualPlaceholder": "http://127.0.0.1:... or access_token",
+  "dialog.alibabaUsage.submitManual": "Verify & Connect",
 
   "command.session.rewind": "Undo last agent steps and repeat",
   "command.session.rewind.description": "Undo the last N LLM steps in this turn and repeat them",
