@@ -1,11 +1,11 @@
-import { AlibabaUsageRpc, NIGHT_WINDOW_LABEL, type AlibabaUsage } from "@opencode/schema/alibaba-usage"
+import { AlibabaUsageRpc, computeNightWindowInfo, type AlibabaUsage } from "@opencode/schema/alibaba-usage"
 import { writeClipboard } from "@opencode/session-ui/copy"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogTitle } from "@opencode/ui/dialog"
 import { ProviderIcon } from "@opencode/ui/provider-icon"
 import { TextInput } from "@opencode/ui/text-input"
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useServerSDK } from "@/runtime/server/client"
@@ -17,6 +17,8 @@ export function DialogAlibabaDiscounts(props: { directory?: string }) {
   const platform = usePlatform()
   const rpc = () => sdk.api.rpc(AlibabaUsageRpc)
   const callOpts = () => (props.directory ? { location: { directory: props.directory } } : undefined)
+
+  const nightWindow = createMemo(() => computeNightWindowInfo())
 
   const [loading, setLoading] = createSignal(true)
   const [data, setData] = createSignal<AlibabaUsage.DiscountedModels>()
@@ -158,11 +160,6 @@ export function DialogAlibabaDiscounts(props: { directory?: string }) {
         </Show>
         <span class="ml-auto text-12-regular text-text-muted">{model.provider}</span>
       </div>
-      <Show when={model.badgeLabel}>
-        <div class="text-12-regular text-text-muted">
-          <code class="font-mono text-[11px]">{model.modelId}</code> · {model.badgeLabel}
-        </div>
-      </Show>
     </div>
   )
 
@@ -201,7 +198,9 @@ export function DialogAlibabaDiscounts(props: { directory?: string }) {
               </div>
 
               <div class="text-12-regular leading-5 text-text-muted">
-                {language.t("dialog.alibabaDiscounts.nightWindow", { window: NIGHT_WINDOW_LABEL })}
+                {nightWindow().isActive
+                  ? language.t("dialog.alibabaDiscounts.nightWindowActive", { window: nightWindow().label, countdown: nightWindow().countdown })
+                  : language.t("dialog.alibabaDiscounts.nightWindowInactive", { window: nightWindow().label, countdown: nightWindow().countdown })}
               </div>
 
               <div class="flex flex-col gap-2">

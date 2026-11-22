@@ -236,6 +236,78 @@ export function formatQuotaPercent(value: number): string {
 /** Night-window promotion hours used by Token Plan discounts, in UTC+8. */
 export const NIGHT_WINDOW_LABEL = "22:00–08:00 (UTC+8)"
 
+const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
+
+/** Night window in UTC: every day from 14:00 to 00:00 next day (10 hours). */
+const WINDOW_START_UTC_HOUR = 14
+const WINDOW_DURATION_HOURS = 10
+
+/** Dynamic night-window status converted to the user's local timezone. */
+export interface NightWindowInfo {
+  /** Local start time, e.g. "09:00". */
+  readonly localStart: string
+  /** Local end time, e.g. "19:00". */
+  readonly localEnd: string
+  /** Combined label like "09:00–19:00". */
+  readonly label: string
+  /** Whether the current moment falls inside the 10-hour discount window. */
+  readonly isActive: boolean
+  /** Human-readable countdown: "2h 45m left" when active, "3h 15m" when waiting. */
+  readonly countdown: string
+}
+
+function formatLocalTime(utcMs: number): string {
+  return new Date(utcMs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
+}
+
+function formatCountdown(totalMs: number, suffix: string): string {
+  const totalMinutes = Math.floor(totalMs / MINUTE_MS)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return `${hours}h ${minutes}m ${suffix}`
+}
+
+/**
+ * Computes the night discount window status in the user's local timezone.
+ * The Alibaba Token Plan night window runs daily from 22:00 to 08:00 next day
+ * in UTC+8, which maps to 14:00–00:00 UTC (a fixed 10-hour span every day).
+ */
+export function computeNightWindowInfo(nowMs = Date.now()): NightWindowInfo {
+  const utcNow = nowMs
+  // Midnight UTC of the current date
+  const utcMidnight = new Date(Date.UTC(new Date(utcNow).getUTCFullYear(), new Date(utcNow).getUTCMonth(), new Date(utcNow).getUTCDate())).getTime()
+
+  // Most recent 14:00 UTC boundary
+  let windowStartUtc = utcMidnight + WINDOW_START_UTC_HOUR * HOUR_MS
+
+  // If we haven't reached 14:00 UTC today, the relevant window started yesterday
+  if (utcNow < windowStartUtc) {
+    windowStartUtc -= 24 * HOUR_MS
+  }
+
+  const windowEndUtc = windowStartUtc + WINDOW_DURATION_HOURS * HOUR_MS
+  const isActive = utcNow >= windowStartUtc && utcNow < windowEndUtc
+
+  // When active, the next start is tomorrow's window; when waiting, it's this window
+  const nextStartUtc = isActive ? windowStartUtc + 24 * HOUR_MS : windowStartUtc
+
+  const localStart = formatLocalTime(windowStartUtc)
+  const localEnd = formatLocalTime(windowEndUtc)
+
+  const countdown = isActive
+    ? formatCountdown(windowEndUtc - utcNow, "left")
+    : formatCountdown(nextStartUtc - utcNow, "")
+
+  return {
+    localStart,
+    localEnd,
+    label: `${localStart}–${localEnd}`,
+    isActive,
+    countdown,
+  }
+}
+
 export interface BadgeDiscount {
   readonly percentOff?: number
   readonly nightOnly: boolean

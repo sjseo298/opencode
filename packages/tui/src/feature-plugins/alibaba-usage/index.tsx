@@ -2,8 +2,8 @@ import { Plugin } from "@opencode/plugin/tui"
 import {
   AlibabaUsageRpc,
   computeBudgetBreakdown,
+  computeNightWindowInfo,
   formatQuotaPercent,
-  NIGHT_WINDOW_LABEL,
   type AlibabaUsage,
   type QuotaHealth,
 } from "@opencode/schema/alibaba-usage"
@@ -641,6 +641,8 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
     ],
   }))
 
+  const nightWindow = createMemo(() => computeNightWindowInfo())
+
   const renderButton = (action: ButtonAction) => {
     const active = () => selectedAction() === action.id
     return (
@@ -682,11 +684,6 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
         </Show>
         <text fg={theme.text.muted}>{model.provider}</text>
       </box>
-      <Show when={model.badgeLabel}>
-        <text fg={theme.text.muted}>
-          {model.modelId} · {model.badgeLabel}
-        </text>
-      </Show>
     </box>
   )
 
@@ -759,7 +756,9 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
                 </box>
 
                 <text fg={theme.text.muted} wrapMode="word">
-                  Night discounts apply {NIGHT_WINDOW_LABEL}. Percentages are the real credit savings.
+                  {nightWindow().isActive
+                    ? `Night discounts active: ${nightWindow().label} (${nightWindow().countdown}).`
+                    : `Night discounts: ${nightWindow().label}. Starts in ${nightWindow().countdown}.`}
                 </text>
 
                 <Show
