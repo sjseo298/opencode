@@ -41,6 +41,28 @@ describe("AlibabaUsagePlugin native gateway helpers", () => {
     expect(result.site).toBe(GATEWAY_SITE)
   })
 
+  test("unwraps DataV2.data.data from IntlBroadScopeAspnGateway response", () => {
+    const result = parseGatewayUsageResponse(
+      JSON.stringify({
+        data: {
+          DataV2: {
+            data: {
+              data: {
+                per1MonthPercentage: 0.000025280658015,
+                per1MonthResetTime: 1797955200000,
+              },
+            },
+          },
+        },
+      }),
+      1000,
+    )
+    expect(result.ok).toBe(true)
+    expect(result.hasQuotaData).toBe(true)
+    expect(result.usedPercent).toBeCloseTo(0.000025280658015, 10)
+    expect(result.resetAt).toBe(1797955200000)
+  })
+
   test("detects NotLogined gateway error as needsAuth", () => {
     const result = parseGatewayUsageResponse(
       JSON.stringify({

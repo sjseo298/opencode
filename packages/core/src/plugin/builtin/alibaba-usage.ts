@@ -33,15 +33,32 @@ export type StoredSession = typeof StoredSessionSchema.Type
 
 const decodeStoredSession = Schema.decodeUnknownOption(StoredSessionSchema)
 
+const UsageFieldsSchema = Schema.Struct({
+  success: Schema.optionalKey(Schema.Boolean),
+  errorCode: Schema.optionalKey(Schema.Unknown),
+  errorMsg: Schema.optionalKey(Schema.String),
+  message: Schema.optionalKey(Schema.String),
+  per1MonthPercentage: Schema.optionalKey(Schema.Number),
+  per1MonthResetTime: Schema.optionalKey(Schema.Number),
+})
+
+const DataV2InnerSchema = Schema.Struct({
+  ...UsageFieldsSchema.fields,
+  data: Schema.optionalKey(UsageFieldsSchema),
+})
+
 const GatewayResponseSchema = Schema.Struct({
+  ...UsageFieldsSchema.fields,
   data: Schema.optionalKey(
     Schema.Struct({
-      success: Schema.optionalKey(Schema.Boolean),
-      errorCode: Schema.optionalKey(Schema.Unknown),
-      errorMsg: Schema.optionalKey(Schema.String),
-      message: Schema.optionalKey(Schema.String),
-      per1MonthPercentage: Schema.optionalKey(Schema.Number),
-      per1MonthResetTime: Schema.optionalKey(Schema.Number),
+      ...UsageFieldsSchema.fields,
+      data: Schema.optionalKey(UsageFieldsSchema),
+      DataV2: Schema.optionalKey(
+        Schema.Struct({
+          ...UsageFieldsSchema.fields,
+          data: Schema.optionalKey(DataV2InnerSchema),
+        }),
+      ),
     }),
   ),
 })
@@ -69,14 +86,24 @@ export function buildGatewayEndpoint(): string {
   return `${GATEWAY_BASE}/cli/api.json?action=${GATEWAY_ACTION}&product=${GATEWAY_PRODUCT}&api=${encodeURIComponent(TOKEN_PLAN_USAGE_API)}`
 }
 
+function unwrapGatewayUsage(parsed: typeof GatewayResponseSchema.Type) {
+  const data = parsed.data
+  if (!data) return parsed
+  const dataV2 = data.DataV2
+  if (dataV2) {
+    const inner = dataV2.data
+    return inner?.data ?? inner ?? dataV2
+  }
+  return data.data ?? data
+}
+
 export function parseGatewayUsageResponse(
   raw: string,
   checkedAt: number,
   region = GATEWAY_REGION,
 ): AlibabaUsage.TokenPlan {
   const parsed = Option.getOrUndefined(decodeGatewayResponse(raw))
-  const inner = parsed?.data
-  if (!inner) {
+  if (!parsed) {
     return {
       ok: false,
       hasQuotaData: false,
@@ -89,6 +116,27 @@ export function parseGatewayUsageResponse(
     }
   }
 
+  const topData = parsed.data
+  if (topData?.success === false && topData.errorCode !== undefined) {
+    const code = typeof topData.errorCode === "string" ? topData.errorCode : JSON.stringify(topData.errorCode)
+    const notLoggedIn = code.includes("NotLogined")
+    return {
+      ok: false,
+      hasQuotaData: false,
+      needsAuth: notLoggedIn,
+      usedPercent: 0,
+      remainingPercent: 100,
+      region,
+      site: GATEWAY_SITE,
+      checkedAt,
+      error: notLoggedIn
+        ? "Alibaba Cloud console session expired or is not connected."
+        : topData.errorMsg || topData.message || `Gateway error (${code})`,
+      hint: notLoggedIn ? "Connect your Alibaba Cloud international account to continue." : undefined,
+    }
+  }
+
+  const inner = unwrapGatewayUsage(parsed)
   if (inner.success === false && inner.errorCode !== undefined) {
     const code = typeof inner.errorCode === "string" ? inner.errorCode : JSON.stringify(inner.errorCode)
     const notLoggedIn = code.includes("NotLogined")
