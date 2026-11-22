@@ -64,6 +64,52 @@ describe("cross-surface shared contracts", () => {
     expect(critical.health).toBe("critical")
   })
 
+  test("stateless daily/weekly pace estimates derive only from monthly percentage and reset time", () => {
+    const nov22 = new Date(2026, 10, 22, 11, 0, 0).getTime()
+    const dec22 = new Date(2026, 11, 22, 11, 0, 0).getTime()
+    const day7 = nov22 + 6 * 86_400_000
+    const day8 = nov22 + 7 * 86_400_000
+    const baseDaily = 100 / 30
+
+    // Unused quota: zero estimate, no exhaustion projection, everything within budget
+    const fresh = computeBudgetBreakdown(0, dec22, day7)
+    expect(fresh.estimatedDailyPercent).toBe(0)
+    expect(fresh.estimatedWeeklyPercent).toBe(0)
+    expect(fresh.daysUntilCycleExhaustion).toBeUndefined()
+    expect(fresh.dailyPace).toBe("within-budget")
+    expect(fresh.weeklyPace).toBe("within-budget")
+
+    // 10% after 6 days: average 1.67%/day under the 3.33% base, inside the pre-today schedule (≤ 20%)
+    const ahead = computeBudgetBreakdown(10, dec22, day7)
+    expect(ahead.estimatedDailyPercent).toBeCloseTo(10 / 6, 6)
+    expect(ahead.estimatedWeeklyPercent).toBeCloseTo(70 / 6, 6)
+    expect(ahead.daysUntilCycleExhaustion).toBeCloseTo(90 / (10 / 6), 6)
+    expect(ahead.dailyPace).toBe("within-budget")
+    // Week 1 is still in progress, so any spend falls inside the current window
+    expect(ahead.weeklyPace).toBe("using-window")
+
+    // 22% at day 7: beyond the 20% scheduled before today but inside today's allowance (≤ 23.33%)
+    const today = computeBudgetBreakdown(22, dec22, day7)
+    expect(today.dailyPace).toBe("using-window")
+    expect(today.weeklyPace).toBe("using-window")
+
+    // 25% at day 7: past everything scheduled through the end of today and of week 1
+    const over = computeBudgetBreakdown(25, dec22, day7)
+    expect(over.dailyPace).toBe("over-pace")
+    expect(over.weeklyPace).toBe("over-pace")
+
+    // Crossing into day 8 resets the daily window: 22% is again covered by prior days' schedule
+    const rolled = computeBudgetBreakdown(22, dec22, day8)
+    expect(rolled.dailyPace).toBe("within-budget")
+    expect(rolled.weeklyPace).toBe("within-budget")
+
+    // Early day 1: elapsed days floored at one hour so the average cannot explode; usage stays in today's window
+    const early = computeBudgetBreakdown(0.1, dec22, nov22 + 30 * 60_000)
+    expect(early.dailyPace).toBe("using-window")
+    expect(early.estimatedDailyPercent).toBeCloseTo(0.1 / (1 / 24), 6)
+    expect(baseDaily).toBeGreaterThan(0)
+  })
+
   test("DynamicContextRpc exposes canonical snapshot, setLimit, and refresh methods", () => {
     expect(DynamicContextRpc.id).toBe("llamacpp.context")
     expect(Object.keys(DynamicContextRpc.methods).sort()).toEqual(["getSnapshot", "refresh", "setLimit"])

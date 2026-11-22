@@ -6,6 +6,7 @@ import {
   formatQuotaPercent,
   type AlibabaUsage,
   type QuotaHealth,
+  type QuotaPace,
 } from "@opencode/schema/alibaba-usage"
 import { RGBA, TextAttributes } from "@opentui/core"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
@@ -22,14 +23,14 @@ type ButtonAction = {
   readonly run: () => void
 }
 
-function buildStackedBar(basePercent: number, adjustedPercent: number, scaleMax: number): {
+function buildStackedBar(usedPercent: number, limitPercent: number, scaleMax: number): {
   base: string
   cushion: string
   empty: string
 } {
   const safeMax = Math.max(1, scaleMax)
-  const baseCount = Math.min(BAR_WIDTH, Math.round((Math.min(basePercent, adjustedPercent) / safeMax) * BAR_WIDTH))
-  const totalCount = Math.min(BAR_WIDTH, Math.round((adjustedPercent / safeMax) * BAR_WIDTH))
+  const baseCount = Math.min(BAR_WIDTH, Math.round((Math.min(usedPercent, limitPercent) / safeMax) * BAR_WIDTH))
+  const totalCount = Math.min(BAR_WIDTH, Math.round((limitPercent / safeMax) * BAR_WIDTH))
   const cushionCount = Math.max(0, totalCount - baseCount)
   return {
     base: "█".repeat(baseCount),
@@ -242,19 +243,35 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     }
   })
 
+  const weeklyCap = createMemo(() => {
+    const b = budget()
+    if (!b) return 0
+    return Math.min(b.remainingPercent, b.baseWeeklyPercent + Math.max(0, b.cushionPercent))
+  })
+
   const weeklyBar = createMemo(() => {
     const b = budget()
     if (!b) return { base: "", cushion: "", empty: "░".repeat(BAR_WIDTH) }
-    const scale = Math.max(b.baseWeeklyPercent, b.adjustedWeeklyPercent, 25)
-    return buildStackedBar(b.baseWeeklyPercent, b.adjustedWeeklyPercent, scale)
+    const scale = Math.max(b.estimatedWeeklyPercent, weeklyCap(), 25)
+    return buildStackedBar(b.estimatedWeeklyPercent, weeklyCap(), scale)
   })
 
   const dailyBar = createMemo(() => {
     const b = budget()
     if (!b) return { base: "", cushion: "", empty: "░".repeat(BAR_WIDTH) }
-    const scale = Math.max(b.baseDailyPercent, b.adjustedDailyPercent, 5)
-    return buildStackedBar(b.baseDailyPercent, b.adjustedDailyPercent, scale)
+    const scale = Math.max(b.estimatedDailyPercent, b.maxTodayWithCushion, 5)
+    return buildStackedBar(b.estimatedDailyPercent, b.maxTodayWithCushion, scale)
   })
+
+  const paceMeta = (pace: QuotaPace) => {
+    if (pace === "over-pace") return { label: "OVER PACE", color: theme.text.feedback.error.base }
+    if (pace === "within-budget") return { label: "UNDER PACE", color: theme.text.feedback.success.base }
+    const b = budget()
+    return {
+      label: "IN QUOTA",
+      color: b && b.cushionPercent < 0 ? theme.text.feedback.warning.base : theme.text.feedback.success.base,
+    }
+  }
 
   const renderButton = (action: ButtonAction) => {
     const active = () => selectedAction() === action.id
@@ -388,40 +405,46 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
                       <box flexDirection="column" gap={1}>
                         <box flexDirection="column" gap={0}>
                           <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-                            Weekly Allowance (with cushion)
+                            Weekly Allowance (with cushion){" "}
+                            <span style={{ fg: paceMeta(b().weeklyPace).color }}>[{paceMeta(b().weeklyPace).label}]</span>
                           </text>
                           <box flexDirection="row" gap={1}>
-                            <text fg={statusColor()}>{weeklyBar().base}</text>
+                            <text fg={paceMeta(b().weeklyPace).color}>{weeklyBar().base}</text>
                             <Show when={weeklyBar().cushion.length > 0}>
                               <text fg={theme.text.feedback.success.base}>{weeklyBar().cushion}</text>
                             </Show>
                             <text fg={theme.text.muted}>{weeklyBar().empty}</text>
                             <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-                              {formatQuotaPercent(b().adjustedWeeklyPercent)}/wk
+                              avg {formatQuotaPercent(b().estimatedWeeklyPercent)}/wk
                             </text>
-                            <text fg={theme.text.muted}>(base {formatQuotaPercent(b().baseWeeklyPercent)}/wk)</text>
+                            <text fg={theme.text.muted}>
+                              (left ~{formatQuotaPercent(Math.max(0, weeklyCap() - b().estimatedWeeklyPercent))} ·
+                              quota {formatQuotaPercent(weeklyCap())}/wk · base {formatQuotaPercent(b().baseWeeklyPercent)})
+                            </text>
                           </box>
                         </box>
 
                         <box flexDirection="column" gap={0}>
                           <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
                             Daily Allowance{" "}
+                            <span style={{ fg: paceMeta(b().dailyPace).color }}>[{paceMeta(b().dailyPace).label}]</span>{" "}
                             <span style={{ fg: b().cushionPercent >= 0 ? theme.text.feedback.success.base : statusColor() }}>
                               ({cushionText()})
                             </span>
                           </text>
                           <box flexDirection="row" gap={1}>
-                            <text fg={statusColor()}>{dailyBar().base}</text>
+                            <text fg={paceMeta(b().dailyPace).color}>{dailyBar().base}</text>
                             <Show when={dailyBar().cushion.length > 0}>
                               <text fg={theme.text.feedback.success.base}>{dailyBar().cushion}</text>
                             </Show>
                             <text fg={theme.text.muted}>{dailyBar().empty}</text>
                             <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-                              {formatQuotaPercent(b().adjustedDailyPercent)}/day
+                              avg {formatQuotaPercent(b().estimatedDailyPercent)}/day
                             </text>
                             <text fg={theme.text.muted}>
-                              (base {formatQuotaPercent(b().baseDailyPercent)}/day · max today{" "}
-                              {formatQuotaPercent(b().maxTodayWithCushion)})
+                              (left ~{formatQuotaPercent(Math.max(0, b().maxTodayWithCushion - b().estimatedDailyPercent))} ·
+                              cap {formatQuotaPercent(b().maxTodayWithCushion)}/day · base{" "}
+                              {formatQuotaPercent(b().baseDailyPercent)})
                             </text>
                           </box>
                         </box>
@@ -431,6 +454,18 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
                             Cycle: <b>Day {b().cycle.elapsedDays} of {b().cycle.cycleDays}</b> ({b().cycle.remainingDays}d
                             left) · Expected: ~{b().cycle.expectedPercent.toFixed(1)}%
                           </text>
+                          <Show when={b().daysUntilCycleExhaustion !== undefined}>
+                            <text
+                              fg={
+                                b().daysUntilCycleExhaustion! < b().cycle.remainingDays
+                                  ? statusColor()
+                                  : theme.text.feedback.success.base
+                              }
+                            >
+                              At avg pace the quota lasts ~{b().daysUntilCycleExhaustion!.toFixed(1)}d ·{" "}
+                              {b().cycle.remainingDays}d left in cycle
+                            </text>
+                          </Show>
                           <text fg={theme.text.muted}>
                             Period: {b().cycle.startLabel} → {b().cycle.resetLabel} ({b().cycle.countdownLabel})
                           </text>

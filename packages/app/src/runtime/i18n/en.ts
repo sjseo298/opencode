@@ -1594,7 +1594,7 @@ export const dict = {
   "dialog.planApproval.defaultModel": "current model",
 
   "command.alibaba.usage": "Alibaba Token Plan usage",
-  "command.alibaba.usage.description": "Inspect Alibaba Token Plan monthly quota, cycle pace, and cutoff date",
+  "command.alibaba.usage.description": "Inspect Alibaba Token Plan monthly quota, estimated daily/weekly pace, and cutoff date",
   "command.alibaba.discounts": "Alibaba Token Plan discounts",
   "command.alibaba.discounts.description": "See which Token Plan models are discounted and the night window",
 
@@ -1609,6 +1609,12 @@ export const dict = {
   "dialog.alibabaUsage.cushionPositive": "accumulated cushion",
   "dialog.alibabaUsage.cushionNegative": "over pace",
   "dialog.alibabaUsage.maxToday": "Max today w/ cushion",
+  "dialog.alibabaUsage.pace.under": "Under Pace",
+  "dialog.alibabaUsage.pace.inQuota": "In Quota",
+  "dialog.alibabaUsage.pace.over": "Over Pace",
+  "dialog.alibabaUsage.weeklySummary": "avg {{avg}}/wk · left ~{{left}} · quota {{quota}}/wk (base {{base}})",
+  "dialog.alibabaUsage.dailySummary": "avg {{avg}}/day · left ~{{left}} · cap {{cap}}/day (base {{base}})",
+  "dialog.alibabaUsage.quotaProjection": "At avg pace the quota lasts ~{{days}}d · {{remaining}}d left in cycle",
   "dialog.alibabaUsage.used": "used",
   "dialog.alibabaUsage.left": "left",
   "dialog.alibabaUsage.cyclePosition": "Cycle position",

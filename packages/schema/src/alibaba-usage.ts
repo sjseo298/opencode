@@ -108,6 +108,17 @@ export interface CycleProgress {
 
 export type QuotaHealth = "healthy" | "caution" | "critical"
 
+/**
+ * Stateless pace verdict for the current day or cycle-week, derived only from the
+ * server-reported cumulative monthly percentage (identical across machines).
+ * - `within-budget`: usage still fits inside the allowance of all elapsed days
+ *   before the current window, so the window's base is untouched (cushion saved).
+ * - `using-window`: the window's own scheduled allowance is being consumed.
+ * - `over-pace`: usage exceeds everything scheduled through the end of the window;
+ *   consumption is now eating into future days' budgets.
+ */
+export type QuotaPace = "within-budget" | "using-window" | "over-pace"
+
 export interface BudgetBreakdown {
   readonly cycle: CycleProgress
   readonly usedPercent: number
@@ -119,6 +130,14 @@ export interface BudgetBreakdown {
   readonly adjustedWeeklyPercent: number
   readonly cushionPercent: number
   readonly health: QuotaHealth
+  /** Average monthly-quota percentage consumed per elapsed cycle day (used ÷ exact days). */
+  readonly estimatedDailyPercent: number
+  /** Same average scaled to 7 days; may exceed the weekly base. */
+  readonly estimatedWeeklyPercent: number
+  readonly dailyPace: QuotaPace
+  readonly weeklyPace: QuotaPace
+  /** Days left at the average consumption pace before the full quota is used; undefined when unused. */
+  readonly daysUntilCycleExhaustion?: number
 }
 
 const DAY_MS = 86_400_000
@@ -182,7 +201,15 @@ export function formatCycleProgress(resetAt: number, now = Date.now()): CyclePro
   }
 }
 
-/** Computes daily/weekly budgets, accumulated cushion from unused days, and quota health. */
+/**
+ * Computes daily/weekly budgets, the accumulated cushion from unused days, an
+ * average-pace estimate (used ÷ elapsed days, scaled to day and week), a stateless
+ * pace verdict per window, a projection of days until exhaustion, and quota health.
+ *
+ * Everything derives purely from the server-reported monthly percentage, the reset
+ * time, and the current moment, so the result is identical across machines with no
+ * locally persisted history.
+ */
 export function computeBudgetBreakdown(
   usedPercent: number,
   resetAt: number,
@@ -210,6 +237,11 @@ export function computeBudgetBreakdown(
         ? "caution"
         : "healthy"
 
+  const estimatedDailyPercent = clampedUsed / elapsedCycleDays(cycle)
+  const estimatedWeeklyPercent = estimatedDailyPercent * 7
+  const daysUntilCycleExhaustion =
+    estimatedDailyPercent > 0 ? remainingPercent / estimatedDailyPercent : undefined
+
   return {
     cycle,
     usedPercent: clampedUsed,
@@ -221,7 +253,32 @@ export function computeBudgetBreakdown(
     adjustedWeeklyPercent,
     cushionPercent,
     health,
+    estimatedDailyPercent,
+    estimatedWeeklyPercent,
+    dailyPace: paceInWindow(clampedUsed, windowBounds(cycle.elapsedDays, 1, baseDailyPercent)),
+    weeklyPace: paceInWindow(clampedUsed, windowBounds(Math.ceil(cycle.elapsedDays / 7), 7, baseDailyPercent)),
+    ...(daysUntilCycleExhaustion !== undefined ? { daysUntilCycleExhaustion } : {}),
   }
+}
+
+/**
+ * Fractional cycle days elapsed. Floored at one hour so a just-started cycle cannot
+ * divide by ~0 and explode the average-pace estimate.
+ */
+function elapsedCycleDays(cycle: CycleProgress): number {
+  return Math.max(1 / 24, (cycle.expectedPercent / 100) * cycle.cycleDays)
+}
+
+/** Cumulative quota boundaries for the current window: fully-scheduled-before, scheduled-through-end. */
+function windowBounds(windowIndex: number, windowDays: number, baseDailyPercent: number): [number, number] {
+  const size = baseDailyPercent * windowDays
+  return [(windowIndex - 1) * size, Math.min(100, windowIndex * size)]
+}
+
+function paceInWindow(usedPercent: number, [scheduledBefore, scheduledThroughEnd]: [number, number]): QuotaPace {
+  if (usedPercent <= scheduledBefore) return "within-budget"
+  if (usedPercent <= scheduledThroughEnd) return "using-window"
+  return "over-pace"
 }
 
 /** Formats a 0-100 percentage cleanly without hiding tiny non-zero usage as 0%. */

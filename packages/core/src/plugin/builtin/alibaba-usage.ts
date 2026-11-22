@@ -2,7 +2,8 @@
  * Builtin cross-surface plugin `opencode.alibaba.usage` for the Alibaba Cloud Model Studio
  * international Token Plan. It exposes two slash commands on both TUI and Web/Desktop:
  *
- * - `/alibabaUsage` — monthly quota usage, billing-cycle pace, and cutoff date.
+ * - `/alibabaUsage` — monthly quota usage with estimated daily/weekly consumption and
+ *   pace verdicts derived statelessly from the monthly percentage, and cutoff date.
  * - `/alibabaDiscounts` — the Token Plan models currently running a promotion.
  *
  * Data is read natively from the console gateway (`IntlBroadScopeAspnGateway`, product

@@ -4,6 +4,7 @@ import {
   formatQuotaPercent,
   type AlibabaUsage,
   type QuotaHealth,
+  type QuotaPace,
 } from "@opencode/schema/alibaba-usage"
 import { writeClipboard } from "@opencode/session-ui/copy"
 import { Button } from "@opencode/ui/button"
@@ -171,6 +172,34 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
     }
   }
 
+  const paceBadge = (pace: QuotaPace) => {
+    if (pace === "over-pace") {
+      return {
+        label: language.t("dialog.alibabaUsage.pace.over"),
+        bar: "bg-v2-state-bg-danger",
+        pill: "bg-v2-state-bg-danger/15 text-v2-state-fg-danger",
+      }
+    }
+
+    if (pace === "within-budget") {
+      return {
+        label: language.t("dialog.alibabaUsage.pace.under"),
+        bar: "bg-v2-state-bg-success",
+        pill: "bg-v2-state-bg-success/15 text-v2-state-fg-success",
+      }
+    }
+
+    const behindLine = (budget()?.cushionPercent ?? 0) < 0
+
+    return {
+      label: language.t("dialog.alibabaUsage.pace.inQuota"),
+      bar: behindLine ? "bg-v2-state-bg-warning" : "bg-v2-state-bg-success",
+      pill: behindLine
+        ? "bg-v2-state-bg-warning/15 text-v2-state-fg-warning"
+        : "bg-v2-state-bg-success/15 text-v2-state-fg-success",
+    }
+  }
+
   return (
     <Dialog size="normal" fit>
       <div class="flex flex-col gap-4 px-6 pb-6 pt-6 text-13-regular text-text-base">
@@ -241,51 +270,83 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
 
               <Show when={budget()}>
                 {(b) => {
-                  const status = () => healthBadge(b().health)
-                  const weeklyScale = () => Math.max(b().baseWeeklyPercent, b().adjustedWeeklyPercent, 25)
-                  const weeklyBaseWidth = () =>
-                    (Math.min(b().baseWeeklyPercent, b().adjustedWeeklyPercent) / weeklyScale()) * 100
-                  const weeklyCushionWidth = () =>
-                    (Math.max(0, b().adjustedWeeklyPercent - b().baseWeeklyPercent) / weeklyScale()) * 100
+                  const weeklyCap = () =>
+                    Math.min(b().remainingPercent, b().baseWeeklyPercent + Math.max(0, b().cushionPercent))
 
-                  const dailyScale = () => Math.max(b().baseDailyPercent, b().adjustedDailyPercent, 5)
-                  const dailyBaseWidth = () =>
-                    (Math.min(b().baseDailyPercent, b().adjustedDailyPercent) / dailyScale()) * 100
-                  const dailyCushionWidth = () =>
-                    (Math.max(0, b().adjustedDailyPercent - b().baseDailyPercent) / dailyScale()) * 100
+                  const weeklyScale = () => Math.max(b().estimatedWeeklyPercent, weeklyCap(), 25)
+
+                  const weeklyUsedWidth = () =>
+                    (Math.min(b().estimatedWeeklyPercent, weeklyCap()) / weeklyScale()) * 100
+
+                  const weeklyHeadroomWidth = () =>
+                    (Math.max(0, weeklyCap() - b().estimatedWeeklyPercent) / weeklyScale()) * 100
+
+                  const dailyScale = () => Math.max(b().estimatedDailyPercent, b().maxTodayWithCushion, 5)
+
+                  const dailyUsedWidth = () =>
+                    (Math.min(b().estimatedDailyPercent, b().maxTodayWithCushion) / dailyScale()) * 100
+
+                  const dailyHeadroomWidth = () =>
+                    (Math.max(0, b().maxTodayWithCushion - b().estimatedDailyPercent) / dailyScale()) * 100
 
                   return (
                     <>
-                      {/* Weekly & Daily Allowance Charts */}
+                      {/* Weekly & Daily estimated-usage charts */}
                       <div class="flex flex-col gap-3 rounded-lg border border-border-base bg-surface-base p-4 text-12-regular">
                         <div class="flex flex-col gap-1.5">
-                          <div class="flex items-center justify-between">
-                            <span class="font-medium text-text-base">{language.t("dialog.alibabaUsage.weeklyBudget")}</span>
-                            <span class="tabular-nums text-text-base">
-                              <strong>{formatQuotaPercent(b().adjustedWeeklyPercent)}/wk</strong>{" "}
-                              <span class="text-text-muted">(base {formatQuotaPercent(b().baseWeeklyPercent)}/wk)</span>
+                          <div class="flex items-center justify-between gap-3">
+                            <span class="flex items-center gap-2 font-medium text-text-base">
+                              {language.t("dialog.alibabaUsage.weeklyBudget")}
+                              <span class={`rounded px-1.5 py-0.5 text-[11px] font-medium ${paceBadge(b().weeklyPace).pill}`}>
+                                {paceBadge(b().weeklyPace).label}
+                              </span>
+                            </span>
+                            <span class="tabular-nums text-[11px] text-text-muted">
+                              {language.t("dialog.alibabaUsage.weeklySummary", {
+                                avg: formatQuotaPercent(b().estimatedWeeklyPercent),
+                                left: formatQuotaPercent(Math.max(0, weeklyCap() - b().estimatedWeeklyPercent)),
+                                quota: formatQuotaPercent(weeklyCap()),
+                                base: formatQuotaPercent(b().baseWeeklyPercent),
+                              })}
                             </span>
                           </div>
                           <div class="flex h-2 w-full overflow-hidden rounded-full bg-surface-raised-base">
-                            <div class={`h-full ${status().bar}`} style={{ width: `${weeklyBaseWidth()}%` }} />
-                            <Show when={weeklyCushionWidth() > 0}>
-                              <div class="h-full bg-v2-state-bg-success/65" style={{ width: `${weeklyCushionWidth()}%` }} />
+                            <div class={`h-full ${paceBadge(b().weeklyPace).bar}`} style={{ width: `${weeklyUsedWidth()}%` }} />
+                            <Show when={weeklyHeadroomWidth() > 0}>
+                              <div
+                                class="h-full bg-v2-state-bg-success/65"
+                                style={{ width: `${weeklyHeadroomWidth()}%` }}
+                              />
                             </Show>
                           </div>
                         </div>
 
                         <div class="flex flex-col gap-1.5">
-                          <div class="flex items-center justify-between">
-                            <span class="font-medium text-text-base">{language.t("dialog.alibabaUsage.dailyBudget")}</span>
-                            <span class="tabular-nums text-text-base">
-                              <strong>{formatQuotaPercent(b().adjustedDailyPercent)}/day</strong>{" "}
-                              <span class="text-text-muted">(base {formatQuotaPercent(b().baseDailyPercent)}/day)</span>
+                          <div class="flex items-center justify-between gap-3">
+                            <span class="flex items-center gap-2 font-medium text-text-base">
+                              {language.t("dialog.alibabaUsage.dailyBudget")}
+                              <span class={`rounded px-1.5 py-0.5 text-[11px] font-medium ${paceBadge(b().dailyPace).pill}`}>
+                                {paceBadge(b().dailyPace).label}
+                              </span>
+                            </span>
+                            <span class="tabular-nums text-[11px] text-text-muted">
+                              {language.t("dialog.alibabaUsage.dailySummary", {
+                                avg: formatQuotaPercent(b().estimatedDailyPercent),
+                                left: formatQuotaPercent(
+                                  Math.max(0, b().maxTodayWithCushion - b().estimatedDailyPercent),
+                                ),
+                                cap: formatQuotaPercent(b().maxTodayWithCushion),
+                                base: formatQuotaPercent(b().baseDailyPercent),
+                              })}
                             </span>
                           </div>
                           <div class="flex h-2 w-full overflow-hidden rounded-full bg-surface-raised-base">
-                            <div class={`h-full ${status().bar}`} style={{ width: `${dailyBaseWidth()}%` }} />
-                            <Show when={dailyCushionWidth() > 0}>
-                              <div class="h-full bg-v2-state-bg-success/65" style={{ width: `${dailyCushionWidth()}%` }} />
+                            <div class={`h-full ${paceBadge(b().dailyPace).bar}`} style={{ width: `${dailyUsedWidth()}%` }} />
+                            <Show when={dailyHeadroomWidth() > 0}>
+                              <div
+                                class="h-full bg-v2-state-bg-success/65"
+                                style={{ width: `${dailyHeadroomWidth()}%` }}
+                              />
                             </Show>
                           </div>
                           <div class="flex items-center justify-between text-[11px] text-text-muted tabular-nums">
@@ -310,6 +371,20 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
                           </span>
                           <span class="text-text-muted">Started {b().cycle.startLabel}</span>
                           <span class="text-text-muted">Expected pace ~{b().cycle.expectedPercent.toFixed(1)}%</span>
+                          <Show when={b().daysUntilCycleExhaustion !== undefined}>
+                            <span
+                              class={
+                                b().daysUntilCycleExhaustion! < b().cycle.remainingDays
+                                  ? "text-v2-state-fg-warning"
+                                  : "text-text-muted"
+                              }
+                            >
+                              {language.t("dialog.alibabaUsage.quotaProjection", {
+                                days: b().daysUntilCycleExhaustion!.toFixed(1),
+                                remaining: b().cycle.remainingDays,
+                              })}
+                            </span>
+                          </Show>
                         </div>
                         <div class="flex flex-col gap-0.5">
                           <span class="text-text-muted">{language.t("dialog.alibabaUsage.cutoff")}</span>
