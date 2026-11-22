@@ -54,6 +54,7 @@ export const SLASH_COMMAND_PARITY: readonly SlashParityEntry[] = [
   { id: "model.variant.choose", names: ["variants", "thinking", "effort"], surfaces: ["tui", "web"] },
   { id: "usage.view", names: ["usage"], surfaces: ["tui", "web"] },
   { id: "alibaba.usage", names: ["alibabaUsage"], surfaces: ["tui", "web"] },
+  { id: "alibaba.discounts", names: ["alibabaDiscounts"], surfaces: ["tui", "web"] },
   { id: "provider.connect", names: ["connect"], surfaces: ["tui", "web"] },
   { id: "config.reload", names: ["reload"], surfaces: ["tui", "web"] },
   { id: "agent.cycle", names: ["agent", "agents"], surfaces: ["tui", "web"] },

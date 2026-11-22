@@ -175,6 +175,8 @@ describe("contract hygiene", () => {
     const identifiers = [
       Agent.Color,
       AlibabaUsage.TokenPlanSchema,
+      AlibabaUsage.DiscountedModelSchema,
+      AlibabaUsage.DiscountedModelsSchema,
       ConfigProvider.ModelSettings,
       ConfigProvider.Settings,
       DynamicContext.DynamicContextEntrySchema,
@@ -231,6 +233,35 @@ describe("contract hygiene", () => {
 
     expect(identifiers.every((identifier) => typeof identifier === "string")).toBe(true)
     expect(new Set(identifiers).size).toBe(identifiers.length)
+  })
+
+  test("token plan discount badges derive real percent-off and night window", () => {
+    expect(AlibabaUsage.parseBadgeDiscount("限时夜间4折", "每晚 22:00 - 次日 08:00 期间调用模型，Credits 消耗低至 4 折。")).toEqual({
+      percentOff: 60,
+      nightOnly: true,
+    })
+    expect(AlibabaUsage.parseBadgeDiscount("限时2折", "Credits消耗限时2折")).toEqual({ percentOff: 80, nightOnly: false })
+    expect(AlibabaUsage.parseBadgeDiscount("限时夜间5折")).toEqual({ percentOff: 50, nightOnly: true })
+    expect(AlibabaUsage.parseBadgeDiscount("40% Off Nights")).toEqual({ percentOff: 40, nightOnly: true })
+    expect(AlibabaUsage.parseBadgeDiscount("New")).toEqual({ nightOnly: false })
+    expect(AlibabaUsage.NIGHT_WINDOW_LABEL).toBe("22:00–08:00 (UTC+8)")
+  })
+
+  test("discounted models contract omits undefined optional fields", () => {
+    const decoded = Schema.decodeUnknownSync(AlibabaUsage.DiscountedModelsSchema)({
+      ok: true,
+      models: [{ provider: "qwen", modelId: "qwen3.8-flash", badgeLabel: "限时夜间4折", percentOff: 60, nightOnly: true }],
+      checkedAt: 1,
+    })
+    expect(decoded.models[0].modelId).toBe("qwen3.8-flash")
+    expect(
+      Schema.encodeSync(AlibabaUsage.DiscountedModelsSchema)({
+        ok: true,
+        models: [{ provider: "qwen", modelId: "auto", name: undefined, percentOff: undefined }],
+        checkedAt: 1,
+        error: undefined,
+      }),
+    ).toEqual({ ok: true, models: [{ provider: "qwen", modelId: "auto" }], checkedAt: 1 })
   })
 
   test("all session inbox item types accept both delivery modes", () => {

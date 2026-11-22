@@ -1,4 +1,10 @@
-import { AlibabaUsageRpc, formatCycleProgress, formatQuotaPercent, type AlibabaUsage } from "@opencode/schema/alibaba-usage"
+import {
+  AlibabaUsageRpc,
+  computeBudgetBreakdown,
+  formatQuotaPercent,
+  type AlibabaUsage,
+  type QuotaHealth,
+} from "@opencode/schema/alibaba-usage"
 import { writeClipboard } from "@opencode/session-ui/copy"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
@@ -137,17 +143,33 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
     void load(false)
   })
 
-  const cycle = createMemo(() => {
-    const resetAt = data()?.resetAt
-    return resetAt !== undefined ? formatCycleProgress(resetAt) : undefined
+  const budget = createMemo(() => {
+    const item = data()
+    if (!item?.ok || item.resetAt === undefined) return undefined
+    return computeBudgetBreakdown(item.usedPercent, item.resetAt)
   })
 
-  const progressBarClass = createMemo(() => {
-    const used = data()?.usedPercent ?? 0
-    if (used >= 90) return "bg-v2-state-bg-danger"
-    if (used >= 70) return "bg-v2-state-bg-warning"
-    return "bg-text-interactive-base"
-  })
+  const healthBadge = (health: QuotaHealth) => {
+    if (health === "critical") {
+      return {
+        label: language.t("dialog.alibabaUsage.health.critical"),
+        bar: "bg-v2-state-bg-danger",
+        pill: "bg-v2-state-bg-danger/15 text-v2-state-fg-danger",
+      }
+    }
+    if (health === "caution") {
+      return {
+        label: language.t("dialog.alibabaUsage.health.caution"),
+        bar: "bg-v2-state-bg-warning",
+        pill: "bg-v2-state-bg-warning/15 text-v2-state-fg-warning",
+      }
+    }
+    return {
+      label: language.t("dialog.alibabaUsage.health.healthy"),
+      bar: "bg-v2-state-bg-success",
+      pill: "bg-v2-state-bg-success/15 text-v2-state-fg-success",
+    }
+  }
 
   return (
     <Dialog size="normal" fit>
@@ -185,7 +207,16 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
 
               <div class="flex flex-col gap-2.5 rounded-lg border border-border-base bg-surface-base p-4">
                 <div class="flex items-center justify-between text-12-medium text-text-muted">
-                  <span>{language.t("dialog.alibabaUsage.monthlyQuota")}</span>
+                  <div class="flex items-center gap-2">
+                    <span>{language.t("dialog.alibabaUsage.monthlyQuota")}</span>
+                    <Show when={budget()}>
+                      {(b) => (
+                        <span class={`rounded px-1.5 py-0.5 text-[11px] font-medium ${healthBadge(b().health).pill}`}>
+                          {healthBadge(b().health).label}
+                        </span>
+                      )}
+                    </Show>
+                  </div>
                   <span class="tabular-nums text-text-base">
                     {formatQuotaPercent(item().usedPercent)} {language.t("dialog.alibabaUsage.used")}
                   </span>
@@ -193,7 +224,7 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
 
                 <div class="h-2.5 w-full overflow-hidden rounded-full bg-surface-raised-base">
                   <div
-                    class={`h-full rounded-full transition-all ${progressBarClass()}`}
+                    class={`h-full rounded-full transition-all ${budget() ? healthBadge(budget()!.health).bar : "bg-v2-state-bg-success"}`}
                     style={{ width: `${Math.min(100, Math.max(0, item().usedPercent))}%` }}
                   />
                 </div>
@@ -208,24 +239,87 @@ export function DialogAlibabaUsage(props: { directory?: string }) {
                 </div>
               </div>
 
-              <Show when={cycle()}>
-                {(c) => (
-                  <div class="grid grid-cols-2 gap-3 rounded-lg border border-border-base bg-surface-base p-4 text-12-regular">
-                    <div class="flex flex-col gap-0.5">
-                      <span class="text-text-muted">{language.t("dialog.alibabaUsage.cyclePosition")}</span>
-                      <span class="text-13-medium text-text-base">
-                        Day {c().elapsedDays} / {c().cycleDays}
-                      </span>
-                      <span class="text-text-muted">Started {c().startLabel}</span>
-                      <span class="text-text-muted">Expected pace ~{c().expectedPercent.toFixed(1)}%</span>
-                    </div>
-                    <div class="flex flex-col gap-0.5">
-                      <span class="text-text-muted">{language.t("dialog.alibabaUsage.cutoff")}</span>
-                      <span class="text-13-medium text-text-base">{c().resetLabel}</span>
-                      <span class="text-text-muted">{c().countdownLabel}</span>
-                    </div>
-                  </div>
-                )}
+              <Show when={budget()}>
+                {(b) => {
+                  const status = () => healthBadge(b().health)
+                  const weeklyScale = () => Math.max(b().baseWeeklyPercent, b().adjustedWeeklyPercent, 25)
+                  const weeklyBaseWidth = () =>
+                    (Math.min(b().baseWeeklyPercent, b().adjustedWeeklyPercent) / weeklyScale()) * 100
+                  const weeklyCushionWidth = () =>
+                    (Math.max(0, b().adjustedWeeklyPercent - b().baseWeeklyPercent) / weeklyScale()) * 100
+
+                  const dailyScale = () => Math.max(b().baseDailyPercent, b().adjustedDailyPercent, 5)
+                  const dailyBaseWidth = () =>
+                    (Math.min(b().baseDailyPercent, b().adjustedDailyPercent) / dailyScale()) * 100
+                  const dailyCushionWidth = () =>
+                    (Math.max(0, b().adjustedDailyPercent - b().baseDailyPercent) / dailyScale()) * 100
+
+                  return (
+                    <>
+                      {/* Weekly & Daily Allowance Charts */}
+                      <div class="flex flex-col gap-3 rounded-lg border border-border-base bg-surface-base p-4 text-12-regular">
+                        <div class="flex flex-col gap-1.5">
+                          <div class="flex items-center justify-between">
+                            <span class="font-medium text-text-base">{language.t("dialog.alibabaUsage.weeklyBudget")}</span>
+                            <span class="tabular-nums text-text-base">
+                              <strong>{formatQuotaPercent(b().adjustedWeeklyPercent)}/wk</strong>{" "}
+                              <span class="text-text-muted">(base {formatQuotaPercent(b().baseWeeklyPercent)}/wk)</span>
+                            </span>
+                          </div>
+                          <div class="flex h-2 w-full overflow-hidden rounded-full bg-surface-raised-base">
+                            <div class={`h-full ${status().bar}`} style={{ width: `${weeklyBaseWidth()}%` }} />
+                            <Show when={weeklyCushionWidth() > 0}>
+                              <div class="h-full bg-v2-state-bg-success/65" style={{ width: `${weeklyCushionWidth()}%` }} />
+                            </Show>
+                          </div>
+                        </div>
+
+                        <div class="flex flex-col gap-1.5">
+                          <div class="flex items-center justify-between">
+                            <span class="font-medium text-text-base">{language.t("dialog.alibabaUsage.dailyBudget")}</span>
+                            <span class="tabular-nums text-text-base">
+                              <strong>{formatQuotaPercent(b().adjustedDailyPercent)}/day</strong>{" "}
+                              <span class="text-text-muted">(base {formatQuotaPercent(b().baseDailyPercent)}/day)</span>
+                            </span>
+                          </div>
+                          <div class="flex h-2 w-full overflow-hidden rounded-full bg-surface-raised-base">
+                            <div class={`h-full ${status().bar}`} style={{ width: `${dailyBaseWidth()}%` }} />
+                            <Show when={dailyCushionWidth() > 0}>
+                              <div class="h-full bg-v2-state-bg-success/65" style={{ width: `${dailyCushionWidth()}%` }} />
+                            </Show>
+                          </div>
+                          <div class="flex items-center justify-between text-[11px] text-text-muted tabular-nums">
+                            <span>
+                              {b().cushionPercent >= 0
+                                ? `+${formatQuotaPercent(b().cushionPercent)} ${language.t("dialog.alibabaUsage.cushionPositive")}`
+                                : `${formatQuotaPercent(Math.abs(b().cushionPercent))} ${language.t("dialog.alibabaUsage.cushionNegative")}`}
+                            </span>
+                            <span>
+                              {language.t("dialog.alibabaUsage.maxToday")}:{" "}
+                              <strong class="text-text-base">{formatQuotaPercent(b().maxTodayWithCushion)}</strong>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="grid grid-cols-2 gap-3 rounded-lg border border-border-base bg-surface-base p-4 text-12-regular">
+                        <div class="flex flex-col gap-0.5">
+                          <span class="text-text-muted">{language.t("dialog.alibabaUsage.cyclePosition")}</span>
+                          <span class="text-13-medium text-text-base">
+                            Day {b().cycle.elapsedDays} / {b().cycle.cycleDays}
+                          </span>
+                          <span class="text-text-muted">Started {b().cycle.startLabel}</span>
+                          <span class="text-text-muted">Expected pace ~{b().cycle.expectedPercent.toFixed(1)}%</span>
+                        </div>
+                        <div class="flex flex-col gap-0.5">
+                          <span class="text-text-muted">{language.t("dialog.alibabaUsage.cutoff")}</span>
+                          <span class="text-13-medium text-text-base">{b().cycle.resetLabel}</span>
+                          <span class="text-text-muted">{b().cycle.countdownLabel}</span>
+                        </div>
+                      </div>
+                    </>
+                  )
+                }}
               </Show>
 
               <div class="flex items-center justify-between pt-1">

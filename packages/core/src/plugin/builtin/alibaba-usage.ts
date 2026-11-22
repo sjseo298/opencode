@@ -1,3 +1,19 @@
+/**
+ * Builtin cross-surface plugin `opencode.alibaba.usage` for the Alibaba Cloud Model Studio
+ * international Token Plan. It exposes two slash commands on both TUI and Web/Desktop:
+ *
+ * - `/alibabaUsage` — monthly quota usage, billing-cycle pace, and cutoff date.
+ * - `/alibabaDiscounts` — the Token Plan models currently running a promotion.
+ *
+ * Data is read natively from the console gateway (`IntlBroadScopeAspnGateway`, product
+ * `sfm_bailian`) with the OAuth console session token captured by the local `console-login`
+ * callback and stored under `console-session`. No browser automation or `bl` CLI is required.
+ *
+ * Discounts come from `listTokenPlanModels` with `edition: "PERSONAL"`; each promoted model
+ * carries `badgeLabel`/`badgeDescription`. `AlibabaUsage.parseBadgeDiscount` derives the real
+ * percent-off from the Chinese "N折" notation (2折 = 80% off, 5折 = 50% off) and flags night-only
+ * promotions, which apply during `NIGHT_WINDOW_LABEL` (22:00–08:00 UTC+8).
+ */
 export * as AlibabaUsagePlugin from "./alibaba-usage.js"
 
 import { randomBytes } from "node:crypto"
@@ -13,6 +29,7 @@ export const GATEWAY_PRODUCT = "sfm_bailian"
 export const GATEWAY_REGION = "ap-southeast-1"
 export const GATEWAY_SITE = "international"
 export const TOKEN_PLAN_USAGE_API = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
+export const TOKEN_PLAN_MODELS_API = "zeldaHttp.dashscopeModel./zelda/api/v1/modelCenter/listTokenPlanModels"
 
 const CACHE_TTL_MS = 60_000
 const HTTP_TIMEOUT_MS = 15_000
@@ -65,25 +82,90 @@ const GatewayResponseSchema = Schema.Struct({
 
 const decodeGatewayResponse = Schema.decodeUnknownOption(Schema.fromJsonString(GatewayResponseSchema))
 
+const ModelItemSchema = Schema.Struct({
+  modelId: Schema.String,
+  provider: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  capabilities: Schema.optionalKey(Schema.Array(Schema.String)),
+  isNew: Schema.optionalKey(Schema.Boolean),
+  badgeLabel: Schema.optionalKey(Schema.String),
+  badgeDescription: Schema.optionalKey(Schema.String),
+})
+
+const ModelsListSchema = Schema.Struct({
+  ...UsageFieldsSchema.fields,
+  total: Schema.optionalKey(Schema.Number),
+  list: Schema.optionalKey(Schema.Array(ModelItemSchema)),
+})
+
+const ModelsGatewayResponseSchema = Schema.Struct({
+  ...UsageFieldsSchema.fields,
+  data: Schema.optionalKey(
+    Schema.Struct({
+      ...UsageFieldsSchema.fields,
+      data: Schema.optionalKey(ModelsListSchema),
+      DataV2: Schema.optionalKey(
+        Schema.Struct({
+          ...UsageFieldsSchema.fields,
+          data: Schema.optionalKey(
+            Schema.Struct({
+              ...UsageFieldsSchema.fields,
+              data: Schema.optionalKey(ModelsListSchema),
+            }),
+          ),
+        }),
+      ),
+    }),
+  ),
+})
+
+const decodeModelsGatewayResponse = Schema.decodeUnknownOption(Schema.fromJsonString(ModelsGatewayResponseSchema))
+
+const LocaleNameSchema = Schema.Struct({
+  "en-US": Schema.optionalKey(Schema.String),
+  "zh-CN": Schema.optionalKey(Schema.String),
+})
+
+const decodeLocaleName = Schema.decodeUnknownOption(Schema.fromJsonString(LocaleNameSchema))
+
+function buildCornerstoneParam(switchAgent?: number) {
+  return {
+    protocol: "V2",
+    console: "ONE_CONSOLE",
+    productCode: "p_efm",
+    switchUserType: 3,
+    consoleSite: "BAILIAN_ALIYUN",
+    ...(switchAgent !== undefined ? { switchAgent } : {}),
+  }
+}
+
 export function buildGatewayParams(switchAgent?: number): string {
   return JSON.stringify({
     Api: TOKEN_PLAN_USAGE_API,
     V: "1.0",
     Data: {
-      cornerstoneParam: {
-        protocol: "V2",
-        console: "ONE_CONSOLE",
-        productCode: "p_efm",
-        switchUserType: 3,
-        consoleSite: "BAILIAN_ALIYUN",
-        ...(switchAgent !== undefined ? { switchAgent } : {}),
-      },
+      cornerstoneParam: buildCornerstoneParam(switchAgent),
     },
   })
 }
 
 export function buildGatewayEndpoint(): string {
   return `${GATEWAY_BASE}/cli/api.json?action=${GATEWAY_ACTION}&product=${GATEWAY_PRODUCT}&api=${encodeURIComponent(TOKEN_PLAN_USAGE_API)}`
+}
+
+export function buildModelsGatewayParams(switchAgent?: number): string {
+  return JSON.stringify({
+    Api: TOKEN_PLAN_MODELS_API,
+    V: "1.0",
+    Data: {
+      input: { pageNo: 1, pageSize: 100, edition: "PERSONAL" },
+      cornerstoneParam: buildCornerstoneParam(switchAgent),
+    },
+  })
+}
+
+export function buildModelsGatewayEndpoint(): string {
+  return `${GATEWAY_BASE}/cli/api.json?action=${GATEWAY_ACTION}&product=${GATEWAY_PRODUCT}&api=${encodeURIComponent(TOKEN_PLAN_MODELS_API)}`
 }
 
 function unwrapGatewayUsage(parsed: typeof GatewayResponseSchema.Type) {
@@ -324,6 +406,137 @@ async function callTokenPlanGateway(
   return parseGatewayUsageResponse(raw, Date.now(), region)
 }
 
+function modelsErrorResult(
+  fields: typeof UsageFieldsSchema.Type,
+  region: string,
+  checkedAt: number,
+): AlibabaUsage.DiscountedModels | undefined {
+  if (fields.success !== false || fields.errorCode === undefined) return undefined
+  const code = typeof fields.errorCode === "string" ? fields.errorCode : JSON.stringify(fields.errorCode)
+  const notLoggedIn = code.includes("NotLogined")
+  return {
+    ok: false,
+    models: [],
+    needsAuth: notLoggedIn,
+    region,
+    site: GATEWAY_SITE,
+    checkedAt,
+    error: notLoggedIn
+      ? "Alibaba Cloud console session expired or is not connected."
+      : fields.errorMsg || fields.message || `Gateway error (${code})`,
+    hint: notLoggedIn ? "Connect your Alibaba Cloud international account to continue." : undefined,
+  }
+}
+
+function modelDisplayName(name: string | undefined): string | undefined {
+  if (!name) return undefined
+  const parsed = Option.getOrUndefined(decodeLocaleName(name))
+  if (!parsed) return name
+  return parsed["en-US"] ?? parsed["zh-CN"]
+}
+
+export function parseGatewayModelsResponse(
+  raw: string,
+  checkedAt: number,
+  region = GATEWAY_REGION,
+): AlibabaUsage.DiscountedModels {
+  const parsed = Option.getOrUndefined(decodeModelsGatewayResponse(raw))
+  if (!parsed) {
+    return {
+      ok: false,
+      models: [],
+      region,
+      site: GATEWAY_SITE,
+      checkedAt,
+      error: "Unexpected response from Alibaba Model Studio gateway.",
+    }
+  }
+
+  const topData = parsed.data
+  const topError = topData ? modelsErrorResult(topData, region, checkedAt) : undefined
+  if (topError) return topError
+  const inner = topData?.DataV2?.data
+  const innerError = inner ? modelsErrorResult(inner, region, checkedAt) : undefined
+  if (innerError) return innerError
+  const listData = inner?.data ?? topData?.data
+  const listError = listData ? modelsErrorResult(listData, region, checkedAt) : undefined
+  if (listError) return listError
+
+  if (!listData?.list) {
+    return {
+      ok: false,
+      models: [],
+      region,
+      site: GATEWAY_SITE,
+      checkedAt,
+      error: "No Token Plan model list returned for this account.",
+      hint: "Verify that your Token Plan subscription is active in the international Model Studio console.",
+    }
+  }
+
+  const models = listData.list.flatMap((item) => {
+    if (!item.badgeLabel) return []
+    const badge = AlibabaUsage.parseBadgeDiscount(item.badgeLabel, item.badgeDescription)
+    const name = modelDisplayName(item.name)
+    return [
+      {
+        provider: item.provider ?? "unknown",
+        modelId: item.modelId,
+        ...(name ? { name } : {}),
+        ...(item.capabilities ? { capabilities: item.capabilities } : {}),
+        ...(item.isNew !== undefined ? { isNew: item.isNew } : {}),
+        badgeLabel: item.badgeLabel,
+        ...(item.badgeDescription ? { badgeDescription: item.badgeDescription } : {}),
+        ...(badge.percentOff !== undefined ? { percentOff: badge.percentOff } : {}),
+        nightOnly: badge.nightOnly,
+      },
+    ]
+  })
+
+  return {
+    ok: true,
+    models,
+    ...(listData.total !== undefined ? { total: listData.total } : {}),
+    region,
+    site: GATEWAY_SITE,
+    checkedAt,
+  }
+}
+
+async function callTokenPlanModelsGateway(
+  session: StoredSession,
+  endpoint = buildModelsGatewayEndpoint(),
+): Promise<AlibabaUsage.DiscountedModels> {
+  const region = session.region || GATEWAY_REGION
+  const body = new URLSearchParams({
+    params: buildModelsGatewayParams(session.switchAgent),
+    region,
+  })
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "*/*",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Bearer ${session.accessToken}`,
+    },
+    body: body.toString(),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  })
+  const raw = await res.text()
+  if (!res.ok) {
+    return {
+      ok: false,
+      models: [],
+      needsAuth: res.status === 401 || res.status === 403,
+      region,
+      site: GATEWAY_SITE,
+      checkedAt: Date.now(),
+      error: `Alibaba gateway returned HTTP ${res.status} ${res.statusText}`,
+    }
+  }
+  return parseGatewayModelsResponse(raw, Date.now(), region)
+}
+
 function readRequestBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -368,6 +581,7 @@ export const Plugin = define({
   id: "opencode.alibaba.usage",
   effect: Effect.fn(function* (ctx) {
     let cached: AlibabaUsage.TokenPlan | undefined
+    let cachedModels: AlibabaUsage.DiscountedModels | undefined
     const pendingLogins = new Map<string, PendingLogin>()
 
     const readSession = Effect.fn("AlibabaUsagePlugin.readSession")(function* () {
@@ -377,6 +591,7 @@ export const Plugin = define({
     const saveSession = Effect.fn("AlibabaUsagePlugin.saveSession")(function* (session: StoredSession) {
       yield* ctx.storage.set(STORAGE_KEY, session)
       cached = undefined
+      cachedModels = undefined
     })
 
     const fetchUsage = Effect.fn("AlibabaUsagePlugin.fetch")(function* (refresh?: boolean) {
@@ -416,6 +631,42 @@ export const Plugin = define({
       }).pipe(Effect.catch((err) => Effect.succeed(err)))
 
       if (result.ok) cached = result
+      return result
+    })
+
+    const fetchDiscountedModels = Effect.fn("AlibabaUsagePlugin.fetchDiscountedModels")(function* (refresh?: boolean) {
+      const now = yield* Clock.currentTimeMillis
+      if (!refresh && cachedModels?.ok && now - cachedModels.checkedAt < CACHE_TTL_MS) {
+        return cachedModels
+      }
+      const session = yield* readSession()
+      if (!session?.accessToken) {
+        return {
+          ok: false,
+          models: [],
+          needsAuth: true,
+          region: GATEWAY_REGION,
+          site: GATEWAY_SITE,
+          checkedAt: now,
+          error: "Alibaba Cloud console session is not connected.",
+          hint: "Connect your Alibaba Cloud international account to view Token Plan discounts.",
+        } satisfies AlibabaUsage.DiscountedModels
+      }
+
+      const result = yield* Effect.tryPromise({
+        try: () => callTokenPlanModelsGateway(session),
+        catch: (error) =>
+          ({
+            ok: false,
+            models: [],
+            region: session.region ?? GATEWAY_REGION,
+            site: GATEWAY_SITE,
+            checkedAt: Date.now(),
+            error: error instanceof Error ? error.message : String(error),
+          }) satisfies AlibabaUsage.DiscountedModels,
+      }).pipe(Effect.catch((err) => Effect.succeed(err)))
+
+      if (result.ok) cachedModels = result
       return result
     })
 
@@ -559,6 +810,7 @@ export const Plugin = define({
     yield* ctx.rpc
       .register(AlibabaUsageRpc, {
         tokenPlan: (input) => fetchUsage(input.refresh),
+        discountedModels: (input) => fetchDiscountedModels(input.refresh),
         startLogin: () => startLogin(),
         loginStatus: (input) =>
           Effect.sync(() => {
@@ -601,6 +853,7 @@ export const Plugin = define({
 
             yield* saveSession(candidate)
             cached = check.ok ? check : undefined
+            cachedModels = undefined
             const entry = pendingLogins.get(input.state)
             if (entry) {
               entry.status = "complete"
@@ -623,6 +876,7 @@ export const Plugin = define({
             Effect.tap(() =>
               Effect.sync(() => {
                 cached = undefined
+                cachedModels = undefined
               }),
             ),
             Effect.as({ ok: true }),

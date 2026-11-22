@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { AlibabaUsageRpc, formatCycleProgress, formatQuotaPercent } from "../src/alibaba-usage.js"
+import {
+  AlibabaUsageRpc,
+  computeBudgetBreakdown,
+  formatCycleProgress,
+  formatQuotaPercent,
+} from "../src/alibaba-usage.js"
 import { DynamicContextRpc } from "../src/dynamic-context.js"
 import {
   cloneObjectivesForFreshSession,
@@ -15,6 +20,7 @@ describe("cross-surface shared contracts", () => {
     expect(Object.keys(AlibabaUsageRpc.methods).sort()).toEqual([
       "cancelLogin",
       "completeLogin",
+      "discountedModels",
       "loginStatus",
       "logout",
       "startLogin",
@@ -39,6 +45,23 @@ describe("cross-surface shared contracts", () => {
 
     const cycle28 = formatCycleProgress(mar22, new Date(2027, 1, 22, 11, 0, 0).getTime())
     expect(cycle28.cycleDays).toBe(28)
+
+    // After 6 unused days in a 30-day cycle, cushion grows and daily allowance increases
+    const day7 = nov22 + 6 * 86_400_000
+    const healthy = computeBudgetBreakdown(0, dec22, day7)
+    expect(healthy.health).toBe("healthy")
+    expect(healthy.cushionPercent).toBeCloseTo(20, 1)
+    expect(healthy.adjustedDailyPercent).toBeGreaterThan(healthy.baseDailyPercent)
+    expect(healthy.adjustedWeeklyPercent).toBeGreaterThan(healthy.baseWeeklyPercent)
+
+    // Overspending beyond expected pace triggers caution
+    const caution = computeBudgetBreakdown(45, dec22, day7)
+    expect(caution.health).toBe("caution")
+    expect(caution.cushionPercent).toBeLessThan(0)
+
+    // Low remaining quota triggers critical (red)
+    const critical = computeBudgetBreakdown(90, dec22, day7)
+    expect(critical.health).toBe("critical")
   })
 
   test("DynamicContextRpc exposes canonical snapshot, setLimit, and refresh methods", () => {
