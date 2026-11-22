@@ -60,12 +60,8 @@ schema `config.experimental.objectives`-adjacent keys.
 - **CLEAN (fork-modified):** `packages/core/src/tool/plugin/subagent.ts`, `packages/core/src/session/{system-prompt.ts,environment.ts}`, `packages/tui/src/{routes/session/index.tsx,component/dialog-config.tsx,feature-plugins/sidebar/context.tsx,plugin/builtins.ts,util/session.ts}`
 - **Anchor commits:** `cdb0bcb084` (integration + sidebar) · `895b1bbb6d` (epistemic layer) · `51e6aed962` (tertiary objectives) · `f4859bfb08` (plan approval/drafting) · `ba6a356f19` (latest)
 
-### A2. Antigravity provider plugin (builtin)
-Full Antigravity provider: OAuth/accounts, token rotation, signature cache,
-quota UI, request transforms (Claude/Gemini), recovery, TUI feature plugin.
-
-- **FORK-NEW:** `packages/core/src/plugin/builtin/antigravity/**` (70 files, ~30k lines), `packages/tui/src/feature-plugins/antigravity/**`
-- **Anchor commits:** `d99a4c31af` (auth builtin integration) · `faacc0cd8f` (graphical quota report) · `5ce14795de` (progress bar colors)
+### A2. Antigravity provider plugin (retired)
+Retired in commit `3039588c59`. Reconstruction instructions and file inventory are preserved in `historical/antigravity-plugin-reconstruction.md` (pre-removal commit `3dc7393611`).
 
 ### A3. Llama.cpp / unified-KV / session compaction
 Dynamic llama.cpp context detection, shared unified-KV token tracking across
@@ -138,8 +134,7 @@ client types for the experimental endpoints.
 
 ### A12. Build & sync tooling (repo-level scripts)
 `build.sh` (sync+build), `opencodeplus` (interactive model management),
-`resolve-conflicts.py` (LLM conflict resolution), `llm_monitor.py`,
-`sync-antigravity.sh`, `scripts/config/opencode.jsonc` (local models config).
+`resolve-conflicts.py` (LLM conflict resolution), `llm_monitor.py`, `scripts/config/opencode.jsonc` (local models config).
 
 - **FORK-NEW:** all of the above
 - **Anchor commits:** `ebfd5c1c70` (opencodeplus) · `8fa9ba8bf8` (sync commit display) · `ac9d6c32e2` (node_modules auto-heal) · `5a13797c51` (bun cold upgrade)
@@ -160,9 +155,9 @@ plugin TUI context, opencode config.
 - **Anchor commits:** `1cb635264d` (context-overflow classification) · `c65ac7d371` (provider config)
 
 ### A15. Cross-Surface Coherence (TUI ↔ Web/Desktop) & Shared Contracts
-Single-source contracts (`AntigravityAccountsRpc`, `DynamicContextRpc`, `ObjectivesView`, `SurfaceParity`), automated surface-parity checker, aligned slash commands/aliases, and settings UI & i18n parity.
+Single-source contracts (`DynamicContextRpc`, `ObjectivesView`, `SurfaceParity`), automated surface-parity checker, aligned slash commands/aliases, and settings UI & i18n parity.
 
-- **FORK-NEW:** `packages/schema/src/{antigravity.ts,dynamic-context.ts,objectives.ts,surface-parity.ts}`, `packages/schema/test/surface-parity.test.ts`, `script/check-surface-parity.ts`
+- **FORK-NEW:** `packages/schema/src/{dynamic-context.ts,objectives.ts,surface-parity.ts}`, `packages/schema/test/surface-parity.test.ts`, `script/check-surface-parity.ts`
 - **CLEAN (fork-modified):** `AGENTS.md`, `packages/{tui,cli,app,gui-plugins,desktop}/AGENTS.md`, `packages/app/src/shell/commands/command.tsx`, `packages/app/src/composer/model.ts`, `packages/app/src/session/commands/{use-session-commands.tsx,session-control-dialogs.tsx}`, `packages/app/src/settings/general/{controllers.ts,general.tsx}`, `packages/app/src/runtime/i18n/en.ts`, `packages/gui-plugins/src/objectives/tab.tsx`
 
 ---
@@ -216,7 +211,7 @@ git diff --name-status "upstream/dev...dev" | grep '^M' | cut -f2 |
 | `packages/tui/src/component/dialog-model.tsx` | 1 | Manual review — small delta on both sides. |
 | `packages/core/test/config/normalization.test.ts` | 2 | Union merge of test cases; both sides' cases must pass. |
 | `packages/cli/src/commands/handlers/run.ts` | 1 | Manual review of the small overlap. |
-| `README.md` | 2 | Manual merge; keep fork sections (antigravity, objectives, build tooling). |
+| `README.md` | 2 | Manual merge; keep fork sections (objectives, build tooling). |
 | `services/www/src/docs/content/tools.mdx` | 2 | Manual merge of doc sections. |
 | `services/www/src/docs/content/compaction.mdx` | 1 | Manual merge of doc sections. |
 | `.gitignore` | 1 | Union merge of ignore patterns. |
