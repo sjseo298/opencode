@@ -346,8 +346,10 @@ export function computeNightWindowInfo(nowMs = Date.now()): NightWindowInfo {
   const windowEndUtc = windowStartUtc + WINDOW_DURATION_HOURS * HOUR_MS
   const isActive = utcNow >= windowStartUtc && utcNow < windowEndUtc
 
-  // When active, the next start is tomorrow's window; when waiting, it's this window
-  const nextStartUtc = isActive ? windowStartUtc + 24 * HOUR_MS : windowStartUtc
+  // windowStartUtc is the most recent 14:00 UTC boundary (today's if already reached,
+  // otherwise yesterday's), so the next start is always one full day after it. Using it
+  // directly while waiting would point at a past boundary and yield a negative countdown.
+  const nextStartUtc = windowStartUtc + 24 * HOUR_MS
 
   const localStart = formatLocalTime(windowStartUtc)
   const localEnd = formatLocalTime(windowEndUtc)
