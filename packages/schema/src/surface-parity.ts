@@ -7,6 +7,13 @@ export interface SlashParityEntry {
   readonly names: readonly string[]
   readonly surfaces: readonly SurfaceId[]
   readonly reason?: string
+  /**
+   * True when the command is registered by a core builtin plugin via
+   * `ctx.command.transform` (server-backed) instead of a UI `slash: { name }`
+   * registration. Both surfaces reach it through `command.list`, so the parity
+   * check validates the name against the core plugin source rather than UI code.
+   */
+  readonly serverRegistered?: boolean
 }
 
 export interface SettingParityEntry {
@@ -55,6 +62,7 @@ export const SLASH_COMMAND_PARITY: readonly SlashParityEntry[] = [
   { id: "usage.view", names: ["usage"], surfaces: ["tui", "web"] },
   { id: "alibaba.usage", names: ["alibabaUsage"], surfaces: ["tui", "web"] },
   { id: "alibaba.discounts", names: ["alibabaDiscounts"], surfaces: ["tui", "web"] },
+  { id: "alibaba.login", names: ["alibabaLogin"], surfaces: ["tui", "web"], serverRegistered: true },
   { id: "provider.connect", names: ["connect"], surfaces: ["tui", "web"] },
   { id: "config.reload", names: ["reload"], surfaces: ["tui", "web"] },
   { id: "agent.cycle", names: ["agent", "agents"], surfaces: ["tui", "web"] },

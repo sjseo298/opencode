@@ -65,13 +65,39 @@ for (const file of webCommandFiles) {
   }
 }
 
-// 3. Validate slash parity manifest against both surfaces
+// 3. Collect server-registered command names from core builtin plugins (ctx.command.transform)
+const serverCommandNames = new Set<string>()
+const corePluginFiles = await scanFiles("packages/core/src/plugin/**/*.ts")
+for (const file of corePluginFiles) {
+  if (file.endsWith(".test.ts")) continue
+  const source = stripComments(await Bun.file(path.join(ROOT, file)).text())
+  if (!source.includes("command.transform")) continue
+  for (const match of source.matchAll(/editor\.add\(\s*\{\s*name\s*:\s*["']([^"']+)["']/g)) {
+    if (match[1]) serverCommandNames.add(match[1])
+  }
+}
+
+// 4. Validate slash parity manifest against both surfaces
 const expectedTuiSlash = new Set<string>()
 const expectedWebSlash = new Set<string>()
 
 for (const entry of SLASH_COMMAND_PARITY) {
   const hasTui = entry.surfaces.includes("tui")
   const hasWeb = entry.surfaces.includes("web")
+  if (entry.serverRegistered) {
+    // Server-backed commands reach both surfaces through command.list; validate
+    // the registration exists in a core plugin instead of UI slash registrations.
+    for (const name of entry.names) {
+      if (!serverCommandNames.has(name)) {
+        errors.push(
+          `[slash-parity] Server-registered "/${name}" (${entry.id}) is not added via editor.add in any packages/core/src/plugin command.transform.`,
+        )
+      }
+      if (hasTui) expectedTuiSlash.add(name)
+      if (hasWeb) expectedWebSlash.add(name)
+    }
+    continue
+  }
   if (hasTui) {
     for (const name of entry.names) {
       expectedTuiSlash.add(name)
@@ -102,7 +128,7 @@ for (const found of webSlashNames) {
   }
 }
 
-// 4. Validate shared server settings parity
+// 5. Validate shared server settings parity
 const dialogConfigSource = await Bun.file(path.join(ROOT, "packages/tui/src/component/dialog-config.tsx")).text()
 const tuiSettingPaths = new Set<string>()
 for (const match of dialogConfigSource.matchAll(/path\s*:\s*\[([^\]]+)\]/g)) {
@@ -139,7 +165,7 @@ for (const entry of SHARED_SERVER_SETTINGS) {
   }
 }
 
-// 5. Enforce no process-local globalThis.__OPENCODE_* or duplicate Rpc.define in UI packages
+// 6. Enforce no process-local globalThis.__OPENCODE_* or duplicate Rpc.define in UI packages
 const uiRoots = [
   "packages/tui/src/**/*.{ts,tsx}",
   "packages/app/src/**/*.{ts,tsx}",

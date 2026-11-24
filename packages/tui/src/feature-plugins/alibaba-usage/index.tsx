@@ -50,7 +50,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
   const [rpcError, setRpcError] = createSignal<string>()
   const [loginSession, setLoginSession] = createSignal<{ url: string; state: string }>()
   const [loginStatusText, setLoginStatusText] = createSignal<string>()
-  const [selectedAction, setSelectedAction] = createSignal<string>("browser")
+  const [selectedAction, setSelectedAction] = createSignal<string>("agent")
 
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -73,7 +73,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     try {
       const result = await rpc.tokenPlan({ refresh }, location())
       setData(result)
-      setSelectedAction(result.ok ? "refresh" : "browser")
+      setSelectedAction(result.ok ? "refresh" : "agent")
     } catch (error) {
       setRpcError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -170,7 +170,7 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
     setLoginSession(undefined)
     setLoginStatusText(undefined)
     if (active) await rpc.cancelLogin({ state: active.state }, location()).catch(() => {})
-    setSelectedAction(data()?.ok ? "refresh" : "browser")
+    setSelectedAction(data()?.ok ? "refresh" : "agent")
   }
 
   async function disconnect() {
@@ -199,9 +199,9 @@ function AlibabaUsageDialog(props: { context: Plugin.Context }) {
       ]
     }
     return [
-      { id: "browser", label: "Connect with Browser", primary: true, run: () => void startConnect() },
-      { id: "agent", label: "Connect via Agent Browser", run: () => void connectAgent() },
-      { id: "manual", label: "Paste URL / Token (Manual)", run: () => void promptManualComplete() },
+      { id: "agent", label: "Connect via Agent Browser (Automatic)", primary: true, run: () => void connectAgent() },
+      { id: "browser", label: "Connect with Browser (Local)", run: () => void startConnect() },
+      { id: "manual", label: "Paste Redirect URL / Token (Manual)", run: () => void promptManualComplete() },
       { id: "close", label: "Close", run: () => dialog.clear() },
     ]
   })
@@ -520,7 +520,7 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
   const [rpcError, setRpcError] = createSignal<string>()
   const [loginSession, setLoginSession] = createSignal<{ url: string; state: string }>()
   const [loginStatusText, setLoginStatusText] = createSignal<string>()
-  const [selectedAction, setSelectedAction] = createSignal<string>("browser")
+  const [selectedAction, setSelectedAction] = createSignal<string>("agent")
 
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -543,7 +543,7 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
     try {
       const result = await rpc.discountedModels({ refresh }, location())
       setData(result)
-      setSelectedAction(result.ok ? "refresh" : "browser")
+      setSelectedAction(result.ok ? "refresh" : "agent")
     } catch (error) {
       setRpcError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -640,7 +640,7 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
     setLoginSession(undefined)
     setLoginStatusText(undefined)
     if (active) await rpc.cancelLogin({ state: active.state }, location()).catch(() => {})
-    setSelectedAction(data()?.ok ? "refresh" : "browser")
+    setSelectedAction(data()?.ok ? "refresh" : "agent")
   }
 
   async function disconnect() {
@@ -669,9 +669,9 @@ function AlibabaDiscountsDialog(props: { context: Plugin.Context }) {
       ]
     }
     return [
-      { id: "browser", label: "Connect with Browser", primary: true, run: () => void startConnect() },
-      { id: "agent", label: "Connect via Agent Browser", run: () => void connectAgent() },
-      { id: "manual", label: "Paste URL / Token (Manual)", run: () => void promptManualComplete() },
+      { id: "agent", label: "Connect via Agent Browser (Automatic)", primary: true, run: () => void connectAgent() },
+      { id: "browser", label: "Connect with Browser (Local)", run: () => void startConnect() },
+      { id: "manual", label: "Paste Redirect URL / Token (Manual)", run: () => void promptManualComplete() },
       { id: "close", label: "Close", run: () => dialog.clear() },
     ]
   })

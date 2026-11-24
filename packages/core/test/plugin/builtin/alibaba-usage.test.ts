@@ -7,6 +7,7 @@ import {
   buildGatewayParams,
   buildModelsGatewayEndpoint,
   buildModelsGatewayParams,
+  extractCapturedToken,
   parseGatewayModelsResponse,
   parseGatewayUsageResponse,
   parseManualLoginInput,
@@ -195,5 +196,110 @@ describe("AlibabaUsagePlugin agent login prompt", () => {
   test("appends non-empty user text as an additional instruction", () => {
     const prompt = buildAgentLoginPrompt(started, "  click it for me  ")
     expect(prompt.endsWith("Additional instruction from the user: click it for me")).toBe(true)
+  })
+
+  test("prompt follows spec rev 2 ordering, bounded polling, and mandatory cleanup", () => {
+    const prompt = buildAgentLoginPrompt(started, "")
+    // Interceptor installed AFTER login is ensured and BEFORE the consent click.
+    const ensureLogin = prompt.indexOf("Ensure the account is logged in BEFORE installing anything")
+    const installInterceptor = prompt.indexOf("Install the token interceptor AFTER login")
+    const authorize = prompt.indexOf("Get the user's authorization")
+    expect(ensureLogin).toBeGreaterThan(-1)
+    expect(installInterceptor).toBeGreaterThan(ensureLogin)
+    expect(authorize).toBeGreaterThan(installInterceptor)
+    // Bounded capture polling replaces the unreliable success-text wait.
+    expect(prompt).toContain("up to 10 attempts spaced ~1.5 seconds apart")
+    expect(prompt).toContain("Do NOT wait for a \"CLI Login successful!\" text")
+    // Reinstall on lost interceptor, field-driven extraction, state guard.
+    expect(prompt).toContain("re-install it (Step 3)")
+    expect(prompt).toContain("extract the token BY FIELD, never by object shape")
+    expect(prompt).toContain("State-mismatch guard")
+    // Quota acceptance requires both flags; cleanup on every exit path.
+    expect(prompt).toContain("ok:true AND hasQuotaData:true")
+    expect(prompt).toContain("Cleanup (mandatory on EVERY exit path, success or failure)")
+    expect(prompt).toContain("cancelLogin")
+    expect(prompt).toContain('group "alibaba-login"')
+    // Manual mode fallback and JSON-encoder body construction.
+    expect(prompt).toContain("Manual mode")
+    expect(prompt).toContain("json.dumps")
+  })
+})
+
+describe("AlibabaUsagePlugin captured-token extraction (spec §4.2)", () => {
+  const state = "1bab2c3d6f4c12f799f901ab96bb1d45"
+  const token = "3f2b8c9e-1a4d-4e7f-9b2c-6d5e8f0a1b2c"
+  const authorizeJson = JSON.stringify({ code: "200", data: { access_token: token, token_type: "Bearer", expires_in: 86400 } })
+  const callbackBody = JSON.stringify({
+    access_token: token,
+    console_site: "international",
+    console_region: "ap-southeast-1",
+    console_switch_agent: "97572",
+    workspace_id: "llm-test",
+  })
+  const callbackUrl = `http://127.0.0.1:39789?state=${state}`
+
+  test("prefers authorize JSON data.access_token over callback entries", () => {
+    const result = extractCapturedToken(
+      { authorize: authorizeJson, callback: [{ url: callbackUrl, body: callbackBody }] },
+      state,
+    )
+    expect(result?.token).toBe(token)
+    expect(result?.mismatch).toBe(false)
+  })
+
+  test("falls back to callback body JSON when authorize is absent", () => {
+    const result = extractCapturedToken({ authorize: null, callback: [{ url: callbackUrl, body: callbackBody }] }, state)
+    expect(result?.token).toBe(token)
+    expect(result?.mismatch).toBe(false)
+  })
+
+  test("falls back to regex over callback url/body when JSON fields are missing", () => {
+    const result = extractCapturedToken(
+      { authorize: null, callback: [{ url: `${callbackUrl}&access_token=${token}`, body: "" }] },
+      state,
+    )
+    expect(result?.token).toBe(token)
+  })
+
+  test("extracts by field even when the page mutates the capture into an array-like object", () => {
+    const mutated = {
+      authorize: authorizeJson,
+      callback: [{ url: callbackUrl, body: callbackBody }],
+      0: "spurious",
+      1: { access_token: "wrong-token-from-numeric-key" },
+      length: 2,
+    }
+    const result = extractCapturedToken(mutated, state)
+    expect(result?.token).toBe(token)
+    expect(result?.mismatch).toBe(false)
+  })
+
+  test("flags state mismatch from a callback URL of a different attempt", () => {
+    const result = extractCapturedToken(
+      { authorize: authorizeJson, callback: [{ url: "http://127.0.0.1:39789?state=deadbeef", body: callbackBody }] },
+      state,
+    )
+    expect(result?.mismatch).toBe(true)
+  })
+
+  test("flags state mismatch carried inside a callback payload", () => {
+    const result = extractCapturedToken(
+      { authorize: null, callback: [{ url: callbackUrl, body: JSON.stringify({ access_token: token, state: "other-state" }) }] },
+      state,
+    )
+    expect(result?.mismatch).toBe(true)
+  })
+
+  test("returns undefined when nothing was captured", () => {
+    expect(extractCapturedToken({ authorize: null, callback: [] }, state)).toBeUndefined()
+    expect(extractCapturedToken({}, state)).toBeUndefined()
+  })
+
+  test("trims stray whitespace from the extracted token", () => {
+    const result = extractCapturedToken(
+      { authorize: null, callback: [{ url: callbackUrl, body: JSON.stringify({ access_token: `  ${token}\n` }) }] },
+      state,
+    )
+    expect(result?.token).toBe(token)
   })
 })

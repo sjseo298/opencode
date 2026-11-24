@@ -294,12 +294,21 @@ export function DialogAlibabaDiscounts(props: { directory?: string; sessionID?: 
               </div>
             </Show>
             <div class="mt-6 flex w-full flex-col gap-2">
-              <Button variant="contrast" size="large" class="w-full" onClick={() => void beginLogin(true)}>
-                {language.t("dialog.alibabaUsage.connectBrowser")}
-              </Button>
-              <Show when={props.sessionID}>
-                <Button variant="outline" size="large" class="w-full" onClick={() => void connectAgent()}>
+              <Show
+                when={props.sessionID}
+                fallback={
+                  <Button variant="contrast" size="large" class="w-full" onClick={() => void beginLogin(true)}>
+                    {language.t("dialog.alibabaUsage.connectBrowser")}
+                  </Button>
+                }
+              >
+                <Button variant="contrast" size="large" class="w-full" onClick={() => void connectAgent()}>
                   {language.t("dialog.alibabaUsage.connectAgent")}
+                </Button>
+              </Show>
+              <Show when={props.sessionID}>
+                <Button variant="outline" size="large" class="w-full" onClick={() => void beginLogin(true)}>
+                  {language.t("dialog.alibabaUsage.connectBrowser")}
                 </Button>
               </Show>
               <Button variant="outline" size="large" class="w-full" onClick={() => void beginLogin(false)}>

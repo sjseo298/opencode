@@ -4,17 +4,25 @@ A fresh login attempt is already active on the OpenCode server:
 - Login URL: ${url}
 - Login state: ${state}
 
-How completion works: after the user authorizes, the console page exchanges the browser session for an access token (POST /cli/authorize) and then POSTs the token to the loopback callback address embedded in the login URL. When the OpenCode server runs on the same machine as the browser (local mode) the server receives that POST and the login completes by itself. When the server runs on another machine (remote mode) the POST never reaches it; you must then read the captured token from the page with browse eval and submit it to the server yourself. Follow the same steps in both cases; Step 4 decides which mode you are in.
+How completion works: after the user authorizes, the console page exchanges the browser session for an access token (POST /cli/authorize) and then POSTs the token to the loopback callback address embedded in the login URL. When the OpenCode server runs on the same machine as the browser (local mode) the server receives that POST and the login completes by itself. When the server runs on another machine (remote/devcontainer mode) the browser's 127.0.0.1 is the host, not the server, so the POST never arrives; you must read the captured token from the page and submit it via completeLogin. Follow the same steps in both cases; Step 5 decides which mode you are in.
 
 Security rules:
-- Never print the access token or the server password in your visible responses; keep them inside tool calls only.
+- Never print the access token or the server password in your visible responses; keep them inside tool calls only. The token is a 36-char UUID: treat it as a secret, never log it, never write it to a file, never render it.
 - Always inline the credential in shell commands exactly as $(opencode service get password) so it is never echoed.
+- Build every RPC body with a real JSON encoder (never hand-escape nested quotes): the completeLogin "input" field is a stringified JSON object, and hand-built escaping produces InvalidRequestError.
+- Trim stray whitespace from any captured or pasted token before submitting it.
 
 Step 1 - Open the login page.
-Call browse navigate with url "${url}" and group "alibaba-login". Keep the returned tab id and pass it to every later browse call. If browse reports that no browser is connected, stop and tell the user to use the manual "Paste Redirect URL / Token" option in the /alibabaUsage dialog instead.
+Call browse navigate with url "${url}", group "alibaba-login", waitUntil "settle" and timeout 60000. Keep the returned tab id and pass it to every later browse call. If browse reports that no browser is connected, stop and tell the user to use the manual "Paste Redirect URL / Token" option in the /alibabaUsage dialog instead; release the attempt first (see Cleanup below).
 
-Step 2 - Install the token interceptor BEFORE any authorization happens.
-Call browse eval on the tab with world "main" and this exact expression:
+Step 2 - Ensure the account is logged in BEFORE installing anything.
+Call browse snapshot on the tab (timeout 15000).
+- If an "Authorize CLI Login" button is present: continue to Step 3.
+- If the page shows "Not Logged In", a login form, QR code or 2FA challenge: call browse handoff with the message "Sign in to your Alibaba Cloud account, click 'Authorize CLI Login', then press Continue." and wait for the user. Then snapshot again and repeat this step until the authorize button is present. Account login/MFA is inherently human; never try to solve it yourself.
+Do NOT install the interceptor yet: signing in can reload the document and would wipe it.
+
+Step 3 - Install the token interceptor AFTER login, immediately BEFORE the consent click.
+Call browse eval on the tab with world "main", timeout 20000, and this exact expression:
 
 (() => {
   if (window.__ocAlibabaLogin) return "already-installed";
@@ -39,36 +47,43 @@ Call browse eval on the tab with world "main" and this exact expression:
   return "installed";
 })()
 
-It must return "installed" (or "already-installed" if you are retrying).
+It must return "installed" (or "already-installed" if you are retrying). If the document reloaded at any point after this (read_capture in Step 5 returns null), re-run this exact eval immediately before clicking again.
 
-Step 3 - Get the user's authorization.
-Call browse snapshot on the tab.
-- If the page shows an "Authorize CLI Login" button: ask the user for confirmation before clicking it, unless they already told you to authorize. With their approval, browse click the button's ref.
-- If the page shows a login form, QR code or 2FA challenge: call browse handoff with the message "Sign in to your Alibaba Cloud account, click 'Authorize CLI Login', then press Continue." and wait for the user.
-Then browse snapshot again: the page should say "CLI Login successful!". If it shows an error, report it and continue to Step 4 anyway.
+Step 4 - Get the user's authorization.
+- Automatic mode (default): ask the user for confirmation before clicking "Authorize CLI Login", unless they already told you to authorize. With their approval, browse click the button's ref (timeout 15000).
+- Manual mode (user asked to paste the token themselves): tell the user to click "Authorize CLI Login" and copy the token shown on the page, then wait for them to paste it. When they paste a value, trim it and go straight to Step 6 with that value as TOKEN. If they paste nothing, fall back to reading the capture in Step 5; if that is also empty, run Cleanup and report that no token was pasted and nothing was captured.
+Do NOT wait for a "CLI Login successful!" text or use wait_for on it: the page does not reliably show it (it returns to the "Authorize CLI Login" state after the exchange). The captured token, not the page text, is the success signal.
 
-Step 4 - Check whether the server received the callback (local mode).
-On the server machine, resolve the OpenCode server base URL:
+Step 5 - Poll for the captured token (bounded), then detect local vs remote mode.
+First check whether the server already received the callback (local mode). On the server machine resolve the base URL:
   SERVER=$(opencode service status)
-If that prints nothing, the server is not running as a managed service; tell the user and stop (they can use the manual dialog option).
-Then poll every ~2 seconds, up to ~15 seconds:
+If that prints nothing, the server is not running as a managed service; tell the user and stop (they can use the manual dialog option). Run Cleanup first.
+Poll loginStatus every ~2 seconds, up to ~15 seconds:
   curl -s -X POST "$SERVER/api/rpc/alibaba.usage/loginStatus" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"state":"${state}"}}'
-On {"output":{"status":"complete"}} the callback arrived: skip to Step 6.
+On {"output":{"status":"complete"}} the callback arrived: skip to Step 7.
+Otherwise (remote mode, or local callback not yet arrived), poll the capture with browse eval (world "main", expression: JSON.stringify(window.__ocAlibabaLogin)), up to 10 attempts spaced ~1.5 seconds apart:
+- If the result is null/undefined the interceptor was lost (document reload): re-install it (Step 3) and continue polling.
+- Once the capture has an "authorize" field or a non-empty "callback" array, extract the token BY FIELD, never by object shape (the page can mutate the capture into an array-like object with spurious numeric keys). Precedence:
+  1. "authorize" is a JSON string: JSON.parse(authorize).data.access_token
+  2. else any callback[i].body JSON string: JSON.parse(body).access_token (or accessToken)
+  3. else regex access_token["\:=]+["]?([A-Za-z0-9-_]+) against "authorize" or any callback[*].url/body
+- State-mismatch guard: also match the state value in every callback[*].url (and any payload state field). If any captured state differs from ${state}, STOP: run Cleanup and report the mismatch. Never submit a token from a different attempt.
+- Trim the extracted token. It is a 36-char UUID with no spaces.
+If all 10 attempts exhaust with nothing captured, run Cleanup and report "timed out waiting for token"; suggest the manual paste option in the /alibabaUsage dialog.
 
-Step 5 - Remote mode: extract the captured token and complete the login.
-Call browse eval on the tab with world "main" and expression: JSON.stringify(window.__ocAlibabaLogin)
-Extract the access token from the first source that has it:
-1. the "authorize" field: a JSON string whose data.access_token holds the token;
-2. the "callback" entries: body JSON containing access_token/accessToken, or a query string containing access_token=...
-If a captured payload carries its own state value that differs from ${state}, stop and report the mismatch.
-If nothing was captured (the user authorized before the interceptor was installed), restart once from Step 1; if it is still empty, ask the user to paste the token manually via the /alibabaUsage dialog.
-Submit the token (replace TOKEN; never show it in your reply):
-  curl -s -X POST "$SERVER/api/rpc/alibaba.usage/completeLogin" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"state":"${state}","input":"{\"access_token\":\"TOKEN\"}"}}'
-Expect {"output":{"ok":true}} - the server validates the token against the Alibaba gateway before saving it. On ok:false, report the server message.
+Step 6 - Remote mode: submit the captured token (never show it in your reply).
+Build the body with a JSON encoder so the nested input is a correctly escaped JSON string, e.g.:
+  BODY=$(python3 -c 'import json,sys;print(json.dumps({"input":{"state":sys.argv[1],"input":json.dumps({"access_token":sys.argv[2]})}}))' "${state}" "$TOKEN")
+  curl -s -X POST "$SERVER/api/rpc/alibaba.usage/completeLogin" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d "$BODY"
+Expect {"output":{"ok":true}} - the server validates the token against the Alibaba gateway before saving it. On {"output":{"ok":false,"message":...}}, report the server message, run Cleanup, and stop. On an error envelope ({"_tag":"InvalidRequestError"...} or {"_tag":"RpcError"...}), rebuild the body with the JSON encoder and retry once; if it still fails, run Cleanup and report.
 
-Step 6 - Verify and clean up.
+Step 7 - Verify quota, then clean up.
   curl -s -X POST "$SERVER/api/rpc/alibaba.usage/tokenPlan" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"refresh":true}}'
-Expect ok:true with quota data. Then close the browser tab group: browse tabs with action "close" and group "alibaba-login".
-Report success (quota numbers are fine to show; the token is not).
-If you abandon the flow before it completes, release the pending login:
+Success requires ok:true AND hasQuotaData:true. If either is missing, do NOT report success: report the actual result, run Cleanup, and stop.
+On verified success, close the browser tab group: browse tabs with action "close" and group "alibaba-login". Report success (quota numbers are fine to show; the token is not).
+
+Cleanup (mandatory on EVERY exit path, success or failure):
+1. Release the pending login attempt:
   curl -s -X POST "$SERVER/api/rpc/alibaba.usage/cancelLogin" -u "opencode:$(opencode service get password)" -H 'Content-Type: application/json' -d '{"input":{"state":"${state}"}}'
+2. Close the browser tab group: browse tabs with action "close" and group "alibaba-login".
+This applies to: no browser connected, server not running, state mismatch, capture timeout, completeLogin ok:false, quota verification failure, and any abandonment. On the success path the attempt is already complete, but still close the tab group.

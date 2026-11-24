@@ -6,13 +6,21 @@
  *   pace verdicts derived statelessly from the monthly percentage, and cutoff date.
  * - `/alibabaDiscounts` — the Token Plan models currently running a promotion.
  * - `/alibabaLogin` — agent-driven console login through the user's real browser (browse
- *   tools). It starts the same local callback login, then hands the session precise
- *   instructions (see `alibaba-login.txt`): open the console-login URL, have the user
- *   authorize, and — when this server is remote and the browser's loopback POST cannot
- *   reach it — read the captured token from the page and submit it via `completeLogin`.
- *   In that remote mode the token transits the agent's tool calls (browse eval results are
- *   not redacted), unlike local mode where it goes straight to the callback server; the
- *   instructions require keeping it out of visible responses.
+ *   tools), implementing spec `alibaba_token_plan_login_v2` rev 2. It starts the same local
+ *   callback login, then hands the session precise instructions (see `alibaba-login.txt`):
+ *   open the console-login URL, ensure the account is logged in FIRST (handoff for MFA),
+ *   install the fetch/XHR interceptor only after login and immediately before the consent
+ *   click (a document reload during sign-in would wipe it), then poll the captured token
+ *   with bounded retries (10 × 1.5 s) instead of waiting for the unreliable "CLI Login
+ *   successful!" page text. Extraction is field-driven (`extractCapturedToken`, spec §4.2)
+ *   with a state-mismatch guard; when this server is remote and the browser's loopback POST
+ *   cannot reach it, the agent submits the captured token via `completeLogin`. Both the
+ *   automatic (agent click) and manual (user paste) modes converge on `completeLogin` +
+ *   `tokenPlan` refresh verification, and every exit path releases the attempt
+ *   (`cancelLogin`) and closes the `alibaba-login` tab group. In remote mode the token
+ *   transits the agent's tool calls (browse eval results are not redacted), unlike local
+ *   mode where it goes straight to the callback server; the instructions require keeping it
+ *   out of visible responses, logs, and files.
  *
  * Data is read natively from the console gateway (`IntlBroadScopeAspnGateway`, product
  * `sfm_bailian`) with the OAuth console session token captured by the local `console-login`
@@ -379,6 +387,72 @@ export function parseManualLoginInput(raw: string): ParsedCallbackInput | undefi
     return { accessToken: trimmed }
   }
   return undefined
+}
+
+/**
+ * Shape of the page-side capture object installed by the login interceptor
+ * (`window.__ocAlibabaLogin`). The console page can mutate it into an array-like
+ * object with spurious numeric keys, so consumers must extract by field, never
+ * by object shape.
+ */
+export interface LoginCapture {
+  readonly authorize?: string | null
+  readonly callback?: ReadonlyArray<{ readonly url?: string; readonly body?: string }>
+}
+
+export interface CapturedToken {
+  readonly token: string
+  /** True when a captured payload carries a state that differs from the active attempt. */
+  readonly mismatch: boolean
+}
+
+const CAPTURE_TOKEN_REGEX = /access_token["\:=]+["]?([A-Za-z0-9-_]+)/
+
+function captureStateFromUrl(url: string): string | undefined {
+  const match = /[?&]state=([^&#]+)/.exec(url)
+  return match?.[1] ? decodeURIComponent(match[1]).trim() : undefined
+}
+
+/**
+ * Extracts an access token from the interceptor capture by field precedence
+ * (spec alibaba_token_plan_login_v2 §4.2): authorize JSON → callback body JSON →
+ * regex over authorize/callback url/body. Flags a state mismatch when any
+ * captured callback URL or payload state differs from `expectedState`; callers
+ * must abort and cancel the attempt on mismatch. Never logs the token.
+ */
+export function extractCapturedToken(capture: LoginCapture, expectedState: string): CapturedToken | undefined {
+  const callbacks = Array.isArray(capture.callback) ? capture.callback : []
+  const mismatch = callbacks.some((entry) => {
+    const urlState = typeof entry.url === "string" ? captureStateFromUrl(entry.url) : undefined
+    if (urlState && urlState !== expectedState) return true
+    if (typeof entry.body !== "string") return false
+    const parsed = Option.getOrUndefined(decodeJsonCallback(entry.body))
+    return parsed?.state !== undefined && parsed.state !== expectedState
+  })
+
+  const authorize = typeof capture.authorize === "string" ? capture.authorize : undefined
+  if (authorize) {
+    const parsed = Option.getOrUndefined(decodeJsonCallback(authorize))
+    const token = (parsed?.data?.access_token ?? parsed?.data?.accessToken ?? parsed?.access_token ?? parsed?.accessToken ?? "").trim()
+    if (token) return { token, mismatch }
+  }
+
+  for (const entry of callbacks) {
+    if (typeof entry.body !== "string") continue
+    const parsed = Option.getOrUndefined(decodeJsonCallback(entry.body))
+    const token = (parsed?.access_token ?? parsed?.accessToken ?? parsed?.data?.access_token ?? parsed?.data?.accessToken ?? "").trim()
+    if (token) return { token, mismatch }
+  }
+
+  const sources = [authorize, ...callbacks.flatMap((entry) => [entry.url, entry.body])].filter(
+    (value): value is string => typeof value === "string",
+  )
+  for (const source of sources) {
+    const match = CAPTURE_TOKEN_REGEX.exec(source)
+    if (match?.[1]) return { token: match[1], mismatch }
+  }
+
+  return mismatch ? { token: "", mismatch } : undefined
 }
 
 async function callTokenPlanGateway(
@@ -834,11 +908,21 @@ export const Plugin = define({
           }),
         completeLogin: (input) =>
           Effect.gen(function* () {
+            // A failed completion releases the pending attempt so the caller can
+            // start fresh without a stale callback server (spec §8 failure matrix).
+            const releaseAttempt = () => {
+              const entry = pendingLogins.get(input.state)
+              if (!entry) return
+              entry.close()
+              pendingLogins.delete(input.state)
+            }
             const parsed = parseManualLoginInput(input.input)
             if (!parsed?.accessToken) {
+              releaseAttempt()
               return { ok: false, message: "Could not find an access token in the pasted URL or value." }
             }
             if (parsed.state && parsed.state !== input.state) {
+              releaseAttempt()
               return { ok: false, message: "Callback state does not match this login attempt." }
             }
             const candidate: StoredSession = {
@@ -859,6 +943,7 @@ export const Plugin = define({
             }).pipe(Effect.catch((err) => Effect.succeed(err)))
 
             if (!check.ok && check.needsAuth) {
+              releaseAttempt()
               return { ok: false, message: check.error ?? "Invalid or expired Alibaba Cloud access token." }
             }
 
@@ -898,7 +983,7 @@ export const Plugin = define({
     yield* ctx.command.transform((editor) => {
       editor.add({
         name: "alibabaLogin",
-        description: "connect Alibaba Cloud Token Plan via agent-driven browser login",
+        description: "connect Alibaba Cloud Token Plan via automatic agent-driven browser login (manual paste fallback)",
         execute: (input) =>
           Effect.gen(function* () {
             // Fresh attempt: startLogin closes any pending callback server and mints a new state.
