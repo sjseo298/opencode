@@ -576,8 +576,39 @@ LM Studio and vLLM also have built-in local discovery. Their default endpoints a
 ```
 
 LM Studio discovers language models from `/api/v1/models`. vLLM checks `/health` before reading `/v1/models`; its
-discovery cannot infer tool support, so discovered vLLM models start with tools disabled. For another OpenAI-compatible
-runtime, use the [custom provider](#custom) recipe and list its models explicitly.
+discovery cannot infer tool support, so discovered vLLM models start with tools disabled.
+
+The LlamaCPP selector proxy also has built-in local discovery at `http://127.0.0.1:29999/v1`. It discovers chat,
+decision, and stable-diffusion.cpp (`sd`) models from `/v1/models`. Discovery runs at startup and on demand when
+models are listed or an image is generated, rather than on a timer, so a proxy started after OpenCode is picked up
+on the next use. The `sd` models appear as image models for
+[`experimental_image_generate`](/tools#image-generate): they generate images from a prompt and edit a single source
+image. The proxy uses only the first input image, so additional references are ignored; edits default to a denoising
+strength of 0.6, and omitting the size keeps the input image's dimensions.
+
+```jsonc title="opencode.jsonc"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "llamacpp": {
+      "settings": { "baseURL": "http://gpu-host:29999/v1" },
+    },
+  },
+}
+```
+
+For another OpenAI-compatible runtime, use the [custom provider](#custom) recipe and list its models explicitly.
+
+## Alibaba Token Plan
+
+Connect your Alibaba Cloud international Model Studio account with `/alibabaLogin`. OpenCode then discovers the image
+and video generation models your Token Plan subscription actually allows, on demand: the account list is read when you
+list models or generate an image or video, not on a timer. The discovered models appear under the `alibaba-token-plan`
+provider ID and are usable with `experimental_image_generate` and `experimental_video_generate`.
+
+Discovery needs a connected console session. Without one, or if the account list cannot be read, OpenCode keeps the
+models already in the catalog and your configuration, so generation still works. Chat models are never replaced by this
+discovery. `/alibabaUsage` and `/alibabaDiscounts` report quota and promotions from the same account.
 
 ## Gateways
 

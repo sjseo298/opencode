@@ -36,9 +36,11 @@ export * as AlibabaUsagePlugin from "./alibaba-usage.js"
 
 import { randomBytes } from "node:crypto"
 import http from "node:http"
+import { Model } from "@opencode/core/model"
 import { define } from "@opencode/plugin/effect/plugin"
 import { AlibabaUsage, AlibabaUsageRpc } from "@opencode/schema/alibaba-usage"
 import { Clock, Effect, Option, Schema } from "effect"
+import { ProviderRefresh } from "../provider/refresh.js"
 import PROMPT_ALIBABA_LOGIN from "./alibaba-login.txt"
 
 export const CONSOLE_ORIGIN = "https://modelstudio.console.alibabacloud.com"
@@ -49,6 +51,8 @@ export const GATEWAY_REGION = "ap-southeast-1"
 export const GATEWAY_SITE = "international"
 export const TOKEN_PLAN_USAGE_API = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
 export const TOKEN_PLAN_MODELS_API = "zeldaHttp.dashscopeModel./zelda/api/v1/modelCenter/listTokenPlanModels"
+// The international Token Plan provider whose media models are discovered from the account list.
+const TOKEN_PLAN_PROVIDER = "alibaba-token-plan"
 
 const CACHE_TTL_MS = 60_000
 const HTTP_TIMEOUT_MS = 15_000
@@ -520,46 +524,50 @@ function modelDisplayName(name: string | undefined): string | undefined {
   return parsed["en-US"] ?? parsed["zh-CN"]
 }
 
+type ModelsListExtract =
+  | { readonly list: readonly (typeof ModelItemSchema.Type)[]; readonly total?: number }
+  | { readonly error: string; readonly hint?: string; readonly needsAuth?: boolean }
+
+// Shared unwrap of the nested gateway envelope; both the discounts and media parses derive from it.
+function extractModelsList(raw: string, region: string, checkedAt: number): ModelsListExtract {
+  const parsed = Option.getOrUndefined(decodeModelsGatewayResponse(raw))
+  if (!parsed) return { error: "Unexpected response from Alibaba Model Studio gateway." }
+  const topData = parsed.data
+  const inner = topData?.DataV2?.data
+  const listData = inner?.data ?? topData?.data
+  for (const fields of [topData, inner, listData]) {
+    const failure = fields ? modelsErrorResult(fields, region, checkedAt) : undefined
+    if (failure) return { error: failure.error ?? "Gateway error", hint: failure.hint, needsAuth: failure.needsAuth }
+  }
+  if (!listData?.list) {
+    return {
+      error: "No Token Plan model list returned for this account.",
+      hint: "Verify that your Token Plan subscription is active in the international Model Studio console.",
+    }
+  }
+  return { list: listData.list, total: listData.total }
+}
+
 export function parseGatewayModelsResponse(
   raw: string,
   checkedAt: number,
   region = GATEWAY_REGION,
 ): AlibabaUsage.DiscountedModels {
-  const parsed = Option.getOrUndefined(decodeModelsGatewayResponse(raw))
-  if (!parsed) {
+  const extracted = extractModelsList(raw, region, checkedAt)
+  if ("error" in extracted) {
     return {
       ok: false,
       models: [],
       region,
       site: GATEWAY_SITE,
       checkedAt,
-      error: "Unexpected response from Alibaba Model Studio gateway.",
+      error: extracted.error,
+      ...(extracted.hint !== undefined ? { hint: extracted.hint } : {}),
+      ...(extracted.needsAuth !== undefined ? { needsAuth: extracted.needsAuth } : {}),
     }
   }
 
-  const topData = parsed.data
-  const topError = topData ? modelsErrorResult(topData, region, checkedAt) : undefined
-  if (topError) return topError
-  const inner = topData?.DataV2?.data
-  const innerError = inner ? modelsErrorResult(inner, region, checkedAt) : undefined
-  if (innerError) return innerError
-  const listData = inner?.data ?? topData?.data
-  const listError = listData ? modelsErrorResult(listData, region, checkedAt) : undefined
-  if (listError) return listError
-
-  if (!listData?.list) {
-    return {
-      ok: false,
-      models: [],
-      region,
-      site: GATEWAY_SITE,
-      checkedAt,
-      error: "No Token Plan model list returned for this account.",
-      hint: "Verify that your Token Plan subscription is active in the international Model Studio console.",
-    }
-  }
-
-  const models = listData.list.flatMap((item) => {
+  const models = extracted.list.flatMap((item) => {
     if (!item.badgeLabel) return []
     const badge = AlibabaUsage.parseBadgeDiscount(item.badgeLabel, item.badgeDescription)
     const name = modelDisplayName(item.name)
@@ -581,11 +589,66 @@ export function parseGatewayModelsResponse(
   return {
     ok: true,
     models,
-    ...(listData.total !== undefined ? { total: listData.total } : {}),
+    ...(extracted.total !== undefined ? { total: extracted.total } : {}),
     region,
     site: GATEWAY_SITE,
     checkedAt,
   }
+}
+
+export type TokenPlanMediaModel = {
+  readonly modelId: string
+  readonly type: "image" | "video"
+  readonly name?: string
+  readonly provider?: string
+}
+
+export type TokenPlanMediaModels = {
+  readonly ok: boolean
+  readonly models: readonly TokenPlanMediaModel[]
+  readonly region: string
+  readonly site: string
+  readonly checkedAt: number
+  readonly needsAuth?: boolean
+  readonly error?: string
+  readonly hint?: string
+}
+
+// The account's image/video generation models, from the full list (not just promotions). Gateway
+// capability codes: IG = image generation, VG = video generation (verified against listTokenPlanModels).
+export function parseTokenPlanMediaModels(
+  raw: string,
+  checkedAt: number,
+  region = GATEWAY_REGION,
+): TokenPlanMediaModels {
+  const extracted = extractModelsList(raw, region, checkedAt)
+  if ("error" in extracted) {
+    return {
+      ok: false,
+      models: [],
+      region,
+      site: GATEWAY_SITE,
+      checkedAt,
+      error: extracted.error,
+      ...(extracted.hint !== undefined ? { hint: extracted.hint } : {}),
+      ...(extracted.needsAuth !== undefined ? { needsAuth: extracted.needsAuth } : {}),
+    }
+  }
+  const models = extracted.list.flatMap((item) => {
+    const caps = item.capabilities ?? []
+    const type = caps.includes("IG") ? ("image" as const) : caps.includes("VG") ? ("video" as const) : undefined
+    if (!type) return []
+    const name = modelDisplayName(item.name)
+    return [
+      {
+        modelId: item.modelId,
+        type,
+        ...(name ? { name } : {}),
+        ...(item.provider ? { provider: item.provider } : {}),
+      },
+    ]
+  })
+  return { ok: true, models, region, site: GATEWAY_SITE, checkedAt }
 }
 
 async function callTokenPlanModelsGateway(
@@ -620,6 +683,40 @@ async function callTokenPlanModelsGateway(
     }
   }
   return parseGatewayModelsResponse(raw, Date.now(), region)
+}
+
+async function callTokenPlanMediaGateway(
+  session: StoredSession,
+  endpoint = buildModelsGatewayEndpoint(),
+): Promise<TokenPlanMediaModels> {
+  const region = session.region || GATEWAY_REGION
+  const body = new URLSearchParams({
+    params: buildModelsGatewayParams(session.switchAgent),
+    region,
+  })
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "*/*",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Bearer ${session.accessToken}`,
+    },
+    body: body.toString(),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  })
+  const raw = await res.text()
+  if (!res.ok) {
+    return {
+      ok: false,
+      models: [],
+      needsAuth: res.status === 401 || res.status === 403,
+      region,
+      site: GATEWAY_SITE,
+      checkedAt: Date.now(),
+      error: `Alibaba gateway returned HTTP ${res.status} ${res.statusText}`,
+    }
+  }
+  return parseTokenPlanMediaModels(raw, Date.now(), region)
 }
 
 function readRequestBody(req: http.IncomingMessage): Promise<string> {
@@ -667,6 +764,9 @@ export const Plugin = define({
   effect: Effect.fn(function* (ctx) {
     let cached: AlibabaUsage.TokenPlan | undefined
     let cachedModels: AlibabaUsage.DiscountedModels | undefined
+    let cachedMedia: TokenPlanMediaModels | undefined
+    let mediaModels: readonly TokenPlanMediaModel[] = []
+    let mediaLoaded = false
     const pendingLogins = new Map<string, PendingLogin>()
 
     const readSession = Effect.fn("AlibabaUsagePlugin.readSession")(function* () {
@@ -677,6 +777,7 @@ export const Plugin = define({
       yield* ctx.storage.set(STORAGE_KEY, session)
       cached = undefined
       cachedModels = undefined
+      cachedMedia = undefined
     })
 
     const fetchUsage = Effect.fn("AlibabaUsagePlugin.fetch")(function* (refresh?: boolean) {
@@ -754,6 +855,69 @@ export const Plugin = define({
       if (result.ok) cachedModels = result
       return result
     })
+
+    const fetchMediaModels = Effect.fn("AlibabaUsagePlugin.fetchMediaModels")(function* (refresh?: boolean) {
+      const now = yield* Clock.currentTimeMillis
+      if (!refresh && cachedMedia?.ok && now - cachedMedia.checkedAt < CACHE_TTL_MS) {
+        return cachedMedia
+      }
+      const session = yield* readSession()
+      if (!session?.accessToken) {
+        return {
+          ok: false,
+          models: [],
+          needsAuth: true,
+          region: GATEWAY_REGION,
+          site: GATEWAY_SITE,
+          checkedAt: now,
+          error: "Alibaba Cloud console session is not connected.",
+          hint: "Connect your Alibaba Cloud international account to list Token Plan image and video models.",
+        } satisfies TokenPlanMediaModels
+      }
+      const result = yield* Effect.tryPromise({
+        try: () => callTokenPlanMediaGateway(session),
+        catch: (error) =>
+          ({
+            ok: false,
+            models: [],
+            region: session.region ?? GATEWAY_REGION,
+            site: GATEWAY_SITE,
+            checkedAt: Date.now(),
+            error: error instanceof Error ? error.message : String(error),
+          }) satisfies TokenPlanMediaModels,
+      }).pipe(Effect.catch((err) => Effect.succeed(err)))
+      if (result.ok) cachedMedia = result
+      return result
+    })
+
+    // Publish the account's media models only after a successful fetch, so a missing session or a gateway
+    // error leaves the static catalog untouched. Chat models are never touched. Refreshed on demand by the
+    // image, video and models tools through ProviderRefresh.refreshDemand (no periodic polling).
+    yield* ctx.provider.transform((providers) => {
+      if (!mediaLoaded) return
+      for (const model of providers.get(TOKEN_PLAN_PROVIDER)?.models.values() ?? []) {
+        if (model.type === "image" || model.type === "video") providers.models.remove(TOKEN_PLAN_PROVIDER, model.id)
+      }
+      for (const item of mediaModels) {
+        providers.models.update(TOKEN_PLAN_PROVIDER, item.modelId, (model) => {
+          model.modelID = Model.ID.make(item.modelId)
+          model.name = item.name || item.modelId
+          model.type = item.type
+          model.package =
+            item.type === "image" ? "@opencode/ai/providers/alibaba/images" : "@opencode/ai/providers/alibaba/videos"
+          model.capabilities = { tools: false, input: ["text"], output: [item.type] }
+        })
+      }
+    })
+
+    const refreshMedia = Effect.fn("AlibabaUsagePlugin.refreshMedia")(function* () {
+      const result = yield* fetchMediaModels()
+      if (!result.ok) return
+      mediaModels = result.models
+      mediaLoaded = true
+      yield* ctx.provider.reload()
+    })
+    yield* ProviderRefresh.registerDemand(TOKEN_PLAN_PROVIDER, refreshMedia())
 
     const startLogin = Effect.fn("AlibabaUsagePlugin.startLogin")(function* () {
       for (const existing of pendingLogins.values()) existing.close()
@@ -973,6 +1137,7 @@ export const Plugin = define({
               Effect.sync(() => {
                 cached = undefined
                 cachedModels = undefined
+                cachedMedia = undefined
               }),
             ),
             Effect.as({ ok: true }),

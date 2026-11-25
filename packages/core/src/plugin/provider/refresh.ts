@@ -22,6 +22,33 @@ export const onSwitch = <E, R>(integrationID: string, effect: Effect.Effect<unkn
     )
   })
 
+// Demand-mode local providers register their refresh here; consumers run them before reading the catalog.
+// Process-global like the discovery cache in local.ts: each callback publishes to its own Location, and the
+// per-endpoint TTL cache deduplicates the HTTP query across callers.
+const demand = new Map<string, Set<Effect.Effect<void>>>()
+
+/** Registers a demand refresh for `providerID` until the scope closes. The refresh owns its TTL and failures. */
+export const registerDemand = (providerID: string, refresh: Effect.Effect<void>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const set = demand.get(providerID) ?? new Set()
+      set.add(refresh)
+      demand.set(providerID, set)
+    }),
+    () =>
+      Effect.sync(() => {
+        const set = demand.get(providerID)
+        set?.delete(refresh)
+        if (set?.size === 0) demand.delete(providerID)
+      }),
+  )
+
+/** Runs every demand-mode provider's refresh so a catalog read sees current models. Never fails: each refresh swallows its own errors. */
+export const refreshDemand = () =>
+  Effect.forEach(Array.from(demand.values()).flatMap((set) => Array.from(set)), (refresh) => refresh, {
+    discard: true,
+  })
+
 /** Runs `reload` when `load` reports that the derived state changed. */
 export const reloadIfChanged = <E, R>(load: Effect.Effect<boolean, E, R>, reload: Effect.Effect<void>) =>
   load.pipe(Effect.flatMap((changed) => (changed ? reload : Effect.void)))

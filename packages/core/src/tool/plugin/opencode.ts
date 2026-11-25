@@ -12,6 +12,7 @@ import { toolFailure } from "../runtime.js"
 import { FileAccess } from "../../file-access.js"
 import { Git } from "../../git.js"
 import { Permission } from "../../permission.js"
+import { ProviderRefresh } from "../../plugin/provider/refresh.js"
 import { Worktree } from "../../worktree.js"
 
 export const RenameInput = Schema.Struct({
@@ -241,6 +242,8 @@ export const Plugin = {
           options: { namespace: "opencode", codemode: true },
           execute: (input, context) =>
             Effect.gen(function* () {
+              // Demand-mode local providers (e.g. llamacpp) discover now, so the listing reflects a running proxy.
+              yield* ProviderRefresh.refreshDemand()
               const offset = input.offset ?? 0
               const limit = input.limit ?? 20
               const own = (yield* ctx.session.get({ sessionID: context.sessionID })).model?.providerID

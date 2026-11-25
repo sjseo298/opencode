@@ -19,6 +19,7 @@ import { Job } from "../../job.js"
 import { Mime } from "../../mime.js"
 import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
+import { ProviderRefresh } from "../../plugin/provider/refresh.js"
 import { Session } from "../../session.js"
 import { SessionMessage } from "../../session/message.js"
 import { SessionSchema } from "../../session/schema.js"
@@ -92,6 +93,8 @@ export const Plugin = {
       sessionID: SessionSchema.ID,
       images: boolean,
     ) {
+      // Demand-mode local providers (e.g. llamacpp) discover now, so a proxy started after this server is visible.
+      yield* ProviderRefresh.refreshDemand()
       const available = yield* models.available(["image"])
       if (!input) {
         // A configured default is a preference: when it can't serve this call, pick automatically and say so.

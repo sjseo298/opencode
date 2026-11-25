@@ -11,6 +11,7 @@ import {
   parseGatewayModelsResponse,
   parseGatewayUsageResponse,
   parseManualLoginInput,
+  parseTokenPlanMediaModels,
 } from "../../../src/plugin/builtin/alibaba-usage.js"
 
 describe("AlibabaUsagePlugin native gateway helpers", () => {
@@ -301,5 +302,58 @@ describe("AlibabaUsagePlugin captured-token extraction (spec §4.2)", () => {
       state,
     )
     expect(result?.token).toBe(token)
+  })
+})
+
+describe("AlibabaUsagePlugin media models parse", () => {
+  // Envelope shaped like the live listTokenPlanModels response; capability codes IG/VG verified live.
+  const envelope = (list: unknown[]) =>
+    JSON.stringify({ code: "200", data: { DataV2: { data: { code: "200", data: { total: list.length, list } } } } })
+
+  test("maps IG to image and VG to video, ignoring chat and other capabilities", () => {
+    const result = parseTokenPlanMediaModels(
+      envelope([
+        { modelId: "qwen4-max", provider: "qwen", capabilities: ["TG", "Reasoning", "VU"] },
+        { modelId: "qwen-image-3.0-pro", provider: "qwen", capabilities: ["IG"], name: '{"en-US":"Qwen-Image 3.0 Pro"}' },
+        { modelId: "wan2.7-image", provider: "wan", capabilities: ["IG"] },
+        { modelId: "wan3.0-video", provider: "wan", capabilities: ["VG"] },
+        { modelId: "happyhorse-1.1-i2v", provider: "happyhorse", capabilities: ["VG"] },
+        { modelId: "qwen-audio-3.0-tts-plus", provider: "qwen", capabilities: ["TTS"] },
+      ]),
+      1000,
+    )
+    expect(result.ok).toBe(true)
+    expect(result.models).toEqual([
+      { modelId: "qwen-image-3.0-pro", type: "image", name: "Qwen-Image 3.0 Pro", provider: "qwen" },
+      { modelId: "wan2.7-image", type: "image", provider: "wan" },
+      { modelId: "wan3.0-video", type: "video", provider: "wan" },
+      { modelId: "happyhorse-1.1-i2v", type: "video", provider: "happyhorse" },
+    ])
+  })
+
+  test("keeps media models without a promotion badge", () => {
+    const result = parseTokenPlanMediaModels(
+      envelope([{ modelId: "wan2.7-image-pro", provider: "wan", capabilities: ["IG"] }]),
+      1000,
+    )
+    expect(result.ok).toBe(true)
+    expect(result.models.map((m) => m.modelId)).toEqual(["wan2.7-image-pro"])
+  })
+
+  test("detects NotLogined as needsAuth", () => {
+    const result = parseTokenPlanMediaModels(
+      JSON.stringify({ data: { success: false, errorCode: "NotLogined", errorMsg: "Session expired" } }),
+      1000,
+    )
+    expect(result.ok).toBe(false)
+    expect(result.needsAuth).toBe(true)
+    expect(result.models).toEqual([])
+  })
+
+  test("reports an error when no model list is returned", () => {
+    const result = parseTokenPlanMediaModels(JSON.stringify({ data: { DataV2: { data: { data: {} } } } }), 1000)
+    expect(result.ok).toBe(false)
+    expect(result.models).toEqual([])
+    expect(result.error).toContain("No Token Plan model list")
   })
 })

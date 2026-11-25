@@ -21,7 +21,7 @@ export type LocalModel = {
   readonly vision?: boolean
   readonly context?: number | null
   /** Decision models answer typed questions through the host's System One endpoint (`/v1/systemone`). */
-  readonly type?: "chat" | "decision"
+  readonly type?: "chat" | "decision" | "image"
 }
 
 // Remote and tunnelled hosts can take several seconds to connect. Discovery runs in the background, so waiting
@@ -38,6 +38,8 @@ export function createLocalProviderPlugin<Discovered>(input: {
   readonly stripPathSuffix?: RegExp
   readonly discover: (client: LocalDiscoveryClient) => Effect.Effect<readonly Discovered[], unknown>
   readonly model: (item: NoInfer<Discovered>) => LocalModel
+  /** Skip periodic polling: discover at startup and when consumers call ProviderRefresh.refreshDemand(); interval becomes the query TTL. */
+  readonly demand?: boolean
 }) {
   const discovery = new Map<string, { checked: number; apiKey?: string; models?: readonly Discovered[] }>()
   // One lock per endpoint, so an unresponsive host does not delay discovery of another.
@@ -96,6 +98,13 @@ export function createLocalProviderPlugin<Discovered>(input: {
                 output: ["text"],
               }
               if (typeof spec.context === "number" && spec.context > 0) model.limit.context = spec.context
+              if (spec.type === "image") {
+                model.type = "image"
+                model.package = "@opencode/ai/providers/openai-compatible/images"
+                model.capabilities.output = ["image"]
+                // Image input follows `vision`: hosts that edit (e.g. llamacpp's sd engine) accept a source image.
+                return
+              }
               if (spec.type !== "decision") return
               model.type = "decision"
               model.package = "@opencode/ai/providers/openai-compatible/decisions"
@@ -159,7 +168,11 @@ export function createLocalProviderPlugin<Discovered>(input: {
             }),
           )
         })
-        yield* attempt.pipe(Effect.repeat(Schedule.spaced(interval)), Effect.forkScoped)
+        // Demand mode skips periodic polling: consumers refresh before reading the catalog, and the
+        // discovery cache's interval becomes the anti-burst TTL between queries.
+        if (input.demand) yield* ProviderRefresh.registerDemand(input.providerID, attempt)
+        const loop = input.demand ? attempt : attempt.pipe(Effect.repeat(Schedule.spaced(interval)))
+        yield* loop.pipe(Effect.forkScoped)
         // Event handlers start discovery without waiting on it, so a slow endpoint doesn't hold up the next event.
         const background = yield* FiberSet.make()
         yield* ProviderRefresh.onSwitch(input.providerID, FiberSet.run(background, attempt))

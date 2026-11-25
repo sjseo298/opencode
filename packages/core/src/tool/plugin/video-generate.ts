@@ -17,6 +17,7 @@ import { BlobStore } from "../../blob-store.js"
 import { Job } from "../../job.js"
 import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
+import { ProviderRefresh } from "../../plugin/provider/refresh.js"
 import { Session } from "../../session.js"
 import { BackgroundResult } from "../../session/background-result.js"
 import { SessionMessage } from "../../session/message.js"
@@ -196,6 +197,8 @@ export const Plugin = {
       input: string | undefined,
       sessionID: SessionSchema.ID,
     ) {
+      // Demand-mode providers (e.g. the Alibaba Token Plan account list) discover now, before reading.
+      yield* ProviderRefresh.refreshDemand()
       const available = yield* models.available(["video"])
       if (!input) {
         // A configured default that isn't available falls back to the automatic pick.
