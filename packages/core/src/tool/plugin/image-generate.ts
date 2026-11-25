@@ -18,6 +18,7 @@ import { ImageNotice } from "../../image/notice.js"
 import { Job } from "../../job.js"
 import { Mime } from "../../mime.js"
 import { Model } from "../../model.js"
+import { Provider } from "../../provider.js"
 import { Permission } from "../../permission.js"
 import { ProviderRefresh } from "../../plugin/provider/refresh.js"
 import { Session } from "../../session.js"
@@ -43,6 +44,7 @@ export const description = [
   "Images you pass are used as the source to edit, or as references for style and subject.",
   "Each call makes one image. For several images, call it once per image.",
   "It runs in the background: the call starts a job and returns right away, and you are notified automatically when the image is saved, with its path. Never poll, sleep, or check for the file while you wait.",
+  "Local image providers (such as llamacpp) run on your own hardware and are far slower than cloud, and the time grows sharply with image size: a large image (e.g. 2752x1536) can take tens of minutes. Prefer modest sizes (around 1024x1024 or smaller) unless the user explicitly wants large, and tell the user a local job may take a while. You can check a running local job's progress and ETA with experimental_image_progress rather than waiting blindly.",
   "Don't repeat a request unless the user asks.",
 ].join("\n")
 
@@ -86,6 +88,7 @@ export const Plugin = {
     const scope = yield* Scope.Scope
     const sessions = yield* Session.Service
     const models = yield* Model.Service
+    const providers = yield* Provider.Service
     const permission = yield* Permission.Service
 
     const resolveModel = Effect.fn("ImageGenerateTool.resolveModel")(function* (
@@ -336,8 +339,27 @@ export const Plugin = {
                   yield* replaces ? permission.assert({ ...request, save: ["*"] }) : permission.assertNotDenied(request)
                 }
                 yield* files.write(file, bytes)
-                return `Image request finished. Saved image: ${file} (${ref}).\nUse the read tool on this path to view the image.`
+                const sd = (
+                  result.native?.[model.providerID] as
+                    | { sdMetrics?: { duration_s?: number; steps?: number; seconds_per_step?: number } }
+                    | undefined
+                )?.sdMetrics
+                const timing =
+                  sd?.duration_s !== undefined
+                    ? ` Took ${Math.round(sd.duration_s)}s${sd.steps !== undefined ? `, ${sd.steps} steps` : ""}${sd.seconds_per_step !== undefined ? ` (${sd.seconds_per_step.toFixed(1)}s/step)` : ""}.`
+                    : ""
+                return `Image request finished. Saved image: ${file} (${ref}).${timing}\nUse the read tool on this path to view the image.`
               }).pipe(
+                // Cancelling a local job must also stop the proxy's backend, or it keeps computing orphaned.
+                Effect.onInterrupt(() =>
+                  Effect.gen(function* () {
+                    if (model.providerID !== "llamacpp") return
+                    const provider = yield* providers.get(Provider.ID.make("llamacpp"))
+                    const baseURL = typeof provider?.settings?.baseURL === "string" ? provider.settings.baseURL : undefined
+                    if (!baseURL) return
+                    yield* http.execute(HttpClientRequest.post(`${baseURL.replace(/\/+$/, "")}/images/cancel`))
+                  }).pipe(Effect.ignore),
+                ),
                 // The job keeps this text, so a restart can still deliver the outcome.
                 Effect.mapError((error) => new Error(`Image request failed for ${stem}: ${error.message}`)),
               )

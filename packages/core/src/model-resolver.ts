@@ -627,6 +627,7 @@ const API_KEY_AUTH_PACKAGES: ReadonlySet<string> = new Set([
   "@opencode/ai/providers/fireworks",
   "@opencode/ai/providers/openai-compatible",
   "@opencode/ai/providers/openai-compatible/decisions",
+  "@opencode/ai/providers/openai-compatible/images",
   "@opencode/ai/providers/google",
   "@opencode/ai/providers/google/interactions",
   "@opencode/ai/providers/groq",

@@ -63,11 +63,19 @@ const Settings = {
   background: Schema.optional(Schema.String),
 }
 
+const SdMetrics = Schema.Struct({
+  duration_s: Schema.optional(Schema.Number),
+  steps: Schema.optional(Schema.Number),
+  seconds_per_step: Schema.optional(Schema.Number),
+})
+
 const OpenAIImageResponse = Schema.Struct({
   // GPT Image models always return `b64_json`; compatible hosts that default to `url` can return either.
   data: Schema.Array(Schema.Struct({ b64_json: optionalNull(Schema.String), url: optionalNull(Schema.String) })),
   ...Settings,
   usage: Schema.optional(Usage),
+  // Local sd hosts (llamacpp) report timing for the finished job.
+  sd_metrics: Schema.optional(SdMetrics),
 })
 
 // ---------------------------------------------------------------------------
@@ -129,6 +137,7 @@ interface State {
   readonly quality?: string
   readonly background?: string
   readonly usage?: Schema.Schema.Type<typeof Usage>
+  readonly sdMetrics?: Schema.Schema.Type<typeof SdMetrics>
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +376,7 @@ const onDocument = Effect.fnUntraced(function* (frame: Exclude<Frame, string>) {
     quality: decoded.quality,
     background: decoded.background,
     usage: decoded.usage,
+    sdMetrics: decoded.sd_metrics,
   }
   return [state, images.map((image, index) => ImageOutputEvent.make({ index, image }))] as const
 })
@@ -385,6 +395,7 @@ const finish = (state: State, context: MediaProtocol.ResponseContext<Request>) =
           size: state.size,
           quality: state.quality,
           background: state.background,
+          ...(state.sdMetrics ? { sdMetrics: state.sdMetrics } : {}),
         },
       },
     }),

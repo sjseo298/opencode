@@ -86,6 +86,7 @@ import { EditTool } from "../tool/plugin/edit.js"
 import { GlobTool } from "../tool/plugin/glob.js"
 import { GrepTool } from "../tool/plugin/grep.js"
 import { ImageGenerateTool } from "../tool/plugin/image-generate.js"
+import { ImageProgressTool } from "../tool/plugin/image-progress.js"
 import { VideoGenerateTool } from "../tool/plugin/video-generate.js"
 import { McpEventTools } from "../tool/plugin/mcp-events.js"
 import { McpResourceTools } from "../tool/plugin/mcp-resource.js"
@@ -295,6 +296,7 @@ const pre = [
   GlobTool.Plugin,
   GrepTool.Plugin,
   ImageGenerateTool.Plugin,
+  ImageProgressTool.Plugin,
   VideoGenerateTool.Plugin,
   OpenCodeTools.Plugin,
   McpEventTools.Plugin,

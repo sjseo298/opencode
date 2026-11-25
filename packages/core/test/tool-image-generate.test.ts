@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Bus } from "@opencode/core/bus"
@@ -15,6 +15,7 @@ import { Session } from "@opencode/core/session"
 import { SessionEvent } from "@opencode/core/session/event"
 import { Tool } from "@opencode/core/tool"
 import { ImageGenerateTool } from "@opencode/core/tool/plugin/image-generate"
+import { VideoGenerateTool } from "@opencode/core/tool/plugin/video-generate"
 import { OpenCodeTools } from "@opencode/core/tool/plugin/opencode"
 import { Document, Event, Info } from "@opencode/schema/config"
 import { ConfigExperimental } from "@opencode/schema/config/experimental"
@@ -544,4 +545,17 @@ describe("defaultModel", () => {
       expect(pick([textOnly, editor], "mine", false)).toBe("mine/text-only")
     }),
   )
+})
+
+describe("media tool guidance for local providers", () => {
+  test("image tool warns about local slowness, size, and progress", () => {
+    expect(ImageGenerateTool.description).toContain("llamacpp")
+    expect(ImageGenerateTool.description).toContain("far slower than cloud")
+    expect(ImageGenerateTool.description).toContain("experimental_image_progress")
+  })
+
+  test("video tool warns about local slowness", () => {
+    expect(VideoGenerateTool.description).toContain("llamacpp")
+    expect(VideoGenerateTool.description).toContain("far slower than cloud")
+  })
 })

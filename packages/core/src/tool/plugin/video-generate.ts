@@ -42,6 +42,7 @@ export const description = [
   "Generates a video from a prompt, optionally starting or ending on given images and guided by reference images, videos or audio.",
   "Only call this when the user asks for a video: videos are slow and expensive.",
   "It runs in the background, and you are notified with every saved file when it finishes. Never poll, sleep, or check for the file while you wait.",
+  "Local video providers (such as llamacpp) run on your own hardware and are far slower than cloud, and the time grows with resolution and duration; tell the user a local job may take a long time.",
 ].join("\n")
 
 const source = Schema.String.check(Schema.isMinLength(1))

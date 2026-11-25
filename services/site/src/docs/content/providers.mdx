@@ -586,6 +586,16 @@ on the next use. The `sd` models appear as image models for
 image. The proxy uses only the first input image, so additional references are ignored; edits default to a denoising
 strength of 0.6, and omitting the size keeps the input image's dimensions.
 
+No API key is required. The local proxy accepts requests without authentication, so OpenCode resolves these image
+models keyless and never prompts for a credential.
+
+Local generation runs on your own hardware and is much slower than cloud, and the time grows sharply with image size.
+A large image such as 2752x1536 can take tens of minutes, so prefer modest sizes around 1024x1024 unless you need large.
+
+- Check a running job's progress and ETA with `experimental_image_progress` rather than waiting blindly.
+- Cancelling the image job also stops the proxy's backend, so it does not keep computing orphaned.
+- The completion notice reports the proxy's timing (`sd_metrics`) as duration, steps, and seconds per step.
+
 ```jsonc title="opencode.jsonc"
 {
   "$schema": "https://opencode.ai/config.json",

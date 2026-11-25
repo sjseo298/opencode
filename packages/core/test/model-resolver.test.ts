@@ -1,9 +1,9 @@
 import { describe, expect } from "bun:test"
-import { ai, LanguageModel, Message } from "@opencode/ai/effect"
+import { ai, AIError, ImageModel, LanguageModel, Message } from "@opencode/ai/effect"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { compileRequest } from "@opencode/ai/testing"
-import { ConfigProvider, Effect, Layer } from "effect"
-import { Headers } from "effect/http"
+import { ConfigProvider, Effect, Layer, Option } from "effect"
+import { Headers, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { AISDKNative } from "@opencode/core/aisdk-native"
 import { Credential } from "@opencode/core/credential"
 import { Integration } from "@opencode/core/integration"
@@ -424,6 +424,96 @@ describe("ModelResolver", () => {
             expect(headers["x-goog-api-key"]).toBeUndefined()
           }),
         )
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  it.effect("resolves local openai-compatible image models without an API key", () => {
+    const image = Info.make({
+      id: ID.make("sd/image.json"),
+      modelID: ID.make("sd/image.json"),
+      providerID: Provider.ID.make("llamacpp"),
+      name: "SD image",
+      package: "@opencode/ai/providers/openai-compatible/images",
+      type: "image",
+      settings: { baseURL: "http://127.0.0.1:29999/v1", apiKey: "" },
+      headers: {},
+      body: {},
+      capabilities: { tools: false, input: ["text", "image"], output: ["image"] },
+      variants: [],
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      limit: { context: 0, output: 0 },
+    })
+    const provider = Provider.Info.make({
+      ...Provider.Info.empty(Provider.ID.make("llamacpp")),
+      activation: "enabled",
+      package: "@opencode/ai/providers/openai-compatible",
+      settings: { baseURL: "http://127.0.0.1:29999/v1", apiKey: "" },
+    })
+    const providers = Layer.mock(Provider.Service, { get: () => Effect.succeed(provider) })
+    const models = Layer.mock(Model.Service, {
+      available: () => Effect.succeed([image]),
+      get: () => Effect.succeed(image),
+    })
+    const integrations = Layer.mock(Integration.Service, {
+      revision: () => 0,
+      connection: {
+        active: () => Effect.undefined,
+        resolve: () => Effect.die("unused"),
+        key: () => Effect.die("unused"),
+        external: () => Effect.die("unused"),
+        activate: () => Effect.die("unused"),
+        update: () => Effect.die("unused"),
+        remove: () => Effect.die("unused"),
+        status: () => Effect.die("unused"),
+      },
+      oauth: {
+        connect: () => Effect.die("unused"),
+        status: () => Effect.die("unused"),
+        complete: () => Effect.die("unused"),
+        cancel: () => Effect.die("unused"),
+      },
+      command: {
+        connect: () => Effect.die("unused"),
+        status: () => Effect.die("unused"),
+        cancel: () => Effect.die("unused"),
+      },
+    })
+    const npm = Layer.mock(Npm.Service, { add: () => Effect.die("unused"), which: () => Effect.die("unused") })
+    const aisdk = Layer.mock(AISDK.Service, {
+      hook: { sdk: () => Effect.die("unused"), language: () => Effect.die("unused") },
+      model: () => Effect.die("unused"),
+    })
+    const layer = ModelResolver.layer.pipe(Layer.provide(Layer.mergeAll(providers, models, integrations, npm, aisdk)))
+
+    return withConfigEnv({}, () =>
+      Effect.gen(function* () {
+        const resolver = yield* ModelResolver.Service
+        const ref = Model.Ref.make({ providerID: Provider.ID.make("llamacpp"), id: image.id })
+        const resolvedImage = yield* resolver.resolveImage(ref)
+        expect(resolvedImage).toBeInstanceOf(ImageModel)
+        // Apply the route's real auth through a fake transport: keyless means no authorization header.
+        // Without the keyless fix the openai-compatible package demands a credential and this fails.
+        const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let authorization: string | undefined
+        const execute = (request: HttpClientRequest.HttpClientRequest) => {
+          authorization = Option.getOrUndefined(Headers.get(request.headers, "authorization"))
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, Response.json({ data: [{ b64_json: png }], output_format: "png" })),
+          )
+        }
+        // ImageRoute is a union; the openai-compatible images route is a stream route with generate.
+        const route = resolvedImage!.route as {
+          generate: (
+            request: ReturnType<typeof ai.image.request>,
+            execute: (request: HttpClientRequest.HttpClientRequest) => Effect.Effect<HttpClientResponse.HttpClientResponse>,
+          ) => Effect.Effect<unknown, AIError>
+        }
+        yield* route.generate(ai.image.request({ model: resolvedImage!, prompt: "a red apple" }), execute)
+        expect(authorization).toBeUndefined()
       }).pipe(Effect.provide(layer)),
     )
   })
