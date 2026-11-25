@@ -233,7 +233,7 @@ export const queued = <Request extends MediaRequest, Response, Token>(
   const start = Effect.fn("MediaRoute.start")(function* (request: Request, execute: Execute) {
     const submitted = yield* transport.submit(
       request,
-      { unsupported: protocol.unsupported, prepare: protocol.start.prepare, from: protocol.start.body.from },
+      { unsupported: protocol.unsupported, prepare: protocol.start.prepare, headers: protocol.start.headers, from: protocol.start.body.from },
       execute,
     )
     const started = yield* protocol.start.decode(submitted.response, submitted.context)
@@ -376,6 +376,7 @@ const makeTransport = <Request extends MediaRequest>(
       protocol: {
         readonly unsupported?: ReadonlyArray<keyof Request & string>
         readonly prepare?: MediaProtocol.Prepare<Request>
+        readonly headers?: Record<string, string>
         readonly from: (request: Request) => Effect.Effect<MediaProtocol.Body, AIError>
       },
       execute: Execute,
@@ -388,7 +389,8 @@ const makeTransport = <Request extends MediaRequest>(
       } = mergeTransport({ headers: input.headers }, request.model.transport, request)
       const exchange = { headers: merged, timeout, http, fetch: request.fetch }
       const providerOptions = mergeProviderOptions(request.model.providerOptions, request.providerOptions)
-      const headers = Headers.fromInput(merged)
+      // Submit-only protocol headers never ride along on the follow-up reads, which reuse `exchange`.
+      const headers = Headers.fromInput(mergeTransport({ headers: merged }, { headers: protocol.headers }).headers)
       const prepared =
         protocol.prepare === undefined
           ? request

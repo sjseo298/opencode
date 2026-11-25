@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "metadata": {
+    "tags": [
+      "prefix:alibaba-video",
+      "provider:alibaba",
+      "protocol:alibaba-video"
+    ],
+    "name": "alibaba-video/rejects-an-invalid-api-key",
+    "recordedAt": "2026-11-24T00:00:00.000Z"
+  },
+  "interactions": [
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"happyhorse-1.1-t2v\",\"input\":{\"prompt\":\"A single red balloon drifting slowly upward against a clear blue sky.\"}}"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"code\":\"InvalidApiKey\",\"message\":\"Invalid API-key provided.\",\"request_id\":\"req-auth-0001\"}"
+      }
+    }
+  ]
+}

@@ -77,6 +77,8 @@ type Context = {
   readonly canonical?: string
   readonly modelID?: string
   readonly shape?: "responses" | "completions"
+  /** The catalog API protocol for media models (`images`, `videos`), which map to their own entrypoints. */
+  readonly media?: string
 }
 
 export function rewrite<ID extends string>(
@@ -176,7 +178,22 @@ const HOSTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "zhipuai-coding-plan": protocols("zai-coding-plan"),
 }
 
+// Media APIs whose AI SDK package has a native opencode entrypoint, per provider family. The catalog
+// lists some media models with only their AI SDK package; this mapping keeps them runnable natively
+// even when a catalog refresh carries no `opencodeai` entrypoint for them.
+const alibabaMedia = { "@ai-sdk/alibaba": { videos: "@opencode/ai/providers/alibaba/videos" } }
+const MEDIA: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> = {
+  alibaba: alibabaMedia,
+  "alibaba-cn": alibabaMedia,
+  "alibaba-coding-plan": alibabaMedia,
+  "alibaba-coding-plan-cn": alibabaMedia,
+  "alibaba-token-plan": alibabaMedia,
+  "alibaba-token-plan-cn": alibabaMedia,
+}
+
 export function native(npm: string, context: Context & { readonly settings?: Provider.Settings }): string | undefined {
+  const media = context.media === undefined ? undefined : MEDIA[context.providerID]?.[npm]?.[context.media]
+  if (media) return media
   const host = HOSTS[context.providerID]?.[npm]
   if (host) return host
   if (npm === "@ai-sdk/amazon-bedrock/mantle") return mantle(context.modelID)

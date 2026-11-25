@@ -2,6 +2,7 @@ import { Struct } from "effect"
 import type { ProviderPackage } from "../provider-package.js"
 import { AlibabaChat } from "../protocols/alibaba-chat.js"
 import { AlibabaImages } from "../protocols/alibaba-images.js"
+import { AlibabaVideo } from "../protocols/alibaba-video.js"
 import { OpenAIEmbeddings } from "../protocols/openai-embeddings.js"
 import { AlibabaMessages } from "../protocols/alibaba-messages.js"
 import { AlibabaResponses } from "../protocols/alibaba-responses.js"
@@ -34,6 +35,7 @@ export type ChatOptionsInput = AlibabaChat.OptionsInput
 export type MessagesOptionsInput = AlibabaMessages.OptionsInput
 export type ResponsesOptionsInput = AlibabaResponses.OptionsInput
 export type { AlibabaImageOptions } from "../protocols/alibaba-images.js"
+export type { AlibabaVideoOptions } from "../protocols/alibaba-video.js"
 
 type Location = AtLeastOne<{
   readonly region: Region
@@ -120,6 +122,10 @@ export const configure = (input: Config) => {
   const media = MediaRoute.deployment({ ...input, baseURL: baseURL ?? `https://${host}/api/v1` }, opts.auth)
   const image = (id: string | ModelID, providerOptions?: ProviderOptions) =>
     AlibabaImages.model({ ...media, id, providerOptions })
+  // Video paths already carry `/api/v1`, so their deployment keeps the host-only baseURL.
+  const videoMedia = MediaRoute.deployment({ ...input, baseURL: baseURL ?? `https://${host}` }, opts.auth)
+  const video = (id: string | ModelID, providerOptions?: ProviderOptions) =>
+    AlibabaVideo.model({ ...videoMedia, id, providerOptions })
   const embeddingRoute = OpenAIEmbeddings.route.with({
     provider: id,
     endpoint: common.endpoint,
@@ -128,7 +134,7 @@ export const configure = (input: Config) => {
   })
   const embedding = (id: string | ModelID, providerOptions?: ProviderOptions) =>
     embeddingRoute.model({ id, providerOptions })
-  return { id, model: chat, chat, messages, responses, image, embedding, configure }
+  return { id, model: chat, chat, messages, responses, image, video, embedding, configure }
 }
 
 export const provider = { id, configure }
@@ -146,6 +152,10 @@ export const responses = responsesModel
 export const imageModel = (id: string, settings: Settings) => {
   const input = config(settings)
   return configure(input).image(id, input.providerOptions)
+}
+export const videoModel = (id: string, settings: Settings) => {
+  const input = config(settings)
+  return configure(input).video(id, input.providerOptions)
 }
 export const embeddingModel = (id: string, settings: Settings) => {
   const input = config(settings)

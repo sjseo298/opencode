@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "metadata": {
+    "tags": [
+      "prefix:alibaba-video",
+      "provider:alibaba",
+      "protocol:alibaba-video"
+    ],
+    "name": "alibaba-video/fails-a-task-the-provider-rejected",
+    "recordedAt": "2026-11-24T00:00:00.000Z"
+  },
+  "interactions": [
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"happyhorse-1.1-t2v\",\"input\":{\"prompt\":\"A scene the content inspector rejects.\"},\"parameters\":{\"resolution\":\"480P\"}}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"output\":{\"task_id\":\"hh-fail-0001\",\"task_status\":\"PENDING\"},\"request_id\":\"req-fail-0001\"}"
+      }
+    },
+    {
+      "transport": "http",
+      "request": {
+        "method": "GET",
+        "url": "https://dashscope-intl.aliyuncs.com/api/v1/tasks/hh-fail-0001",
+        "headers": {},
+        "body": ""
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"output\":{\"task_id\":\"hh-fail-0001\",\"task_status\":\"FAILED\",\"code\":\"DataInspectionFailed\",\"message\":\"Input data may contain inappropriate content.\"},\"request_id\":\"req-fail-0002\"}"
+      }
+    },
+    {
+      "transport": "http",
+      "request": {
+        "method": "GET",
+        "url": "https://dashscope-intl.aliyuncs.com/api/v1/tasks/hh-fail-0001",
+        "headers": {},
+        "body": ""
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"output\":{\"task_id\":\"hh-fail-0001\",\"task_status\":\"FAILED\",\"code\":\"DataInspectionFailed\",\"message\":\"Input data may contain inappropriate content.\"},\"request_id\":\"req-fail-0003\"}"
+      }
+    }
+  ]
+}

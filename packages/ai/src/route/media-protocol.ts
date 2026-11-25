@@ -122,6 +122,8 @@ export interface Queued<Request, Response, Token> {
   readonly token: Schema.Codec<Token, unknown>
   readonly start: {
     readonly prepare?: Prepare<Request>
+    /** Headers the submit call requires but follow-up reads must not carry (e.g. DashScope's async flag). */
+    readonly headers?: Record<string, string>
     readonly body: { readonly from: (request: Request) => Effect.Effect<Body, AIError> }
     readonly decode: (
       response: HttpClientResponse.HttpClientResponse,

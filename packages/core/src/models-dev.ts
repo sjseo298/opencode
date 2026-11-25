@@ -259,8 +259,15 @@ function route(providerID: Provider.ID, model: SourceModel, unknown: Set<string>
   const apis = entries(model.api, decodeApi).map(
     ([protocol, entry]) => [protocol, entry, loadable(entry.sdk?.opencodeai, unknown)] as const,
   )
-  const eligible = ([, entry, opencodeai]: (typeof apis)[number]) =>
-    model.type === "chat" ? opencodeai || entry.sdk?.aisdk : opencodeai?.endsWith(`/${model.type}s`)
+  // A media model can also run through the native entrypoint its AI SDK package maps to.
+  const mediaNative = (protocol: string, aisdk: string | undefined) =>
+    model.type === "chat" || aisdk === undefined
+      ? undefined
+      : AISDKNative.native(aisdk, { providerID, modelID: model.id, media: protocol })
+  const eligible = ([protocol, entry, opencodeai]: (typeof apis)[number]) =>
+    model.type === "chat"
+      ? opencodeai || entry.sdk?.aisdk
+      : opencodeai?.endsWith(`/${model.type}s`) || mediaNative(protocol, entry.sdk?.aisdk)?.endsWith(`/${model.type}s`)
   const preferred = recommended ? apis.find((api) => api[0] === model.recommended_api && eligible(api)) : undefined
   const [protocol, api, opencodeai] = preferred ?? apis.find(eligible) ?? []
   if (!protocol || !api) return undefined
@@ -271,6 +278,7 @@ function route(providerID: Provider.ID, model: SourceModel, unknown: Set<string>
       (AISDKNative.native(aisdk, {
         providerID,
         modelID: model.id,
+        media: model.type === "chat" ? undefined : protocol,
         shape: protocol === "responses" ? "responses" : protocol === "chat-completions" ? "completions" : undefined,
       }) ??
         Provider.aisdk(aisdk)))
