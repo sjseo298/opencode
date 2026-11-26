@@ -48,9 +48,9 @@
             "output": 131072
           }
         },
-        "gguf/bartowski/Laguna-XS-2.1-Q5_K_L.gguf": {
-          "id": "gguf/bartowski/Laguna-XS-2.1-Q5_K_L.gguf",
-          "name": "[VT]L: [gguf] bartowski/Laguna-XS-2.1-Q5_K_L.gguf",
+        "gguf/bartowski/Cloudflare_clef-flash-Q4_K_M.gguf": {
+          "id": "gguf/bartowski/Cloudflare_clef-flash-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] bartowski/Cloudflare_clef-flash-Q4_K_M.gguf",
           "author": "bartowski",
           "tool_call": true,
           "modalities": {
@@ -64,7 +64,27 @@
             ]
           },
           "limit": {
-            "context": 196608,
+            "context": 262144,
+            "output": 32768
+          }
+        },
+        "gguf/bartowski/Cloudflare_clef-Q4_K_L.gguf": {
+          "id": "gguf/bartowski/Cloudflare_clef-Q4_K_L.gguf",
+          "name": "[VT]L: [gguf] bartowski/Cloudflare_clef-Q4_K_L.gguf",
+          "author": "bartowski",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
             "output": 32768
           }
         },
@@ -124,7 +144,7 @@
             ]
           },
           "limit": {
-            "context": 183296,
+            "context": 262144,
             "output": 32768
           }
         },
@@ -188,66 +208,6 @@
             "output": 65536
           }
         },
-        "gguf/bartowski/Qwen_Qwen3.6-27B-Q4_K_L.gguf": {
-          "id": "gguf/bartowski/Qwen_Qwen3.6-27B-Q4_K_L.gguf",
-          "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-27B-Q4_K_L.gguf",
-          "author": "bartowski",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 65536
-          }
-        },
-        "gguf/bartowski/Qwen_Qwen3.6-27B-Q5_K_L.gguf": {
-          "id": "gguf/bartowski/Qwen_Qwen3.6-27B-Q5_K_L.gguf",
-          "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-27B-Q5_K_L.gguf",
-          "author": "bartowski",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 196608,
-            "output": 65536
-          }
-        },
-        "gguf/bartowski/Qwen_Qwen3.6-27B-Q6_K_L.gguf": {
-          "id": "gguf/bartowski/Qwen_Qwen3.6-27B-Q6_K_L.gguf",
-          "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-27B-Q6_K_L.gguf",
-          "author": "bartowski",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 131072,
-            "output": 65536
-          }
-        },
         "gguf/bartowski/Qwen_Qwen3.6-35B-A3B-Q4_K_L.gguf": {
           "id": "gguf/bartowski/Qwen_Qwen3.6-35B-A3B-Q4_K_L.gguf",
           "name": "[VT]L: [gguf] bartowski/Qwen_Qwen3.6-35B-A3B-Q4_K_L.gguf",
@@ -284,7 +244,7 @@
             ]
           },
           "limit": {
-            "context": 196608,
+            "context": 262144,
             "output": 65536
           }
         },
@@ -388,6 +348,26 @@
             "output": 65536
           }
         },
+        "gguf/ggml-org/OpenJev-Q4_K_M.gguf": {
+          "id": "gguf/ggml-org/OpenJev-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] ggml-org/OpenJev-Q4_K_M.gguf",
+          "author": "ggml-org",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        },
         "gguf/ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf": {
           "id": "gguf/ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf",
           "name": "[VT]L: [gguf] ggml-org/SmolVLM-500M-Instruct-Q8_0.gguf",
@@ -406,6 +386,46 @@
           "limit": {
             "context": 8192,
             "output": 8192
+          }
+        },
+        "gguf/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf": {
+          "id": "gguf/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+          "author": "HauhauCS",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        },
+        "gguf/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf": {
+          "id": "gguf/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+          "name": "[VT]L: [gguf] HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+          "author": "HauhauCS",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 65536
           }
         },
         "gguf/InternScience/Sage-A1.5-Q4_K_M.gguf": {
@@ -544,8 +564,8 @@
             ]
           },
           "limit": {
-            "context": 116224,
-            "output": 16384
+            "context": 262144,
+            "output": 32768
           }
         },
         "gguf/unsloth/gemma-4-12b-it-UD-Q4_K_XL.gguf": {
@@ -648,6 +668,26 @@
             "output": 32768
           }
         },
+        "gguf/unsloth/Inkling-2-Mini-UD-Q4_K_XL.gguf": {
+          "id": "gguf/unsloth/Inkling-2-Mini-UD-Q4_K_XL.gguf",
+          "name": "[VT]L: [gguf] unsloth/Inkling-2-Mini-UD-Q4_K_XL.gguf",
+          "author": "unsloth",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 32768
+          }
+        },
         "gguf/unsloth/Muse-Glimmer-30B-UD-Q4_K_XL.gguf": {
           "id": "gguf/unsloth/Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
           "name": "[VT]L: [gguf] unsloth/Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
@@ -686,26 +726,6 @@
           "limit": {
             "context": 262144,
             "output": 32768
-          }
-        },
-        "gguf/unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf": {
-          "id": "gguf/unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf",
-          "name": "[VT]L: [gguf] unsloth/Qwen3-VL-4B-Thinking-UD-Q4_K_XL.gguf",
-          "author": "unsloth",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 131072
           }
         },
         "gguf/unsloth/Qwen3.5-2B-Q4_K_S.gguf": {
@@ -788,9 +808,9 @@
             "output": 65536
           }
         },
-        "gguf/unsloth/Qwen3.6-27B-Q5_K_M.gguf": {
-          "id": "gguf/unsloth/Qwen3.6-27B-Q5_K_M.gguf",
-          "name": "[VT]L: [gguf] unsloth/Qwen3.6-27B-Q5_K_M.gguf",
+        "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf": {
+          "id": "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf",
+          "name": "[VT]L: [gguf] unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf",
           "author": "unsloth",
           "tool_call": true,
           "modalities": {
@@ -804,47 +824,7 @@
             ]
           },
           "limit": {
-            "context": 183296,
-            "output": 65536
-          }
-        },
-        "gguf/unsloth/Qwen3.6-27B-Q6_K.gguf": {
-          "id": "gguf/unsloth/Qwen3.6-27B-Q6_K.gguf",
-          "name": "[VT]L: [gguf] unsloth/Qwen3.6-27B-Q6_K.gguf",
-          "author": "unsloth",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 131072,
-            "output": 65536
-          }
-        },
-        "gguf/unsloth/Qwen3.6-27B-UD-Q4_K_XL.gguf": {
-          "id": "gguf/unsloth/Qwen3.6-27B-UD-Q4_K_XL.gguf",
-          "name": "[VT]L: [gguf] unsloth/Qwen3.6-27B-UD-Q4_K_XL.gguf",
-          "author": "unsloth",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
+            "context": 196608,
             "output": 65536
           }
         },
@@ -868,26 +848,6 @@
             "output": 65536
           }
         },
-        "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf": {
-          "id": "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf",
-          "name": "[VT]L: [gguf] unsloth/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf",
-          "author": "unsloth",
-          "tool_call": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 196608,
-            "output": 65536
-          }
-        },
         "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf": {
           "id": "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf",
           "name": "[VT]L: [gguf] unsloth/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf",
@@ -904,7 +864,7 @@
             ]
           },
           "limit": {
-            "context": 169984,
+            "context": 262144,
             "output": 65536
           }
         },
@@ -968,15 +928,33 @@
             "output": 65536
           }
         },
-        "mlx/Ternary-Bonsai-27B-mlx-2bit": {
-          "id": "mlx/Ternary-Bonsai-27B-mlx-2bit",
-          "name": "[VT]L: [mlx] Ternary-Bonsai-27B-mlx-2bit",
-          "author": "lmstudio",
+        "sd/flux3-klein-uncensored.json": {
+          "id": "sd/flux3-klein-uncensored.json",
+          "name": "[T]L: [sd] flux3-klein-uncensored.json",
+          "author": "stable-diffusion",
           "tool_call": true,
           "modalities": {
             "input": [
               "text",
-              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 32768
+          }
+        },
+        "sd/qwen-image-21-turbo-uncensored.json": {
+          "id": "sd/qwen-image-21-turbo-uncensored.json",
+          "name": "[T]L: [sd] qwen-image-21-turbo-uncensored.json",
+          "author": "stable-diffusion",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
               "pdf"
             ],
             "output": [
@@ -985,6 +963,82 @@
           },
           "limit": {
             "context": 262144,
+            "output": 32768
+          }
+        },
+        "sd/qwen-image-edit-2511-uncensored.json": {
+          "id": "sd/qwen-image-edit-2511-uncensored.json",
+          "name": "[T]L: [sd] qwen-image-edit-2511-uncensored.json",
+          "author": "stable-diffusion",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        },
+        "sd-encoder/recipes-recipes-flux3-klein-uncensored.json": {
+          "id": "sd-encoder/recipes-recipes-flux3-klein-uncensored.json",
+          "name": "[T]L: [sd-encoder] recipes-recipes-flux3-klein-uncensored.json",
+          "author": "stable-diffusion",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 4096
+          }
+        },
+        "sd-encoder/recipes-recipes-qwen-image-21-turbo-uncensored.json": {
+          "id": "sd-encoder/recipes-recipes-qwen-image-21-turbo-uncensored.json",
+          "name": "[T]L: [sd-encoder] recipes-recipes-qwen-image-21-turbo-uncensored.json",
+          "author": "stable-diffusion",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        },
+        "sd-encoder/recipes-recipes-qwen-image-edit-2511-uncensored.json": {
+          "id": "sd-encoder/recipes-recipes-qwen-image-edit-2511-uncensored.json",
+          "name": "[T]L: [sd-encoder] recipes-recipes-qwen-image-edit-2511-uncensored.json",
+          "author": "stable-diffusion",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 128000,
             "output": 32768
           }
         },

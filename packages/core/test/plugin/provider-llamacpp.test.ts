@@ -28,6 +28,17 @@ const catalog = [
     has_vision: false,
   },
   {
+    id: "sd-encoder/recipes-recipes-flux3-klein-uncensored.json",
+    name: "[sd-encoder] recipes-recipes-flux3-klein-uncensored.json",
+    engine: "sd",
+    capabilities: ["chat"],
+    output_modalities: ["text"],
+    context_length: 262144,
+    tool_call: false,
+    has_vision: false,
+    sd_role: "encoder",
+  },
+  {
     id: "gguf/unsloth/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
     name: "[gguf] Qwen3.6-35B-A3B UD-Q4_K_XL",
     engine: "gguf",
@@ -137,6 +148,22 @@ describe("LlamaCppPlugin", () => {
       // Image models stay out of the chat catalog offered for sessions.
       const chat = yield* available.available()
       expect(chat.some((model) => model.id === sd.id)).toBe(false)
+    }),
+  )
+
+  it.live("classifies sd-encoder models as chat (shared-memory encoder of the sd backend)", () =>
+    Effect.gen(function* () {
+      const fake = yield* fakeLlamaCpp(catalog)
+      yield* addPlugin(fake.origin)
+      const models = yield* eventually(llamacppModels, (all) => all.length === catalog.length)
+      const enc = required(models.find((model) => model.id === "sd-encoder/recipes-recipes-flux3-klein-uncensored.json"))
+      expect(enc.type ?? "chat").toBe("chat")
+      expect(enc.package).toBe("@opencode/ai/providers/openai-compatible")
+      expect(enc.limit.context).toBe(262144)
+      // The encoder must appear in the chat catalog offered for sessions.
+      const available = yield* Model.Service
+      const chat = yield* available.available()
+      expect(chat.some((model) => model.providerID === llamacppID && model.id === enc.id)).toBe(true)
     }),
   )
 
