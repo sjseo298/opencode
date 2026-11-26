@@ -431,8 +431,9 @@ const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const view = sessions.current()
     const value = model()
 
-    // Only once the desktop's pane answers.
-    if (!view || !value?.available(view) || !value.attached(view)) return undefined
+    // Only once the desktop's pane answers, and still while another window holds the session's browser: opening it
+    // here takes it back.
+    if (!view || !value?.available(view) || !value.openable(view)) return undefined
 
     // A launcher of the side panel's new tab view, between Review and Terminal.
     return {
@@ -526,7 +527,11 @@ const setup: Plugin.Setup<typeof definition> = (ctx) => {
     const text = () => {
       const tab = page()
 
-      return !tab?.url || tab.url === "about:blank" ? ctx.t("tab.new") : tabTitle(tab, saved()) || tab.url
+      // A tab a link opened keeps this label until its page names itself, so it is relabelled once: never with
+      // Chromium's name for a document that has not named itself, which is its address.
+      const unnamed = !tab?.url || tab.url === "about:blank" || model()?.unnamed({ key: session }, id)
+
+      return unnamed ? ctx.t("tab.new") : tabTitle(tab, saved()) || tab.url
     }
 
     const icon = () => {

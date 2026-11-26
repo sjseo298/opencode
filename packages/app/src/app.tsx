@@ -22,6 +22,7 @@ import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/shell/commands/command"
 import { DesktopCommands } from "@/shell/commands/desktop"
 import { DocumentTitleProvider } from "@/shell/document-title"
+import { KeySequenceHint } from "@/shell/commands/key-sequence"
 import { ProjectIconsProvider } from "@/shell/layout/project-icons"
 import { GlobalProvider } from "@/runtime/server/runtime"
 import { LanguageProvider, UiI18nBridge, type Locale } from "@/runtime/i18n/language"
@@ -59,6 +60,10 @@ function BodyTypography() {
   return null
 }
 
+// Prod crashes reach Sentry only when someone clicks Report; other channels send them as they happen.
+// Builds that set no channel, such as the web app's, count as prod.
+const CAPTURES_CRASHES = ["local", "dev", "beta"].includes(import.meta.env.VITE_OPENCODE_CHANNEL ?? "")
+
 export function AppBaseProviders(
   props: ParentProps<{
     locale?: Locale
@@ -77,7 +82,8 @@ export function AppBaseProviders(
           <UiI18nBridge>
             <ErrorBoundary
               fallback={(error) => {
-                void import("@sentry/solid").then(({ captureException }) => captureException(error))
+                if (CAPTURES_CRASHES)
+                  void import("@sentry/solid").then(({ captureException }) => captureException(error))
 
                 return <ErrorPage error={error} />
               }}
@@ -119,6 +125,7 @@ export function AppInterface(props: {
                 {rootProps.children}
                 <VoiceOverlay />
               </VoiceProvider>
+              <KeySequenceHint />
             </CommandProvider>
           </DocumentTitleProvider>
         </ProjectIconsProvider>

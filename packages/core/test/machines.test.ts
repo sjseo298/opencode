@@ -15,7 +15,7 @@ import path from "node:path"
 import { Cause, Context, Deferred, Effect, Fiber, Layer, Option, PlatformError, Queue, Scheduler, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 import { TestClock } from "effect/testing"
-import { makeWorker } from "./fixture/machine-worker"
+import { makePeers, makeWorker, type Peers } from "./fixture/machine-worker"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it, testEffect } from "./lib/effect"
 
@@ -25,13 +25,13 @@ const text = (value: Uint8Array) => new TextDecoder().decode(value)
 const cause = (error: PlatformError.PlatformError) => error.reason.cause
 
 const dial = (machines: Machines.Interface, id: Environment.ID) =>
-  makeWorker({ environment: { id }, connect: machines.connect })
+  makeWorker({ connect: (connection) => machines.connect(id, connection) })
 
-const connection = (name: string, os: string, arch: string) =>
+const connection = (os: string, arch: string) =>
   Effect.map(Queue.unbounded<Exclude<Machine.FromWorker, Machine.Hello>, Cause.Done>(), (queue) => ({
     hello: {
       type: "hello" as const,
-      name,
+      protocol: 3 as const,
       os,
       arch,
       home: "/home/worker",
@@ -127,6 +127,7 @@ const gatedIdentity = (key: Uint8Array, gate: Deferred.Deferred<void>, entered: 
         )
       }),
     sign: () => Effect.die("unused"),
+    seed: () => Effect.die("unused"),
   })
 }
 
@@ -187,13 +188,13 @@ service.effect("serves the newer of two connections and keeps it when the first 
   Effect.gen(function* () {
     const machines = yield* Machines.Service
     const id = yield* machines.add("gpu")
-    const first = yield* Effect.forkChild(machines.connect(yield* connection("gpu", "darwin", "arm64")), {
+    const first = yield* Effect.forkChild(machines.connect(id, yield* connection("darwin", "arm64")), {
       startImmediately: true,
     })
     expect(yield* machines.list()).toEqual([
       new Machines.Info({ id, online: true, paired: false, os: "darwin", arch: "arm64" }),
     ])
-    const second = yield* Effect.forkChild(machines.connect(yield* connection("gpu", "linux", "x64")), {
+    const second = yield* Effect.forkChild(machines.connect(id, yield* connection("linux", "x64")), {
       startImmediately: true,
     })
     expect(yield* machines.list()).toEqual([
@@ -214,10 +215,10 @@ service.effect("refuses a connection for a machine it does not know and serves n
     const id = yield* machines.add("gpu")
     const sent: Machine.ToWorker[] = []
     const error = yield* machines
-      .connect({
+      .connect(machineID("ghost"), {
         hello: {
           type: "hello",
-          name: "ghost",
+          protocol: 3,
           os: "linux",
           arch: "x64",
           home: "/home/ghost",
@@ -723,6 +724,117 @@ it.effect("an interrupted add knows the machine on disk and in memory, or in nei
         }
         expect(steps).toBeGreaterThan(10)
         expect(steps).toBeLessThan(10_000)
+      }),
+    ).pipe(Effect.provide(tempLayers(tmp.path), { local: true }))
+  }),
+)
+
+/** A paired machine whose fake worker reaches the others through `peers`, and that machine's key as the home stores it. */
+const pairedPeer = (machines: Machines.Interface, name: string, peers: Peers) =>
+  Effect.gen(function* () {
+    const id = yield* machines.add(name)
+    const invite = yield* machines.invite(id, { reach: [{ type: "url", url: "https://home.example" }] })
+    const key = randomBytes(32)
+    yield* machines.join({ secret: Option.getOrThrow(Join.decode(invite)).secret, key })
+    const worker = yield* makeWorker({ connect: (connection) => machines.connect(id, connection) }, peers)
+    yield* worker.restore
+    return { id, worker, key: key.toString("base64url"), files: Environment.makeFiles(worker.files) }
+  })
+
+it.effect("links two machines once, the sender dialling the receiver's key, keeping the link across reconnects", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const machines = yield* Machines.Service
+        const peers = makePeers()
+        const gpu = yield* pairedPeer(machines, "gpu", peers)
+        const pro = yield* pairedPeer(machines, "pro", peers)
+        yield* gpu.files.write("/a", bytes("one"))
+        yield* machines.copy({ machine: gpu.id, path: "/a" }, { machine: pro.id, path: "/b" })
+        yield* machines.copy({ machine: gpu.id, path: "/a" }, { machine: pro.id, path: "/c" })
+        expect(text((yield* pro.files.read("/c")).bytes)).toBe("one")
+        const connects = gpu.worker.received.filter((message) => message.type === "peer-connect")
+        const accepts = pro.worker.received.filter((message) => message.type === "peer-accept")
+        expect(connects).toEqual([expect.objectContaining({ key: pro.key })])
+        expect(accepts).toEqual([expect.objectContaining({ key: gpu.key, link: connects[0]?.link })])
+
+        // The link outlives the worker's connection to the home: the next hello lists it, so it is used again.
+        yield* pro.worker.restore
+        yield* machines.copy({ machine: gpu.id, path: "/a" }, { machine: pro.id, path: "/d" })
+        expect(gpu.worker.received.filter((message) => message.type === "peer-connect")).toHaveLength(1)
+        // A new worker process has none, so the two are linked again.
+        yield* pro.worker.restart
+        yield* machines.copy({ machine: gpu.id, path: "/a" }, { machine: pro.id, path: "/e" })
+        expect(gpu.worker.received.filter((message) => message.type === "peer-connect")).toHaveLength(2)
+      }),
+    ).pipe(Effect.provide(tempLayers(tmp.path), { local: true }))
+  }),
+)
+
+it.effect("revokes the receive when the send fails", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const machines = yield* Machines.Service
+        const peers = makePeers()
+        const gpu = yield* pairedPeer(machines, "gpu", peers)
+        const pro = yield* pairedPeer(machines, "pro", peers)
+        const error = yield* machines
+          .copy({ machine: gpu.id, path: "/missing" }, { machine: pro.id, path: "/b" })
+          .pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Machine.PeerFailed)
+        expect(peers.receives.size).toBe(0)
+        expect(pro.worker.received.map((message) => message.type)).toContain("peer-revoke")
+      }),
+    ).pipe(Effect.provide(tempLayers(tmp.path), { local: true }))
+  }),
+)
+
+it.effect("refuses a peer link to the same machine or to one that never paired", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const machines = yield* Machines.Service
+        const gpu = yield* pairedPeer(machines, "gpu", makePeers())
+        const pro = yield* machines.add("pro")
+        const same = yield* machines
+          .copy({ machine: gpu.id, path: "/a" }, { machine: gpu.id, path: "/b" })
+          .pipe(Effect.flip)
+        expect(same).toMatchObject({ _tag: "Machine.PeerFailed", reason: "both ends are on the same machine" })
+        const unpaired = yield* machines
+          .forward({ machine: gpu.id, port: 3000 }, { machine: pro, port: 8000 })
+          .pipe(Effect.flip)
+        expect(unpaired).toMatchObject({ _tag: "Machine.PeerFailed", machine: pro, reason: "not paired" })
+      }),
+    ).pipe(Effect.provide(tempLayers(tmp.path), { local: true }))
+  }),
+)
+
+it.effect("lets a transfer finish when the sender's answer is lost, without revoking it", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const machines = yield* Machines.Service
+        const peers = makePeers()
+        const gpu = yield* pairedPeer(machines, "gpu", peers)
+        const pro = yield* pairedPeer(machines, "pro", peers)
+        yield* gpu.files.write("/a", bytes("one"))
+        // Link first, so the next answer gpu gives is the one to its send.
+        yield* machines.copy({ machine: gpu.id, path: "/a" }, { machine: pro.id, path: "/b" })
+        gpu.worker.drop("home", "peer")
+        const copying = yield* Effect.forkChild(
+          machines.copy({ machine: gpu.id, path: "/a" }, { machine: pro.id, path: "/c" }),
+          { startImmediately: true },
+        )
+        while (Option.isNone(yield* pro.files.stat("/c").pipe(Effect.option))) yield* Effect.yieldNow
+        yield* gpu.worker.cut
+        expect(yield* Fiber.join(copying).pipe(Effect.flip)).toBeInstanceOf(Machine.Unknown)
+        expect(text((yield* pro.files.read("/c")).bytes)).toBe("one")
+        expect(pro.worker.received.map((message) => message.type)).not.toContain("peer-revoke")
       }),
     ).pipe(Effect.provide(tempLayers(tmp.path), { local: true }))
   }),

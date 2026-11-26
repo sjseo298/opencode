@@ -1050,7 +1050,7 @@ describe("SessionRestart background recovery", () => {
       const recovery = (path: string) => ({ kind: "image" as const, sessionID, path, model: "test/painter" })
       yield* jobs.start({
         id: "image_done",
-        type: "experimental_image_generate",
+        type: "generate_image",
         recovery: recovery("/tmp/done.png"),
         run: Effect.succeed("Image request finished. Saved image: /tmp/done.png (test/painter)."),
       })
@@ -1058,7 +1058,7 @@ describe("SessionRestart background recovery", () => {
       yield* jobs.wait({ id: "image_done" })
       yield* jobs.start({
         id: "image_running",
-        type: "experimental_image_generate",
+        type: "generate_image",
         recovery: recovery("/tmp/running.png"),
         run: Effect.never,
       })
@@ -1088,7 +1088,7 @@ describe("SessionRestart background recovery", () => {
       const videoID = VideoID.create()
       yield* jobs.start({
         id: videoID,
-        type: "experimental_video_generate",
+        type: "generate_video",
         recovery: { kind: "video", sessionID, path: "/tmp/running.mp4", videoID },
         run: Effect.never,
       })
@@ -2176,7 +2176,9 @@ function attempts(database: Database.Service["Service"], sessionID: Session.ID) 
 /** Builds the local execution layer plus the restart actions against the test harness services. */
 function buildExecution(
   scope: Scope.Closeable,
-  drain: (input: Parameters<SessionRunner.Interface["drain"]>[0]) => Effect.Effect<void, SessionRunner.RunError>,
+  drain: (
+    input: Parameters<SessionRunner.Interface["drain"]>[0],
+  ) => Effect.Effect<void, SessionRunner.RunError, SessionInbox.Service>,
   options?: SessionRestart.Options,
   overrideJobs?: Job.Interface,
   shell?: Shell.Interface,
@@ -2206,7 +2208,11 @@ function buildExecution(
     const runner = Layer.succeed(
       SessionRunner.Service,
       SessionRunner.Service.of({
-        drain: (input) => drain(input).pipe(Effect.as(SessionRunner.DrainResult.Complete())),
+        drain: (input) =>
+          drain(input).pipe(
+            Effect.provideService(SessionInbox.Service, inbox),
+            Effect.as(SessionRunner.DrainResult.Complete()),
+          ),
       }),
     )
     const locations = Layer.effect(

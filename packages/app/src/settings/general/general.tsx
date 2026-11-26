@@ -13,6 +13,7 @@ import { PluginSettingsSections } from "@/runtime/plugin/settings-page-view"
 import {
   type BackgroundActivity,
   type FollowUpBehavior,
+  type QuestionSubmitKey,
   type TimelineWidth,
   type WorkspaceDefaultDestination,
   useSettings,
@@ -628,6 +629,36 @@ const FollowUpBehaviorSetting: Component = () => {
   )
 }
 
+const QuestionSubmitKeySetting: Component = () => {
+  const language = useLanguage()
+  const settings = useSettings()
+
+  const options = createMemo((): { value: QuestionSubmitKey; label: string }[] => [
+    { value: "enter", label: formatKeybind("enter", language.t) },
+    { value: "mod+enter", label: formatKeybind("mod+enter", language.t) },
+  ])
+
+  return (
+    <SettingsRow
+      title={language.t("settings.general.row.questionSubmitKey.title")}
+      description={language.t("settings.general.row.questionSubmitKey.description", {
+        keybind: formatKeybind(settings.general.questionSubmitKey() === "enter" ? "shift+enter" : "enter", language.t),
+      })}
+    >
+      <Select
+        data-action="settings-question-submit-key"
+        options={options()}
+        current={options().find((option) => option.value === settings.general.questionSubmitKey())}
+        value={(option) => option.value}
+        label={(option) => option.label}
+        placement="bottom-end"
+        gutter={6}
+        onSelect={(option) => option && settings.general.setQuestionSubmitKey(option.value)}
+      />
+    </SettingsRow>
+  )
+}
+
 const BackgroundActivitySetting = () => {
   const language = useLanguage()
   const settings = useSettings()
@@ -779,6 +810,8 @@ export const SettingsGeneral: Component = () => {
 
         <FollowUpBehaviorSetting />
         <CompactionModelSetting controller={compactionModelController} />
+
+        <QuestionSubmitKeySetting />
 
         <Show when={desktop()}>
           <SettingsRow
