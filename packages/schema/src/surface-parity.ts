@@ -59,6 +59,7 @@ export const SLASH_COMMAND_PARITY: readonly SlashParityEntry[] = [
   // Shared composer, provider, model, and app commands
   { id: "model.choose", names: ["model", "models"], surfaces: ["tui", "web"] },
   { id: "model.variant.choose", names: ["variants", "thinking", "effort"], surfaces: ["tui", "web"] },
+  { id: "model.speed.cycle", names: ["speed"], surfaces: ["tui", "web"] },
   { id: "usage.view", names: ["usage"], surfaces: ["tui", "web"] },
   { id: "alibaba.usage", names: ["alibabaUsage"], surfaces: ["tui", "web"] },
   { id: "alibaba.discounts", names: ["alibabaDiscounts"], surfaces: ["tui", "web"] },
@@ -85,6 +86,8 @@ export const SLASH_COMMAND_PARITY: readonly SlashParityEntry[] = [
   { id: "tui.editor", names: ["editor"], surfaces: ["tui"], reason: "Open external terminal $EDITOR for prompt composition" },
   { id: "tui.skills", names: ["skills"], surfaces: ["tui"], reason: "TUI skill picker modal" },
   { id: "tui.worktrees", names: ["worktrees"], surfaces: ["tui"], reason: "TUI worktree switcher modal (Web uses workspace bar)" },
+  { id: "tui.model.speed.fast", names: ["fast"], surfaces: ["tui"], reason: "TUI alias of /speed (Web registers only \"speed\")" },
+  { id: "tui.provider.connect.aliases", names: ["login", "auth"], surfaces: ["tui"], reason: "TUI aliases of /connect (Web registers only \"connect\")" },
 ]
 
 /**
