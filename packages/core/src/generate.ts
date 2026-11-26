@@ -221,6 +221,7 @@ export const layer = Layer.effect(
           n: input.n,
           aspect: input.aspect,
           resolution: input.resolution,
+          providerOptions: input.providerOptions,
         })
         .pipe(
           Effect.provideService(ImageClient.Service, images),

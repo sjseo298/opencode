@@ -69,6 +69,9 @@ export const ImageRequest = Schema.Struct({
   n: PositiveInt.pipe(optional).annotate(description("Number of images to generate; defaults to 1")),
   aspect: ImageAspect.pipe(optional),
   resolution: ImageResolution.pipe(optional),
+  providerOptions: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)).annotate(
+    description('Provider-native options passed through to the protocol, such as an exact {size: "1024x1024"}'),
+  ),
 }).annotate({ identifier: "Generate.ImageRequest" })
 
 export interface ImageOutput extends Schema.Schema.Type<typeof ImageOutput> {}

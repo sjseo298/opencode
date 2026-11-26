@@ -43,6 +43,7 @@ export const description = [
   "Only call this when the user asks you to create or edit an image. If you think an image would help but the user didn't ask for one, ask them first instead of generating it.",
   "Images you pass are used as the source to edit, or as references for style and subject.",
   "Each call makes one image. For several images, call it once per image.",
+  "Set width and height together (e.g. both 512) when the user asks for an exact image size; OpenAI-compatible providers such as llamacpp honor it. Omit both to use the model's default size.",
   "It runs in the background: the call starts a job and returns right away, and you are notified automatically when the image is saved, with its path. Never poll, sleep, or check for the file while you wait.",
   "Local image providers (such as llamacpp) run on your own hardware and are far slower than cloud, and the time grows sharply with image size: a large image (e.g. 2752x1536) can take tens of minutes. Prefer modest sizes (around 1024x1024 or smaller) unless the user explicitly wants large, and tell the user a local job may take a while. You can check a running local job's progress and ETA with experimental_image_progress rather than waiting blindly.",
   "Don't repeat a request unless the user asks.",
@@ -66,6 +67,14 @@ export const Input = Schema.Struct({
   path: Schema.optionalKey(Schema.String).annotate({
     description:
       "Where to save the image, relative to the session directory or absolute. The extension is replaced with the image's real format, and an existing file is overwritten. Defaults to a new file in the session's temp folder.",
+  }),
+  width: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+    description:
+      "Exact width in pixels, set together with height (e.g. both 512 for a 512x512 image). Honored by OpenAI-compatible providers such as llamacpp; omit both to use the model's default size.",
+  }),
+  height: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+    description:
+      "Exact height in pixels, set together with width. Local providers get much slower as pixels grow; prefer modest sizes unless the user explicitly wants large.",
   }),
 })
 
@@ -264,6 +273,8 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              if ((input.width === undefined) !== (input.height === undefined))
+                return yield* new ToolFailure({ message: "Set width and height together (e.g. both 512 for 512x512)." })
               const resolved = yield* resolveModel(input.model, context.sessionID, input.images !== undefined)
               const model = resolved.model
               const variant = resolved.variant
@@ -307,6 +318,9 @@ export const Plugin = {
                     prompt: input.prompt,
                     n: 1,
                     ...(images ? { images } : {}),
+                    ...(input.width !== undefined && input.height !== undefined
+                      ? { providerOptions: { size: `${input.width}x${input.height}` } }
+                      : {}),
                   })
                   .pipe(
                     Effect.timeoutOrElse({
@@ -353,7 +367,8 @@ export const Plugin = {
                   Effect.gen(function* () {
                     if (model.providerID !== "llamacpp") return
                     const provider = yield* providers.get(Provider.ID.make("llamacpp"))
-                    const baseURL = typeof provider?.settings?.baseURL === "string" ? provider.settings.baseURL : undefined
+                    const baseURL =
+                      typeof provider?.settings?.baseURL === "string" ? provider.settings.baseURL : undefined
                     if (!baseURL) return
                     yield* http.execute(HttpClientRequest.post(`${baseURL.replace(/\/+$/, "")}/images/cancel`))
                   }).pipe(Effect.ignore),
