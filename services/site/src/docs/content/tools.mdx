@@ -172,8 +172,12 @@ Generate a flat app icon of a paper plane on a blue background and save it to as
 ```
 
 Give it a `prompt`, and optionally `images` to edit or use as references, a
-specific `model`, or a `path` to save to. It runs in the background and
-notifies the session with the saved path when the image is ready.
+specific `model`, a `path` to save to, or an exact `width` and `height` in
+pixels. Set `width` and `height` together (e.g. both `512` for a 512x512
+image); OpenAI-compatible providers such as llamacpp honor the exact size,
+while other providers may map it to the closest supported one. Omit both to
+use the model's default size. It runs in the background and notifies the
+session with the saved path when the image is ready.
 
 Permission: `generate_image` with the selected model as its resource.
 
